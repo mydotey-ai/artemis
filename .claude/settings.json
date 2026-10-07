@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "deny": [
+      "Write(//home/koqizhao/Projects/mydotey/artemis/**)",
+      "Edit(//home/koqizhao/Projects/mydotey/artemis/**)"
+    ]
+  }
+}
