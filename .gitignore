@@ -30,3 +30,6 @@ replay_pid*
 # local 配置与运行时缓存是个人的（不入库）
 .impeccable/config.local.json
 .impeccable/hook.cache.json
+
+# Playwright MCP 的输出目录（快照 / 截图），验证产物不入库
+.playwright-mcp/
