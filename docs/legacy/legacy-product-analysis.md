@@ -27,7 +27,7 @@
 
 **模块依赖与规模**：
 
-```
+```text
 artemis-common（95 文件，零 Spring 基础库：模型/lease/taskdispatcher/配置）
   ├── artemis-service（53 文件：注册/发现/复制/集群/限流内核）
   │     └── artemis-management（209 文件：管理面服务层+DAO，唯一用 DB 的模块）
