@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>核心组件与关系</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Serif:ital@0;1&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'Source Han Sans SC',
+                     'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'WenQuanYi Micro Hei',
+                     system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif SC', 'Noto Serif CJK SC',
+                     'Source Han Serif SC', 'Songti SC', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1240px; width: 100%; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 1120px; display: block; }
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture · Components</p>
+    <h1>核心组件与关系（组件视图）</h1>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 1120 620" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="structure-components-title structure-components-desc">
+        <title id="structure-components-title">核心组件与关系</title>
+        <desc id="structure-components-desc">宿主进程内 registry-client 持有本地实例集（instance，事实源）经心跳全量上报注册，discovery-client 经 lookup 与订阅推送取视图；artemis-server 单进程内 registry-service 产生 NEW/DELETE 变更事件供 discovery-service 推送、经复制扇出到 region 内 peer，cluster 以成员表与节点状态对读写双向门控，management-service 经 DAO 读写 DB 并以 filter 注入发现、以合成伪实例复用推送管线。</desc>
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+          <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+        <!-- ===== zones (first) ===== -->
+        <rect x="40" y="84" width="260" height="456" rx="8" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <rect x="52" y="88" width="56" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="80" y="97" fill="rgba(45,49,66,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.10em">宿主进程</text>
+
+        <rect x="380" y="84" width="420" height="456" rx="8" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <rect x="392" y="88" width="128" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="456" y="97" fill="rgba(45,49,66,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.10em">artemis-server 单进程</text>
+
+        <!-- ===== arrows (before nodes) ===== -->
+        <!-- A13 registry-client -> instance : 持有 -->
+        <path d="M 164,224 V 176" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <!-- A1 registry-client -> registry-service : 心跳 · 补注册 -->
+        <path d="M 272,264 H 342 Q 348,264 348,256 V 152 Q 348,144 354,144 H 470"
+              fill="none" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+
+        <!-- A3 discovery-client -> discovery-service : lookup · 推送 -->
+        <path d="M 272,416 H 318 Q 324,416 324,408 V 276 Q 324,268 330,268 H 470"
+              fill="none" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+
+        <!-- A4 registry-service -> discovery-service : NEW / DELETE -->
+        <path d="M 560,188 V 224" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <!-- A6 registry-service -> peer : 复制（headline） -->
+        <path d="M 710,132 H 880" fill="none" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+
+        <!-- A7 cluster -> registry-service : 写门控（左走廊） -->
+        <path d="M 470,364 H 430 Q 424,364 424,356 V 168 Q 424,160 430,160 H 470"
+              fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+
+        <!-- A8 cluster -> discovery-service : 读门控 -->
+        <path d="M 560,332 V 296" fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+
+        <!-- A10 management-service -> discovery-service : filter 注入（左走廊） -->
+        <path d="M 470,476 H 444 Q 438,476 438,468 V 284 Q 438,276 444,276 H 470"
+              fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+
+        <!-- A11 management-service -> registry-service : 合成伪实例（右走廊） -->
+        <path d="M 710,464 H 766 Q 772,464 772,456 V 176 Q 772,168 766,168 H 710"
+              fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+
+        <!-- A12 management-service -> DB : DAO -->
+        <path d="M 710,488 H 880" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <!-- ===== arrow labels (mask then text) ===== -->
+        <rect x="176" y="192" width="32" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="192" y="201" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">持有</text>
+
+        <rect x="280" y="246" width="60" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="310" y="255" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">心跳 · 补注册</text>
+
+        <rect x="280" y="398" width="64" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="312" y="407" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">lookup · 推送</text>
+
+        <rect x="572" y="198" width="72" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="608" y="207" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">NEW / DELETE</text>
+
+        <rect x="766" y="112" width="76" height="14" rx="2" fill="#f5f5f5"/>
+        <text x="804" y="123" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">复制 ×(N−1)</text>
+
+        <rect x="432" y="180" width="36" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="450" y="189" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">写门控</text>
+
+        <rect x="572" y="306" width="40" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="592" y="315" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">读门控</text>
+
+        <rect x="446" y="296" width="54" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="473" y="305" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">filter 注入</text>
+
+        <rect x="784" y="294" width="60" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="814" y="303" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">合成伪实例</text>
+
+        <rect x="724" y="470" width="72" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="760" y="479" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">DAO · 20 表</text>
+
+        <!-- ===== nodes ===== -->
+        <!-- N1 instance（事实源，focal） -->
+        <rect x="56" y="116" width="216" height="60" rx="6" fill="#f5f5f5"/>
+        <rect x="56" y="116" width="216" height="60" rx="6" fill="rgba(235,108,54,0.07)" stroke="#eb6c36" stroke-width="1.2"/>
+        <text x="164" y="141" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">instance</text>
+        <text x="164" y="159" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">本地实例集 · 事实源</text>
+
+        <!-- N2 registry-client -->
+        <rect x="56" y="224" width="216" height="80" rx="6" fill="#f5f5f5"/>
+        <rect x="56" y="224" width="216" height="80" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="164" y="252" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">registry-client</text>
+        <text x="164" y="270" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">InstanceRegistry</text>
+        <text x="164" y="286" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">5s 全量心跳 · 补注册</text>
+
+        <!-- N3 discovery-client -->
+        <rect x="56" y="376" width="216" height="80" rx="6" fill="#f5f5f5"/>
+        <rect x="56" y="376" width="216" height="80" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="164" y="404" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">discovery-client</text>
+        <text x="164" y="422" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">ServiceRepository</text>
+        <text x="164" y="438" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">订阅推送 · 60s 兜底</text>
+
+        <!-- N4 registry-service -->
+        <rect x="470" y="116" width="240" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="470" y="116" width="240" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="590" y="142" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">registry-service</text>
+        <text x="590" y="160" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">写管线 · 双租约池</text>
+        <text x="590" y="176" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">变更事件跳表</text>
+
+        <!-- N5 discovery-service -->
+        <rect x="470" y="224" width="240" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="470" y="224" width="240" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="590" y="250" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">discovery-service</text>
+        <text x="590" y="268" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">lookup · 推送 worker ×10</text>
+        <text x="590" y="284" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">过滤器链 · 快照 30s</text>
+
+        <!-- N6 cluster -->
+        <rect x="470" y="332" width="240" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="470" y="332" width="240" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="590" y="358" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">cluster</text>
+        <text x="590" y="376" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">ClusterManager · NodeManager</text>
+        <text x="590" y="392" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">静态成员表 · 节点状态 · 门控</text>
+
+        <!-- N7 management-service -->
+        <rect x="470" y="440" width="240" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="470" y="440" width="240" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="590" y="466" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">management-service</text>
+        <text x="590" y="484" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">三仓库轮询 1s / 5s</text>
+        <text x="590" y="500" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">分组 / 路由 / 摘除 / 灰度</text>
+
+        <!-- N8 peer -->
+        <rect x="880" y="116" width="180" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="880" y="116" width="180" height="72" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="970" y="142" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">peer registry-service</text>
+        <text x="970" y="160" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">region ×(N−1) 副本</text>
+        <text x="970" y="176" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">幂等覆盖 · 补注册</text>
+
+        <!-- N9 DB -->
+        <rect x="880" y="440" width="180" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="880" y="440" width="180" height="72" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+        <text x="970" y="466" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">MySQL / SQLite</text>
+        <text x="970" y="484" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">治理元数据 · 权威</text>
+        <text x="970" y="500" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">唯一持久化</text>
+
+        <!-- 边注：省略范围 -->
+        <text x="970" y="308" fill="#2d3142" font-size="12" font-style="italic" font-family="'Instrument Serif', 'Noto Serif SC', serif" text-anchor="middle">接入层略——调用经协议转换</text>
+        <text x="970" y="328" fill="#2d3142" font-size="12" font-style="italic" font-family="'Instrument Serif', 'Noto Serif SC', serif" text-anchor="middle">直调内核；cluster 节点状态</text>
+        <text x="970" y="348" fill="#2d3142" font-size="12" font-style="italic" font-family="'Instrument Serif', 'Noto Serif SC', serif" text-anchor="middle">来自 5s 对 peer 的自声明探测</text>
+
+        <!-- ===== legend ===== -->
+        <line x1="40" y1="568" x2="1080" y2="568" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text x="40" y="592" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">图例</text>
+
+        <rect x="88" y="583" width="12" height="12" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="0.8"/>
+        <text x="108" y="593" fill="#4f5d75" font-size="12" font-weight="500" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif">服务端组件</text>
+
+        <rect x="208" y="583" width="12" height="12" rx="2" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="0.8"/>
+        <text x="228" y="593" fill="#4f5d75" font-size="12" font-weight="500" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif">客户端 / peer</text>
+
+        <rect x="348" y="583" width="12" height="12" rx="2" fill="rgba(235,108,54,0.07)" stroke="#eb6c36" stroke-width="1"/>
+        <text x="368" y="593" fill="#4f5d75" font-size="12" font-weight="500" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif">事实源</text>
+
+        <line x1="440" y1="589" x2="480" y2="589" stroke="#2e5aa8" stroke-width="1.2"/>
+        <text x="488" y="593" fill="#4f5d75" font-size="12" font-weight="500" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif">客户端调用</text>
+
+        <line x1="588" y1="589" x2="628" y2="589" stroke="#eb6c36" stroke-width="1.2"/>
+        <text x="636" y="593" fill="#4f5d75" font-size="12" font-weight="500" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif">复制</text>
+
+        <line x1="700" y1="589" x2="740" y2="589" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="748" y="593" fill="#4f5d75" font-size="12" font-weight="500" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif">进程内作用</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

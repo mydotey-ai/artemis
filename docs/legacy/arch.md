@@ -1,6 +1,6 @@
 # Artemis 原产品架构总览（Legacy Architecture Overview）
 
-版本: 2.5    更新时间: 2026-10-08
+版本: 2.6    更新时间: 2026-10-08
 
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：**事实层 · 架构视图入口**。本文给出架构风格判定、部署全景、**视图地图**（各视图的归属）、**机制索引**（按机制查域文档编号）与**关键架构约束清单**；各视图的详细描述见 [arch/](arch/README.md)，判断层结论（可继承资产 / 局限）见[基线](legacy-product-analysis.md) §5/§6。
@@ -47,7 +47,7 @@
 | 视图 | 回答什么 | 归属 | 状态 | 备注 |
 |---|---|---|---|---|
 | 上下文 | 系统边界、外部参与者与依赖、明确不做什么 | [structure](arch/structure.md) §1 | 已建 | |
-| 组件 / 逻辑 | 运行期组件清单、各自职责与对外接口、依赖方向、分层约束 | [structure](arch/structure.md) §2–§3 | 已建 | 包级存在环 `cluster ↔ registry.replication` |
+| 组件 / 逻辑 | 运行期组件清单、各自职责与对外接口、依赖方向、分层约束 | [structure](arch/structure.md) §2–§3 | 已建 | 配图：[组件全景图](arch/diagrams/structure-components.svg)；包级存在环 `cluster ↔ registry.replication` |
 | 数据 | 实体、事实源与所有权、存储、生命周期、一致性模型总表 | [structure](arch/structure.md) §4 | 已建 | 配图：[数据所有权图](arch/diagrams/structure-data-ownership.svg)；字段级见 [data-model](domains/data-model.md)、表结构见 [db-schema](domains/db-schema.md) |
 | 运行时 / 并发 | 进程与线程、并发控制、通信模式、背压与队列 | [runtime](arch/runtime.md) §1–§2 | 已建 | |
 | 生命周期 / 状态 | 启动序列与 readiness 门控、运行期状态机、关闭与重启、故障降级 | [runtime](arch/runtime.md) §3–§5 | 已建 | 关停路径**缺失**（无优雅停机） |
@@ -105,6 +105,7 @@
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 2.6 | 2026-10-08 | §3 组件视图备注补组件全景图（[structure-components](arch/diagrams/structure-components.svg)，第 10 张图） |
 | 2.5 | 2026-10-08 | §2 改题「整体架构与部署全景」（图补双轨分离 / 客户端能力 / region-zone 语义三个论点）；新增 5 张图——4 张场景时序入 [runtime](arch/runtime.md) §7、数据所有权入 [structure](arch/structure.md) §4.1；§4 机制索引新增「配图」列、§3 数据视图备注配图；§3 视图地图补「场景 / 时序」行 |
 | 2.4 | 2026-10-08 | 新增 §4 机制索引（按机制查域文档 L/D/F 编号），原 §4 约束清单顺延为 §5；C 编号不变 |
 | 2.3 | 2026-10-08 | §4 C9 补明「模块级偏序非链」并指向包级环；勘误指针同步 |

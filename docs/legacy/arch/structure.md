@@ -1,6 +1,6 @@
 # 原产品结构视图（Structure View）
 
-版本: 1.4    更新时间: 2026-10-08
+版本: 1.5    更新时间: 2026-10-08
 
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：**事实层 · 架构视图——静态结构**。回答系统边界与外部依赖（§1）、运行期组件清单与依赖契约（§2–§3）、数据所有权与一致性总表（§4）、工程与构建（§5）。总览入口 [../arch.md](../arch.md)，视图地图与约束编号亦见该文。
@@ -68,6 +68,10 @@
 | 不提供多语言 SDK | 仅 Java |
 
 ## 2. 运行期组件清单
+
+![核心组件与关系](diagrams/structure-components.svg)
+
+上图为**组件全景**：客户端两通道（registry-client 持有 instance 本地实例集——事实源；discovery-client 订阅 + 兜底）、服务端四组件（registry-service 变更事件供 discovery-service 推送；cluster 双向门控；management-service 注入过滤器与合成伪实例）及复制 / DB 两个外部端点。组件名为概念统称——registry-service / discovery-service / cluster 对应下表内核单例簇；**management-service 统称管理面组件簇**（`ManagementInitializer` + 三 Repository + DAO + filters，原产品无此单一类名）；registry-client / discovery-client 对应 §2.1 客户端门面及其组件簇。**图中省略接入层与探测边**：客户端调用经接入层（§2.4，11 REST + 3 WS）协议转换后直调内核单例（[../arch.md](../arch.md) §2，入口图 [overview-architecture](diagrams/overview-architecture.svg) 画有 EDGE 层）；cluster 的节点状态视图来自 5s 对 peer 的自声明探测（[replication-cluster L5](../domains/replication-cluster-logic.md)）。
 
 粒度说明：下表的「组件」是**运行期职责单元**，与 Java 包 / Maven 模块不是一一对应（例如 `artemis-service` 一个模块内含 registry / discovery / cluster / lease 四组组件；`lease` 与 `taskdispatcher` 两组基座组件住在 `artemis-common`）。这不影响其作为架构组件的地位——它们有各自明确的职责、接口与生命周期。
 
@@ -378,6 +382,7 @@ artemis-common ◄── artemis-service ◄──────────┐
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.5 | 2026-10-08 | §2 补组件全景图（核心组件与关系，[diagrams/structure-components](diagrams/structure-components.html)），含 management-service 统称说明 |
 | 1.4 | 2026-10-08 | §4.1 补数据所有权图（事实源与投影、双轨可视化，[diagrams/structure-data-ownership](diagrams/structure-data-ownership.html)） |
 | 1.3 | 2026-10-08 | 勘误修正：DAO 类数 24→21、模块文件数按实测、features §1→§4、基线 §6.19 误引删除、§4.3 补回第五重收敛路径 |
 | 1.2 | 2026-10-08 | §3.1 依赖清单改为架构图（[diagrams/structure-dependencies](diagrams/structure-dependencies.html)）+ 逐边证据表 |
