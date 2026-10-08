@@ -1,6 +1,6 @@
 # Artemis 原产品能力全景（Legacy Product Analysis）
 
-状态: 定稿  日期: 2026-10-07
+状态: 定稿  日期: 2026-10-07（§8 勘误与增补 2026-10-08）
 
 > 调研对象：`~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）
 > 方法：四域并行源码调查（客户端 / 服务端 / 管理面 / 工程全貌），每条能力均追溯到代码；「文档宣称」与「代码事实」严格区分。
@@ -90,12 +90,12 @@ HTTP 注册 API 均为批量（`instances[]` 入参 + `failedInstances[]` 部分
 
 **客户端**（`discovery/ServiceDiscovery.java` + `ServiceRepository.java`）：
 
-- 首次按需同步 lookup → 内存缓存（`ConcurrentHashMap<serviceId, ServiceContext>`）→ WS 订阅推送增量（new/delete/change 原地更新；reload 触发全量重拉）。
+- 首次按需同步 lookup → 内存缓存（`ConcurrentHashMap<serviceId, ServiceContext>`）→ WS 订阅推送增量（new/delete/change 原地更新 ⚠ 勘误 §8-3：CHANGE 类型无服务端产生点；reload 触发全量重拉）。
 - 三层兜底轮询（60s 周期）：① 上次 reload 失败的服务；② 实例列表为空的服务；③ 距上次全量刷新超 TTL（默认 15min）的全部服务——批量 lookup 拉取。
 - 缓存**永不失效**：server 全挂时 `getService` 继续返回内存最后一份快照（接受陈旧换可用）。
 - 变更回调：`ServiceChangeListener`，单线程 executor 异步通知，事件携带克隆后的全量 Service。
 
-**就近访问**：客户端在 lookup / up-nodes 请求中上报自身 regionId/zoneId；服务端默认仅接受同 zone 请求（`RegistryTool#checkSameZone`，可配放开）；节点返回同 zone 优先的节点列表。实际选址由宿主 RPC 框架按 RouteRule strategy（close-by-visit）执行——**客户端不内置负载均衡器**。
+**就近访问**：客户端在 lookup / up-nodes 请求中上报自身 regionId/zoneId；服务端默认仅接受同 zone 请求（`RegistryTool#checkSameZone`，可配放开）；节点返回同 zone 优先的节点列表（⚠ 勘误 §8-2：实为过滤，无排序）。实际选址由宿主 RPC 框架按 RouteRule strategy（close-by-visit）执行——**客户端不内置负载均衡器**。
 
 ### 2.5 流量治理能力（管理面特色，携程差异化价值）
 
@@ -108,7 +108,7 @@ HTTP 注册 API 均为批量（`instances[]` 入参 + `failedInstances[]` 部分
 | **两段式灰度发布** | 权重双列：编辑写 `unreleased_weight`，调 `release-route-rule-groups.json` 才拷贝到 `weight` 生效——分批灰度语义 | `RouteRuleGroupDao.java` L122-125 |
 | **一键 Canary** | 传 serviceId+appId+IP 列表，自动生成 canary 专属 RouteRule + Group + 实例绑定 | `canary/CanaryServiceImpl#updateCanaryIPs` |
 | **逻辑实例（静态实例）** | 维护不经过注册中心的实例（完整 ip/port/protocol/url/metadata），进发现结果 `logicInstances`——托管非 Java/第三方系统 | `GroupRepository#getServiceInstances`、`GroupDiscoveryFilter` |
-| **灰度元数据路由** | `DiscoveryConfig.discoveryData` 约定 key（appid/subenv）随 lookup 上送参与服务端筛选 | `util/DiscoveryConfigs.java` |
+| **灰度元数据路由** | `DiscoveryConfig.discoveryData` 约定 key（appid/subenv）随 lookup 上送参与服务端筛选（⚠ 勘误 §8-1：全链路零消费，纯协议预留） | `util/DiscoveryConfigs.java` |
 
 分组路由的生效路径：写管理 DB → 各节点 `DynamicScheduledThread` 定时（Group/Zone 默认 5s、Management 默认 1s）重刷内存缓存 → diff 变化 → 推送 `InstanceChange` 通知订阅方。发现时 `GroupDiscoveryFilter` 将路由规则展开注入 `logicInstances` 与 `routeRules`。
 
@@ -122,7 +122,7 @@ HTTP 注册 API 均为批量（`instances[]` 入参 + `failedInstances[]` 部分
 - `/api/management/group/`：32 个——group、group-tag、group-operation（组级摘除）、route-rule、route-rule-group、group-instance、service-instance 七族的 CRUD + operate + create/release
 - `/api/management/zone/`：5 个 zone 级摘除
 - `/api/management/canary/`：1 个
-- `/api/management/log/`：9 类审计日志查询（操作前后数据、operatorId、token、reason、complete 标志、时间戳）
+- `/api/management/log/`：9 类审计日志查询（⚠ 勘误 §8-10：实为单快照（删前/写后），instance/server 日志无实体快照无 reason；过滤字段仅业务键/operation/operatorId/complete，token/reason/时间段不可过滤）
 
 **审计**：所有变更双写 `*_log` 表（20 张表 = 10 业务 + 10 日志，`artemis-package/deployment/artemis-management.sql` 336 行）。
 
@@ -134,7 +134,7 @@ HTTP 注册 API 均为批量（`instances[]` 入参 + `failedInstances[]` 部分
 
 **成员发现：静态配置，无自动发现协议。**
 
-- 集群拓扑来自配置 `artemis.service.cluster.nodes`（zoneId→urls multimap），SCF 支持热更 + `ClusterChangeListener`。
+- 集群拓扑来自配置 `artemis.service.cluster.nodes`（zoneId→urls multimap），SCF 配置 + `ClusterChangeListener`（⚠ 勘误 §8-13：发布形态下配置变更需重启，非热更）。
 - 节点存活：单线程定时任务每 5s 逐个调 peer `/api/status/node.json`（3 次重试）写 volatile 状态表。
 - 本节点识别：「URL 包含本机 ip:port」子串匹配（脆弱）。
 
@@ -144,9 +144,9 @@ HTTP 注册 API 均为批量（`instances[]` 入参 + `failedInstances[]` 部分
 - 触发：本节点每次成功的客户端写操作，业务线程 `replicate(task)` 入队即返回（写延迟不受 peer 影响）。
 - 双通道：心跳走批量通道（默认 250 条/批、2s 最大批延迟，`BatchingTaskAcceptor`）；register/unregister 走单条通道。
 - 防重：taskId = taskClass + InstanceKey + serviceUrl，drainAccept 时 HashMap 去重（心跳天然幂等合并）。
-- 防丢：网络失败/UNKNOWN/RATE_LIMITED → 重试队列且插队队首；心跳复制 socket timeout 仅 200ms 快速失败。
+- 防丢：网络失败/UNKNOWN/RATE_LIMITED → 重试队列且插队队首（⚠ 勘误 §8-9：批量通道存在重试截断缺陷，同批仅首个可重试任务被重试）；心跳复制 socket timeout 仅 200ms 快速失败。
 - **过期即丢**：任务 TTL 默认 5s，出队时丢弃——刻意设计，一致性靠下一轮心跳收敛。
-- 背压：`TrafficShaper` 按错误码退避；缓冲区满（10k）丢最老整批。
+- 背压：`TrafficShaper` 按错误码退避（⚠ 勘误 §8-8：默认空 map，无退避）；缓冲区满（10k）丢最老整批。
 - 冲突处理：register 直接 put 覆盖；清理与并发重注册用 creationTime 新旧比较保护新租约；复制心跳遇缺失实例自动补注册。无脑裂检测。
 
 **冷启动与启动门控（readiness 协议）**：节点启动时 daemon 线程每 1s 循环——REGISTRY 目标要求从任一 UP peer 全量拉取 `services.json` 并重建租约；DISCOVERY 目标要求管理 DB 缓存刷新成功。两者通过才置 `canServiceRegistry/canServiceDiscovery=true`，对应 API 才放行——**数据不全的节点不接流量**。
@@ -157,10 +157,10 @@ HTTP 注册 API 均为批量（`instances[]` 入参 + `failedInstances[]` 部分
 
 - 接入：纯 Java API（`ArtemisClientManager` 静态按 managerId 单例），**无 Spring Boot starter、无自动装配**；配置源与指标实现由宿主注入（SCF StringProperties + caravan metric，默认 Null）。
 - 部署身份：region.id / zone.id / app.id / app.port / app.protocol / app.path（application.properties），IP/主机名自动探测。
-- **三级地址容灾**：引导地址 `.service.domain.url` → 周期（5min）拉 `/api/cluster/up-*-nodes.json` 存活节点列表 → 随机选址 + `markUnavailable` 熔单点 + 1h TTL 强制轮换；列表拉不到降级回引导地址。
+- **三级地址容灾**：引导地址 `.service.domain.url` → 周期（5min）拉 `/api/cluster/up-*-nodes.json` 存活节点列表 → 随机选址 + `markUnavailable` 熔单点 + 1h TTL 强制轮换；列表拉不到降级回引导地址（⚠ 勘误 §8-5：拉取失败实为保留旧列表，仅列表为空才降级）。
 - WS 生命周期：健康检查线程 1s 周期（ping/pong 1s 超时）、会话 5min 强制重建（防漂移到坏节点）、重连限流 5 次/20s（防重连风暴）、重连成功自动重订阅。
 - 统一 HTTP 执行器：固定 5 次重试 × 100ms 间隔 + 错误码语义决策（`ErrorCodes` 是唯一事实源：rate-limited/unknown 可重试；internal-service-error/service-unavailable → 摘节点换节点）+ gzip。
-- 主要配置项（前缀 `artemis.client.{managerId}`，均可热更）：
+- 主要配置项（前缀 `artemis.client.{managerId}`；⚠ 勘误 §8-13：动态更新为**源/声明/读取时机三层**，默认静态源形态下不生效）：
 
 | 配置 | 默认 | 含义 |
 |---|---|---|
@@ -173,7 +173,7 @@ HTTP 注册 API 均为批量（`instances[]` 入参 + `failedInstances[]` 部分
 | `.websocket-session.reconnect-times` | 5 次/20s | 重连限流 |
 | `.address.context-ttl` | 1h | 节点上下文强制轮换 |
 
-- 线程模型：每 manager 固定 7+ daemon 线程（2 地址刷新 + 2 WS 健康检查 + 1 心跳检查 + 1 兜底轮询 + 1 回调池）。
+- 线程模型：每 manager 固定 7+ 线程（⚠ 勘误 §8-7：回调池线程 non-daemon 且无 shutdown；2 地址刷新 + 2 WS 健康检查 + 1 心跳检查 + 1 兜底轮询 + 1 回调池）。
 
 ---
 
@@ -213,7 +213,7 @@ HTTP 注册 API 均为批量（`instances[]` 入参 + `failedInstances[]` 部分
 
 批量（API/复制/lookup）、异步（复制全程异步、推送 10 worker、缓存后台刷新）、gzip 全链路、细粒度锁（Lease 级 tryLock、volatile 整体换新）。
 
-代价点：客户端每次 `getService` 深克隆 + 全量重建路由 Map（O(实例数)，大服务高频读有 CPU/GC 压力）；变更回调单线程无界队列；大小写不敏感 equals/hashCode 每次比较都拼串 + toLowerCase（隐性热点）；WS 文本缓冲默认 8KB（上限 32KB）与大规模叙事不匹配。
+代价点：客户端每次 `getService` 壳克隆 + 全量重建路由 Map（⚠ 勘误 §8-4：Instance 元素引用共享，非深克隆；O(实例数)，大服务高频读有 CPU/GC 压力）；变更回调单线程无界队列；大小写不敏感 equals/hashCode 每次比较都拼串 + toLowerCase（隐性热点）；WS 文本缓冲默认 8KB（上限 32KB）与大规模叙事不匹配。
 
 ### 3.5 可观测性
 
@@ -320,3 +320,27 @@ HTTP 注册 API 均为批量（`instances[]` 入参 + `failedInstances[]` 部分
 - 管理面：`artemis-management/src/main/java/org/mydotey/artemis/management/`（`config/RestPaths.java`、`ManagementServiceImpl|ManagementRepository`、`GroupServiceImpl|GroupRepository`、`canary/CanaryServiceImpl`、`group/dao/BusinessDao|RouteRuleGroupDao`、`common/OperationContext`）
 - 配置与部署：`artemis-common/.../config/{ArtemisConfig,DeploymentConfig,RestPaths,WebSocketPaths}.java`、`artemis-package/src/main/resources/*`、`artemis-package/deployment/artemis-management.sql`、根目录 `SQLITE_SETUP.md`
 - 测试：`artemis-test/src/test/java/.../test/ArtemisTest.java`（进程内起服基础设施）
+
+---
+
+## 8. 勘误与增补（2026-10-08 规格层补证）
+
+规格层文档集（`domains/`、`product-overview.md`、`nfr-spec.md`）成稿过程中对原仓库做了六域行为级补证，以下基线原表述与代码事实不符，**以本节与域文档为准**；逐条证据见 [product-overview.md](product-overview.md) §5：
+
+| # | 基线位置 | 原表述 | 代码事实 |
+|---|---|---|---|
+| 1 | §2.5 | discoveryData（appid/subenv）随 lookup 上送参与服务端筛选 | 纯协议预留，全链路零消费 |
+| 2 | §2.4 | up-nodes 返回同 zone 优先的节点列表 | 过滤，无排序 |
+| 3 | §2.4 | new/delete/change 原地更新 | CHANGE 类型无服务端产生点 |
+| 4 | §3.4 | 每次 getService 深克隆 | List 壳复制 + Instance 引用共享 + RouteRules 重建 |
+| 5 | §2.8 | 节点列表拉不到降级回引导地址 | 失败保留旧列表，仅列表为空才降级 |
+| 6 | §2.8 | 客户端配置均可热更 | 缺源层前提（静态配置源不发事件）；另 WS buffer-size 为构造快照。详见 §8-13 |
+| 7 | §2.8 | 每 manager 7+ daemon 线程 | 回调 executor 线程 non-daemon（无 shutdown，阻止 JVM 退出） |
+| 8 | §2.7 | TrafficShaper 按错误码退避（默认 10ms） | 默认空 map = 无退避 |
+| 9 | §2.7 | 失败任务重试插队队首 | 批量通道存在重试截断缺陷（一批仅首个可重试任务被重试） |
+| 10 | §2.6 | 审计 log 行含操作前后数据快照；可按 token/reason/时间段过滤 | 单快照（删前/写后）；instance/server 日志无快照无 reason；token/reason/时间段不可过滤 |
+| 11 | features §3.2（基线未述及） | destroyServers 按 ServerKey 批量物理删除 | 死代码（无端点无调用方），instance 侧删除条件错位 |
+| 12 | §2.5 | 管理面统一 5s 重刷 | 两级：instance/server 摘除缓存 1s、group/zone 5s |
+| 13 | §2.8、§3.7 | 配置「全热更」（改造点仅部署身份） | 缺**源层前提**：产品属性声明层全部可动态更新（scf `PropertyConfig.isStatic` 默认 false，原产品未使用该标志），但**配置源由宿主注入**——默认三件套为静态源故不生效；使用层另有构造快照键。详见 config-reference §0 |
+
+增补（§6 局限清单之外的**新发现缺陷**，约 20 条，含大小写键语义分裂导致永不清理的发现残留、冷启动空集群死锁、UP 无回退 / DOWN 粘性、zone 摘除推送盲区、合成事件 region 不匹配、SQLite 分支破坏两段式发布、摘除过滤不作用于路由视图成员、WebSocketContainer 全局单例跨 manager 污染等）：汇总索引见 [product-overview.md](product-overview.md) §6，行级证据见各域 `domains/*-logic.md` §7。这些缺陷是重设计负输入的组成部分，与 §6 合并使用。
