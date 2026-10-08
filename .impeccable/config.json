@@ -14,6 +14,24 @@
         "value": "instrument serif",
         "createdAt": "2026-10-08T09:24:56.139Z",
         "reason": "Agent: diagram-design skill style-guide.md mandates Instrument Serif for the page title and italic callouts, with the serif/sans/mono contrast called load-bearing"
+      },
+      {
+        "rule": "all-caps-body",
+        "value": "*",
+        "files": [
+          "docs/legacy/arch/diagrams/overview-architecture.html"
+        ],
+        "createdAt": "2026-10-08T13:58:39.582Z",
+        "reason": "diagram-design skill spec mandates uppercase mono for short type tags / zone eyebrows / fragment operators (type-architecture.md, type-sequence.md); flagged items are all <=14-char labels, body text is CJK (caseless) - false positive by design system, decided by: skill type references + house style of pre-existing diagrams"
+      },
+      {
+        "rule": "all-caps-body",
+        "value": "*",
+        "files": [
+          "docs/legacy/arch/diagrams/scenario-expiry-selfprotection.html"
+        ],
+        "createdAt": "2026-10-08T13:58:39.597Z",
+        "reason": "diagram-design skill spec mandates uppercase mono for short type tags / zone eyebrows / fragment operators (type-architecture.md, type-sequence.md); flagged items are all <=14-char labels, body text is CJK (caseless) - false positive by design system, decided by: skill type references + house style of pre-existing diagrams"
       }
     ]
   }

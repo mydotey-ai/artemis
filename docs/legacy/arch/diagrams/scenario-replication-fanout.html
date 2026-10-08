@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>对等复制扇出端到端</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Serif:ital@0;1&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'Source Han Sans SC',
+                     'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'WenQuanYi Micro Hei',
+                     system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif SC', 'Noto Serif CJK SC',
+                     'Source Han Serif SC', 'Songti SC', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 1120px; display: block; }
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Sequence · Replication · F1</p>
+    <h1>对等复制：双通道去重与批量扇出</h1>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 1120 740" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="scenario-replication-fanout-title scenario-replication-fanout-desc">
+        <title id="scenario-replication-fanout-title">对等复制扇出端到端</title>
+        <desc id="scenario-replication-fanout-desc">服务端写成功后将复制任务投入单条或批量通道，批量通道 5 毫秒收集并按 taskId 去重合并、凑满 250 条或等满 2 秒成批，扇出前查节点状态表跳过不可服务 peer，批量投递到 peer 由其幂等覆盖入租约池；可重试失败 reaccept 插队，任务 TTL 5 秒过期即丢弃无重放。</desc>
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="#4f5d75" stroke-width="1.2"/></marker>
+          <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+          <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+        <!-- ===== marginal notes ===== -->
+        <text x="1100" y="40" fill="#2d3142" font-size="13" font-style="italic" font-family="'Instrument Serif', 'Noto Serif SC', serif" text-anchor="end">扇出前查状态表：UNKNOWN / DOWN 跳过，缺口靠心跳自愈</text>
+        <text x="60" y="728" fill="#4f5d75" font-size="13" font-style="italic" font-family="'Instrument Serif', 'Noto Serif SC', serif">写放大 = 客户端写 ×(N−1)，批量是唯一摊销</text>
+
+        <!-- ===== actors ===== -->
+        <rect x="60" y="56" width="180" height="44" rx="6" fill="#f5f5f5"/>
+        <rect x="60" y="56" width="180" height="44" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="150" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">服务端 · 业务线程</text>
+        <text x="150" y="92" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">写成功即返回</text>
+
+        <rect x="340" y="56" width="180" height="44" rx="6" fill="#f5f5f5"/>
+        <rect x="340" y="56" width="180" height="44" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="430" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">单条通道</text>
+        <text x="430" y="92" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">register / unregister</text>
+
+        <rect x="620" y="56" width="180" height="44" rx="6" fill="#f5f5f5"/>
+        <rect x="620" y="56" width="180" height="44" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="710" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">批量通道</text>
+        <text x="710" y="92" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">heartbeat · 250 条 / 2s</text>
+
+        <rect x="870" y="56" width="180" height="44" rx="6" fill="#f5f5f5"/>
+        <rect x="870" y="56" width="180" height="44" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="960" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">peer ×(N−1)</text>
+        <text x="960" y="92" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">region 副本</text>
+
+        <!-- ===== lifelines ===== -->
+        <line x1="150" y1="100" x2="150" y2="720" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="430" y1="100" x2="430" y2="720" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="710" y1="100" x2="710" y2="720" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="960" y1="100" x2="960" y2="720" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+
+        <!-- ===== activation bars ===== -->
+        <rect x="146" y="188" width="8" height="64" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+        <rect x="426" y="412" width="8" height="20" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+        <rect x="706" y="264" width="8" height="256" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+        <rect x="956" y="368" width="8" height="148" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+
+        <!-- ===== messages ===== -->
+        <!-- m1 self L1: 写成功 -->
+        <path d="M 150,142 h 28 a 4,4 0 0 1 4,4 v 12 a 4,4 0 0 1 -4,4 h -20" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+        <text x="194" y="156" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace">写成功 → replicate</text>
+
+        <!-- m2 L1 -> L2 : RegisterTask (async) -->
+        <line x1="158" y1="196" x2="426" y2="196" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-open)"/>
+        <rect x="234" y="178" width="72" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="270" y="187" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">RegisterTask</text>
+
+        <!-- m3 L1 -> L3 : HeartbeatTask (async) -->
+        <line x1="158" y1="240" x2="706" y2="240" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-open)"/>
+        <rect x="504" y="222" width="72" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="540" y="231" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">HeartbeatTask</text>
+
+        <!-- m4 self L3: 5ms 去重合并 -->
+        <path d="M 710,268 h 28 a 4,4 0 0 1 4,4 v 12 a 4,4 0 0 1 -4,4 h -20" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+        <text x="754" y="282" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace">5ms 去重合并</text>
+
+        <!-- m5 self L3: 成批 -->
+        <path d="M 710,312 h 28 a 4,4 0 0 1 4,4 v 12 a 4,4 0 0 1 -4,4 h -20" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+        <text x="754" y="326" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace">成批 250 / 2s</text>
+
+        <!-- m6 L3 -> L4 : POST 批量心跳 (headline) -->
+        <line x1="714" y1="376" x2="956" y2="376" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+        <rect x="798" y="358" width="76" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="836" y="367" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">POST 批量心跳</text>
+
+        <!-- m7 L2 -> L4 : POST 单任务 -->
+        <line x1="438" y1="420" x2="956" y2="420" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+        <rect x="766" y="402" width="68" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="800" y="411" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">POST 单任务</text>
+
+        <!-- m8 self L4: 幂等覆盖 -->
+        <path d="M 960,444 h 28 a 4,4 0 0 1 4,4 v 12 a 4,4 0 0 1 -4,4 h -20" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+        <text x="1000" y="458" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace">幂等覆盖 · 补注册</text>
+
+        <!-- m9 L4 --> L3 : 响应 -->
+        <line x1="956" y1="508" x2="714" y2="508" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+        <rect x="812" y="490" width="44" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="834" y="499" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">响应</text>
+
+        <!-- ===== alt fragment: 失败处置（批量通道内） ===== -->
+        <rect x="640" y="548" width="240" height="168" rx="4" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+        <rect x="640" y="548" width="40" height="16" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+        <text x="660" y="560" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">ALT</text>
+        <text x="652" y="582" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">[可重试失败]</text>
+
+        <!-- m11 self L3: reaccept 插队 -->
+        <path d="M 710,600 h 28 a 4,4 0 0 1 4,4 v 12 a 4,4 0 0 1 -4,4 h -20" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+        <text x="754" y="614" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace">reaccept 插队队首</text>
+
+        <!-- divider -->
+        <line x1="648" y1="636" x2="872" y2="636" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="652" y="658" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">[TTL &gt; 5s]</text>
+
+        <!-- m12 self L3: 丢弃 -->
+        <path d="M 710,676 h 28 a 4,4 0 0 1 4,4 v 12 a 4,4 0 0 1 -4,4 h -20" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+        <text x="754" y="690" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace">丢弃 · 无重放</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

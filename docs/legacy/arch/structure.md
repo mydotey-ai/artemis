@@ -1,6 +1,6 @@
 # 原产品结构视图（Structure View）
 
-版本: 1.3    更新时间: 2026-10-08
+版本: 1.4    更新时间: 2026-10-08
 
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：**事实层 · 架构视图——静态结构**。回答系统边界与外部依赖（§1）、运行期组件清单与依赖契约（§2–§3）、数据所有权与一致性总表（§4）、工程与构建（§5）。总览入口 [../arch.md](../arch.md)，视图地图与约束编号亦见该文。
@@ -242,6 +242,8 @@
 
 ### 4.1 事实源与所有权
 
+![数据所有权：事实源与投影](diagrams/structure-data-ownership.svg)
+
 | 数据 | 事实源 | 服务端角色 | 存储 | 持久化 |
 |---|---|---|---|---|
 | **实例注册数据** | **客户端本地实例集**（`InstanceRepository`） | 投影（心跳全量对账重建） | 服务端纯内存 | ✗（约束 C3） |
@@ -376,6 +378,7 @@ artemis-common ◄── artemis-service ◄──────────┐
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.4 | 2026-10-08 | §4.1 补数据所有权图（事实源与投影、双轨可视化，[diagrams/structure-data-ownership](diagrams/structure-data-ownership.html)） |
 | 1.3 | 2026-10-08 | 勘误修正：DAO 类数 24→21、模块文件数按实测、features §1→§4、基线 §6.19 误引删除、§4.3 补回第五重收敛路径 |
 | 1.2 | 2026-10-08 | §3.1 依赖清单改为架构图（[diagrams/structure-dependencies](diagrams/structure-dependencies.html)）+ 逐边证据表 |
 | 1.1 | 2026-10-08 | §3.3 去掉与 §2 生命周期列重复的组件名单（改为指针） |

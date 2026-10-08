@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>失联剔除与自我保护</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Serif:ital@0;1&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'Source Han Sans SC',
+                     'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'WenQuanYi Micro Hei',
+                     system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif SC', 'Noto Serif CJK SC',
+                     'Source Han Serif SC', 'Songti SC', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 1060px; display: block; }
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Sequence · Lease · F3 / D2 / D4</p>
+    <h1>失联剔除与自我保护</h1>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 1060 760" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="scenario-expiry-selfprotection-title scenario-expiry-selfprotection-desc">
+        <title id="scenario-expiry-selfprotection-title">失联剔除与自我保护</title>
+        <desc id="scenario-expiry-selfprotection-desc">客户端停跳后租约在 TTL 20 秒过期并粘滞置位，clean 线程每秒 tryLock 清理：safe-checker 判定 safe 时摘除租约并推送 DELETE 事件给订阅方；判定 unsafe（保护态）时跳过仅过期剔除、实例保留至保护解除。</desc>
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="#4f5d75" stroke-width="1.2"/></marker>
+          <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+        <!-- ===== marginal notes ===== -->
+        <text x="60" y="40" fill="#2d3142" font-size="13" font-style="italic" font-family="'Instrument Serif', 'Noto Serif SC', serif">前提：客户端停跳——所有节点同时失去续约来源，各节点独立重复此过程</text>
+        <text x="1000" y="40" fill="#2d3142" font-size="13" font-style="italic" font-family="'Instrument Serif', 'Noto Serif SC', serif" text-anchor="end">显式 evict 跳过保护：主动运维不受拦截</text>
+
+        <!-- ===== actors ===== -->
+        <rect x="100" y="56" width="160" height="44" rx="6" fill="#f5f5f5"/>
+        <rect x="100" y="56" width="160" height="44" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="180" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">租约（双池）</text>
+        <text x="180" y="92" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">TTL 20s / 90s</text>
+
+        <rect x="370" y="56" width="160" height="44" rx="6" fill="#f5f5f5"/>
+        <rect x="370" y="56" width="160" height="44" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="450" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">clean 线程</text>
+        <text x="450" y="92" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">2 × 每 1s</text>
+
+        <rect x="640" y="56" width="160" height="44" rx="6" fill="#f5f5f5"/>
+        <rect x="640" y="56" width="160" height="44" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="720" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">safe-checker</text>
+        <text x="720" y="92" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">窗口 10s · 85%</text>
+
+        <rect x="880" y="56" width="160" height="44" rx="6" fill="#f5f5f5"/>
+        <rect x="880" y="56" width="160" height="44" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="960" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">订阅方 SDK</text>
+        <text x="960" y="92" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">artemis-client</text>
+
+        <!-- ===== lifelines ===== -->
+        <line x1="180" y1="100" x2="180" y2="720" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="450" y1="100" x2="450" y2="720" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="720" y1="100" x2="720" y2="720" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="960" y1="100" x2="960" y2="720" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+
+        <!-- ===== activation bars ===== -->
+        <rect x="176" y="188" width="8" height="16" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+        <rect x="446" y="188" width="8" height="472" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+        <rect x="716" y="296" width="8" height="16" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+        <rect x="716" y="560" width="8" height="16" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+        <rect x="956" y="420" width="8" height="16" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+
+        <!-- ===== messages ===== -->
+        <!-- m1 self 租约: 过期粘滞 -->
+        <path d="M 180,142 h 28 a 4,4 0 0 1 4,4 v 12 a 4,4 0 0 1 -4,4 h -20" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+        <text x="224" y="156" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace">renewalTime+TTL · 过期粘滞</text>
+
+        <!-- m2 clean -> 租约 : tryLock -->
+        <line x1="446" y1="196" x2="188" y2="196" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <rect x="252" y="178" width="124" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="314" y="187" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">tryLock · 每 1s</text>
+
+        <!-- ===== alt fragment: 摘除决策 ===== -->
+        <rect x="164" y="244" width="812" height="424" rx="4" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+        <rect x="164" y="244" width="40" height="16" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+        <text x="184" y="256" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">ALT</text>
+        <text x="216" y="272" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">[safe-checker: safe]</text>
+
+        <!-- m3 clean -> checker : isSafe() -->
+        <line x1="454" y1="304" x2="716" y2="304" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <rect x="552" y="286" width="52" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="578" y="295" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">isSafe()</text>
+
+        <!-- m4 checker --> clean : safe -->
+        <line x1="716" y1="340" x2="454" y2="340" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+        <rect x="564" y="322" width="28" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="578" y="331" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">safe</text>
+
+        <!-- m5 self clean: 摘除 -->
+        <path d="M 454,368 h 28 a 4,4 0 0 1 4,4 v 12 a 4,4 0 0 1 -4,4 h -20" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+        <text x="498" y="382" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace">摘除 · DELETE 事件</text>
+
+        <!-- m6 clean -> 订阅方 : 推送 DELETE (headline) -->
+        <line x1="454" y1="428" x2="956" y2="428" stroke="#eb6c36" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrow-accent)"/>
+        <rect x="665" y="410" width="80" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="705" y="419" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">推送 DELETE</text>
+
+        <!-- m7 self 订阅方: 移除 -->
+        <path d="M 964,456 h 28 a 4,4 0 0 1 4,4 v 12 a 4,4 0 0 1 -4,4 h -20" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+        <text x="1004" y="470" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace">移除 · 回调</text>
+
+        <!-- divider -->
+        <line x1="172" y1="508" x2="968" y2="508" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="216" y="536" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">[unsafe · 保护态]</text>
+
+        <!-- m8 clean -> checker : isSafe() -->
+        <line x1="454" y1="568" x2="716" y2="568" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <rect x="552" y="550" width="52" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="578" y="559" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">isSafe()</text>
+
+        <!-- m9 checker --> clean : unsafe -->
+        <line x1="716" y1="604" x2="454" y2="604" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+        <rect x="556" y="586" width="44" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="578" y="595" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">unsafe</text>
+
+        <!-- m10 self clean: 跳过 -->
+        <path d="M 454,632 h 28 a 4,4 0 0 1 4,4 v 12 a 4,4 0 0 1 -4,4 h -20" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+        <text x="498" y="646" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace">跳过 · 实例保留至解除</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

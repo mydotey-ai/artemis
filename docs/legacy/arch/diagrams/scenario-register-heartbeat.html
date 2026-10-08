@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>注册与心跳端到端</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Serif:ital@0;1&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'Source Han Sans SC',
+                     'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'WenQuanYi Micro Hei',
+                     system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif SC', 'Noto Serif CJK SC',
+                     'Source Han Serif SC', 'Songti SC', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 1080px; display: block; }
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Sequence · Registry · F1–F2</p>
+    <h1>注册与心跳端到端（心跳即注册）</h1>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 1080 740" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="scenario-register-heartbeat-title scenario-register-heartbeat-desc">
+        <title id="scenario-register-heartbeat-title">注册与心跳端到端</title>
+        <desc id="scenario-register-heartbeat-desc">提供方 SDK 注册只并入本地实例集，首个全量心跳到达服务端后因租约缺失返回 data-not-found，客户端补注册建立租约并产生 NEW 事件，经复制任务同步到 peer 并推送给订阅方，实例可见；稳态下每 5 秒心跳续约并以批量任务复制。</desc>
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="#4f5d75" stroke-width="1.2"/></marker>
+          <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+          <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+        <!-- ===== actors ===== -->
+        <rect x="60" y="56" width="160" height="44" rx="6" fill="#f5f5f5"/>
+        <rect x="60" y="56" width="160" height="44" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="140" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">提供方 SDK</text>
+        <text x="140" y="92" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">artemis-client</text>
+
+        <rect x="340" y="56" width="160" height="44" rx="6" fill="#f5f5f5"/>
+        <rect x="340" y="56" width="160" height="44" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="420" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">服务端</text>
+        <text x="420" y="92" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">接入 + 内核</text>
+
+        <rect x="620" y="56" width="160" height="44" rx="6" fill="#f5f5f5"/>
+        <rect x="620" y="56" width="160" height="44" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="700" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">peer ×(N−1)</text>
+        <text x="700" y="92" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">region 副本</text>
+
+        <rect x="860" y="56" width="160" height="44" rx="6" fill="#f5f5f5"/>
+        <rect x="860" y="56" width="160" height="44" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="940" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" text-anchor="middle">订阅方 SDK</text>
+        <text x="940" y="92" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">artemis-client</text>
+
+        <!-- ===== lifelines ===== -->
+        <line x1="140" y1="100" x2="140" y2="704" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="420" y1="100" x2="420" y2="704" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="700" y1="100" x2="700" y2="704" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="940" y1="100" x2="940" y2="704" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+
+        <!-- ===== activation bars ===== -->
+        <rect x="136" y="188" width="8" height="192" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+        <rect x="416" y="188" width="8" height="192" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+        <rect x="696" y="408" width="8" height="64" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+        <rect x="936" y="496" width="8" height="60" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+        <rect x="136" y="640" width="8" height="16" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+        <rect x="416" y="640" width="8" height="48" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+
+        <!-- ===== messages ===== -->
+        <!-- m1 self L1: 注册并入本地集 -->
+        <path d="M 140,142 h 28 a 4,4 0 0 1 4,4 v 12 a 4,4 0 0 1 -4,4 h -20" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+        <text x="184" y="156" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace">注册并入本地集</text>
+
+        <!-- m2 L1 -> L2 : 全量心跳 WS -->
+        <line x1="144" y1="196" x2="416" y2="196" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+        <rect x="252" y="178" width="56" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="280" y="187" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">全量心跳 WS</text>
+
+        <!-- m4 L2 --> L1 : data-not-found (return) -->
+        <line x1="416" y1="240" x2="144" y2="240" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+        <rect x="232" y="222" width="96" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="280" y="231" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">data-not-found</text>
+
+        <!-- m5 L1 -> L2 : 补注册 HTTP (headline) -->
+        <line x1="144" y1="284" x2="416" y2="284" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+        <rect x="248" y="266" width="64" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="280" y="275" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">补注册 HTTP</text>
+
+        <!-- m6 self L2 : new Lease + NEW 事件 -->
+        <path d="M 420,320 h 28 a 4,4 0 0 1 4,4 v 12 a 4,4 0 0 1 -4,4 h -20" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+        <text x="464" y="334" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace">new Lease · NEW 事件</text>
+
+        <!-- m7 L2 --> L1 : success -->
+        <line x1="416" y1="372" x2="144" y2="372" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+        <rect x="252" y="354" width="56" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="280" y="363" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">success</text>
+
+        <!-- m8 L2 -> L3 : RegisterTask (async) -->
+        <line x1="424" y1="416" x2="696" y2="416" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-open)"/>
+        <rect x="524" y="398" width="72" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="560" y="407" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">RegisterTask</text>
+
+        <!-- m9 self L3 : peer 注册 + NEW -->
+        <path d="M 700,444 h 28 a 4,4 0 0 1 4,4 v 12 a 4,4 0 0 1 -4,4 h -20" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+        <text x="744" y="458" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace">peer 注册 · NEW</text>
+
+        <!-- m10 L2 -> L4 : 推送 NEW (async) -->
+        <line x1="424" y1="504" x2="936" y2="504" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-open)"/>
+        <rect x="648" y="486" width="64" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="680" y="495" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">推送 NEW</text>
+
+        <!-- m11 self L4 : 增量落地 -->
+        <path d="M 940,532 h 28 a 4,4 0 0 1 4,4 v 12 a 4,4 0 0 1 -4,4 h -20" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+        <text x="984" y="546" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace">增量落地 · 可见</text>
+
+        <!-- ===== loop fragment: 稳态心跳 ===== -->
+        <rect x="124" y="592" width="592" height="108" rx="4" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+        <rect x="124" y="592" width="44" height="16" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+        <text x="146" y="604" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">LOOP</text>
+        <text x="184" y="620" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">[稳态：每 5s 心跳]</text>
+
+        <!-- m12 L1 -> L2 : 心跳续约 -->
+        <line x1="144" y1="648" x2="416" y2="648" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+        <rect x="248" y="630" width="64" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="280" y="639" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">心跳续约</text>
+
+        <!-- m13 L2 -> L3 : HeartbeatTask (async) -->
+        <line x1="424" y1="684" x2="696" y2="684" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-open)"/>
+        <rect x="516" y="666" width="88" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="560" y="675" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">HeartbeatTask</text>
+
+        <!-- ===== marginal note ===== -->
+        <text x="60" y="728" fill="#2d3142" font-size="13" font-style="italic" font-family="'Instrument Serif', 'Noto Serif SC', serif">首次可见 ≈ 1 心跳间隔 + 补注册一轮 ≈ 5–6s</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

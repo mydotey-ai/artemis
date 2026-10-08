@@ -1,9 +1,9 @@
 # 原产品运行时视图（Runtime View）
 
-版本: 1.2    更新时间: 2026-10-08
+版本: 1.3    更新时间: 2026-10-08
 
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
-> 定位：**事实层 · 架构视图——动态行为**。回答进程与线程模型（§1）、并发控制与背压（§2）、启动序列与就绪门控（§3）、运行期状态机（§4）、关闭与重启（§5）、三通道接口分工（§6）。总览入口 [../arch.md](../arch.md)。
+> 定位：**事实层 · 架构视图——动态行为**。回答进程与线程模型（§1）、并发控制与背压（§2）、启动序列与就绪门控（§3）、运行期状态机（§4）、关闭与重启（§5）、三通道接口分工（§6）、核心场景端到端时序（§7）。总览入口 [../arch.md](../arch.md)。
 > 边界：跨域端到端流程（含失败路径的时序叙事）见 [domains/](../domains/README.md) 各域 logic 的 F 系列；报文契约见 [api-contract](../domains/api-contract.md)、[client-sdk-api](../domains/client-sdk-api.md)。本文写**结构性的运行时形态**（线程、队列、状态、生命周期），不重复流程叙事。
 > 证据引用为相对原仓库根路径（注明「原仓库」）。
 
@@ -255,7 +255,35 @@ App.main
 
 Readme 宣称 Artemis 2「use gRPC instead of websocket」——**未兑现**，全仓库 grep `grpc` 零命中（基线 §4）。
 
-## 7. 待验证
+## 7. 核心场景端到端时序
+
+§1–§6 回答运行时的**结构性形态**（线程、队列、状态、通道）；本节用 4 张时序图回答**机制怎么动**——对应 [../arch.md](../arch.md) §4 机制索引的「心跳即注册 / 过期清理 / 对等复制 / 推送通知」四行。图只做机制定位，行为细节（含失败路径与证据）一律以域文档的 F / D 编号为准。
+
+### 7.1 注册与心跳（心跳即注册）
+
+![注册与心跳端到端](diagrams/scenario-register-heartbeat.svg)
+
+首次注册可见延迟 ≈ 5–6s（1 心跳间隔 + 补注册一轮；[quality](quality.md) §5.5 的 ≈6s 为同一量级的推导口径）；稳态 5s 全量心跳续约 + 批量复制。细节见 [registry-lease F1–F2、D5–D6](../domains/registry-lease-logic.md)、复制侧 [replication-cluster F1](../domains/replication-cluster-logic.md)。
+
+### 7.2 发现与订阅推送
+
+![发现与订阅推送](diagrams/scenario-discovery-subscribe.svg)
+
+推送 **at-most-once**（无 ACK、无重放）；三层兜底：失败重试 60s / 空服务守护 60s / 全量纠偏 15min——纠偏粒度是全量、不是单条重发。细节见 [discovery F1–F5、D1–D4](../domains/discovery-logic.md)。
+
+### 7.3 对等复制：双通道去重与批量扇出
+
+![对等复制扇出](diagrams/scenario-replication-fanout.svg)
+
+写放大 = 客户端写 ×(N−1)，批量（250 条 / 2s）与 taskId 去重是唯一摊销；扇出前查状态表，UNKNOWN / DOWN 跳过（缺口不补，靠心跳自愈）；失败 reaccept 插队，任务 TTL 5s 过期即丢。细节见 [replication-cluster F1、D1–D3](../domains/replication-cluster-logic.md)。
+
+### 7.4 失联剔除与自我保护
+
+![失联剔除与自我保护](diagrams/scenario-expiry-selfprotection.svg)
+
+客户端停跳后各节点独立过期（剔除纯本地、无剔除复制消息）；clean 摘除受 safe-checker 门控（unsafe 期保留「仅过期」租约）；**显式 evict 跳过保护**——主动运维不受自我保护拦截。细节见 [registry-lease F3–F4、D2 / D4 / D7](../domains/registry-lease-logic.md)。
+
+## 8. 待验证
 
 | 事项 | 状态 |
 |---|---|
@@ -268,6 +296,7 @@ Readme 宣称 Artemis 2「use gRPC instead of websocket」——**未兑现**，
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.3 | 2026-10-08 | 新增 §7 核心场景端到端时序（4 张 sequence 图），原 §7 待验证顺延为 §8 |
 | 1.2 | 2026-10-08 | §2.2 队列表更正批量通道保护不触发；勘误修正 |
 | 1.1 | 2026-10-08 | §3.2 补启动门控流程图、§4.1 补节点状态机图（[diagrams/](diagrams/README.md)） |
 | 1.0 | 2026-10-08 | 初版（承接原 arch.md §4 索引与 §5 线程模型，补启动序列 / 状态机 / 关闭重启 / 通道分工） |

@@ -9,5 +9,5 @@
 | [domains/README.md](domains/README.md) | — | **业务域规格层索引**（6 域 × spec + logic 共 12 份 + 契约制品 5 份：data-model / api-contract / db-schema / client-sdk-api / config-reference） |
 | [legacy-product-analysis.md](legacy-product-analysis.md) | 定稿 | 判断层：能力全景基线（§5 可继承资产 12 条、§6 局限 23 条、§8 规格层勘误与增补） |
 | [features.md](features.md) | 草案 | 事实层：实现清单（REST 77 路径 + WS 3 端点全量、配置项、DAO/表；含 ⚠ 关键事实标注），规格层取证附录 |
-| [arch.md](arch.md) | 草案 | 事实层：**架构总览入口**（风格判定 / 部署全景 / 视图地图 / 关键架构约束清单） |
+| [arch.md](arch.md) | 草案 | 事实层：**架构总览入口**（风格判定 / 整体架构与部署全景 / 视图地图 / 机制索引 / 关键架构约束清单） |
 | [arch/README.md](arch/README.md) | — | 事实层：**架构视图集索引**（结构 / 运行时 / 部署 / 质量与容量 / 决策记录 五份视图文档） |
