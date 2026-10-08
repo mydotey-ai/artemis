@@ -1,5 +1,7 @@
 # 客户端 SDK 行为 · 功能规格
 
+版本: 1.0    更新时间: 2026-10-08
+
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：以需求语言规格化原产品客户端 SDK 作为**嵌入库**的行为契约（接入模型 / 配置 / 地址容灾 / 传输容错 / 线程与回调 / 生命周期），作为新产品需求设计输入。注册与发现的**业务语义**分别见 [registry-lease-spec.md](registry-lease-spec.md) 与 [discovery-spec.md](discovery-spec.md)，本文只管 SDK 基座。
 > 证据引用：前缀「原仓库」= 相对原仓库根路径；`...` = `src/main/java/org/mydotey/artemis` 包路径缩写；`基线 §x` = [legacy-product-analysis.md](../legacy-product-analysis.md)。标 **⚠ legacy** 为原产品特有行为或包袱；缺陷性行为见同域 logic.md §7。
@@ -211,3 +213,9 @@ SDK 是嵌入宿主进程的纯 Java 库，职责：向服务端集群提供稳�
 - 配置：客户端全部 key 见 §5（含读取时机标注）；全量字典见 [config-reference.md](config-reference.md) §5 ✓
 - 线程：logic.md §L7 清单（7+ 线程构成）✓
 - 未入本域：心跳 / 补注册业务决策（registry-lease D5/D6）、发现缓存更新与兜底（discovery 域）
+
+## 更新历史
+
+| 版本 | 日期 | 变更说明 |
+| ------ | ------ | ------ |
+| 1.0 | 2026-10-08 | 初版 |

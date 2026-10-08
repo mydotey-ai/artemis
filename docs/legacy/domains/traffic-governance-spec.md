@@ -1,5 +1,7 @@
 # 流量治理 · 功能规格
 
+版本: 1.0    更新时间: 2026-10-08
+
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：以需求语言规格化原产品「流量治理」域（分组 / 路由规则 / 两段式权重 / canary / 逻辑实例）行为，作为新产品需求设计输入。这是原产品区别于通用注册中心的差异化能力。摘除类运维操作见 [operations-audit-spec.md](operations-audit-spec.md)；发现链路见 [discovery-spec.md](discovery-spec.md)。
 > 证据引用约定同 [registry-lease-spec.md](registry-lease-spec.md)；标 **⚠ legacy** 为原产品特有行为或包袱；缺陷见同域 logic.md §7。
@@ -146,3 +148,9 @@
 - 端点：`/api/management/group/` 32 个（route-rule 6 / route-rule-group 6 / group 5 / group-tag 5 / group-operation 4 / group-instance 3 / service-instance 3）+ `/api/management/canary/update-canary-ips.json` 全覆盖 ✓
 - 数据模型：Group / RouteRule / RouteRuleGroup（双列权重）/ GroupInstance / ServiceInstance / GroupOperations / GroupTags ✓
 - 未入本域：组级摘除判定细节（operations-audit）、审计查询（operations-audit）、DB/DAO 层（features §3.8）
+
+## 更新历史
+
+| 版本 | 日期 | 变更说明 |
+| ------ | ------ | ------ |
+| 1.0 | 2026-10-08 | 初版 |

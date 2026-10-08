@@ -1,5 +1,7 @@
 # Artemis 原产品实现清单（Legacy Feature Inventory）
 
+版本: 1.1    更新时间: 2026-10-08
+
 > 调研对象：`~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：**事实层 · 实现清单**——按代码结构（模块 → 包 → 类）组织的全量清单（REST/WS 端点、配置项与默认值、DAO/表、测试），作为规格层（[domains/](domains/)）的取证附录。行为语义与需求规格以域文档为准，本文不重复；**字段级 / 报文级 / 表结构级契约见 [domains/](domains/) 下的四份契约制品**（data-model / api-contract / db-schema / client-sdk-api）；关键事实以 ⚠ 标注并指向域文档。产品级入口 [product-overview.md](product-overview.md)。
 > 全部结论以原仓库源码为证据（原仓库 Readme 不作为依据）；证据路径相对原仓库根并注明「原仓库」。
@@ -392,3 +394,10 @@ ZoneKey = serviceId+regionId+zoneId（按服务摘 zone，无全 zone 形态）�
 ## 7. artemis-test（集成测试）
 
 24 个 DAO 测试类 + Group/Zone Repository 测试 + 进程内起服基础设施；约 57 个 @Test，仅覆盖 management DAO 层（SQLite 内存库）；service / server / client 端到端零测试。证据：`artemis-test/src/test/`（原仓库）。
+
+## 更新历史
+
+| 版本 | 日期 | 变更说明 |
+| ------ | ------ | ------ |
+| 1.1 | 2026-10-08 | 按规格层补证重整 |
+| 1.0 | 2026-10-07 | 初版 |

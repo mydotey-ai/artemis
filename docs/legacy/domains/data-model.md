@@ -1,5 +1,7 @@
 # 数据字典（字段级）
 
+版本: 1.0    更新时间: 2026-10-08
+
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：**契约层**制品——全部实体的字段级字典（类型 / JSON 键名 / 可空 / 默认 / 约束）+ 枚举字典 + 身份语义 + clone 深度，供 1:1 对标复刻编码。行为语义见各域 spec/logic；DB 持久化见 [db-schema.md](db-schema.md)；接口契约见 [api-contract.md](api-contract.md)（REST）与 [client-sdk-api.md](client-sdk-api.md)（SDK / WS / 复制）。
 > 证据路径均相对原仓库根。标「待验证」为外部依赖（`org.mydotey.codec` / `org.mydotey.lang` 系列源码不在本仓库）无法取证者。
@@ -315,3 +317,9 @@
 - 枚举字典：11 组枚举/常量集中定义 + 大小写敏感性速查 ✓
 - 身份语义 / clone 深度 / 死字段汇总 ✓
 - 待验证项显式标注（外部依赖）✓
+
+## 更新历史
+
+| 版本 | 日期 | 变更说明 |
+| ------ | ------ | ------ |
+| 1.0 | 2026-10-08 | 初版 |

@@ -1,5 +1,7 @@
 # 实例注册与租约生命周期 · 功能规格
 
+版本: 1.0    更新时间: 2026-10-08
+
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：以需求语言规格化原产品在「实例注册与租约生命周期」域的行为，作为新产品的需求设计输入。规格忠实于原产品实际行为；标 **⚠ legacy** 的条目为原产品特有行为或兼容包袱，新产品须显式决策继承或替换；缺陷性行为不进规格，见同域 logic.md §7。
 > 证据引用：前缀「原仓库」= 相对原仓库根路径；路径中 `...` = `src/main/java/org/mydotey/artemis` 下的包路径缩写；`基线 §x` = [legacy-product-analysis.md](../legacy-product-analysis.md)，`features §x` = [features.md](../features.md)。行号为 2.0.2 HEAD 快照。
@@ -278,3 +280,9 @@ Instance 其余字段（ip/port/protocol/url/healthCheckUrl/metadata 等 13 字�
 - 错误码：success / partial_fail / bad-request / rate-limited / no-permission / data-not-found / internal-service-error / service-unavailable / unknown 在本域的语义全覆盖（FR-RL-03/05/07）✓
 - 配置：features §1.3 双池 10 键、§2.1 registry data 3 键、§5.7 客户端心跳 3 键、WS 会话 TTL——均已入 §5 表 ✓
 - 未入本域（归属他域）：leases.json 状态端点（operations-audit）、复制通道配置（replication-cluster）、HTTP 执行器 / 地址容灾配置（client-sdk）
+
+## 更新历史
+
+| 版本 | 日期 | 变更说明 |
+| ------ | ------ | ------ |
+| 1.0 | 2026-10-08 | 初版 |

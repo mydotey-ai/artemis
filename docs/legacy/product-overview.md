@@ -1,5 +1,7 @@
 # Artemis 原产品总览（Product Overview）
 
+版本: 1.0    更新时间: 2026-10-08
+
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：**产品级**综合梳理——从整个产品角度看全部业务域、横切主题与端到端场景，是规格层文档集（[domains/](domains/)）的入口与汇总；并汇总规格层补证（2026-10-08）对基线的勘误与新发现缺陷。判断层结论（资产 / 局限）见基线 §5/§6，本文不重复。
 > 规格层 = **域文档**（6 域 × spec + logic：回答「怎么运转」）+ **契约制品**（data-model / api-contract / db-schema / client-sdk-api / config-reference：回答「长什么样」），两者合起来构成 1:1 对标复刻的完整蓝本。索引见 [domains/README.md](domains/README.md)。
@@ -232,3 +234,9 @@ registry 100k / replication 1M / cluster（up-nodes）10k / status 30 / manageme
 - [features.md](features.md)：**保留**为事实层实现清单（端点 / 配置 / 类级行为的取证附录），域文档的证据索引。
 - [arch.md](arch.md)：**保留**为事实层架构视图（分层 / 模块 / 线程 / 权衡），与域文档（行为 / 逻辑视角）互补。
 - non-features.md（NFR 反推中间稿）：**已删除**（内容并入 [nfr-spec.md](nfr-spec.md) 与各域 spec 配置表）。
+
+## 更新历史
+
+| 版本 | 日期 | 变更说明 |
+| ------ | ------ | ------ |
+| 1.0 | 2026-10-08 | 初版 |

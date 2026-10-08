@@ -1,5 +1,7 @@
 # 复制与集群一致性 · 功能规格
 
+版本: 1.0    更新时间: 2026-10-08
+
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：以需求语言规格化原产品「对等复制、集群成员、节点状态与就绪、冷启动、管理面同步」行为，作为新产品需求设计输入。租约与剔除语义见 [registry-lease-spec.md](registry-lease-spec.md)；客户端侧寻址见 [client-sdk-spec.md](client-sdk-spec.md)。
 > 证据引用约定同 [registry-lease-spec.md](registry-lease-spec.md)；标 **⚠ legacy** 为原产品特有行为或包袱；缺陷见同域 logic.md §7。
@@ -172,3 +174,9 @@ region 内全部对等节点各自持有全量注册表并最终一致。本域�
 - 错误码：rate-limited（限流）/ no-permission（region 不符，不可重试）/ data-not-found（up-nodes 空）✓
 - 组件：taskdispatcher 全家（TaskAcceptor / Batching / SingleItem / TaskExecutor / TrafficShaper / TaskErrorCode）✓
 - 未入本域：LeaseManager 清理保护（registry-lease L7）、NodeManager 状态端点内容（operations-audit）
+
+## 更新历史
+
+| 版本 | 日期 | 变更说明 |
+| ------ | ------ | ------ |
+| 1.0 | 2026-10-08 | 初版 |
