@@ -1,7 +1,5 @@
 # 管理面数据库 Schema（DDL 级）
 
-状态: 草案  日期: 2026-10-08
-
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：**契约层**制品——管理面 DB 的 DDL 级完整描述，供 1:1 对标复刻建库。概念与行为见 [traffic-governance-logic](traffic-governance-logic.md) / [operations-audit-logic](operations-audit-logic.md)。
 > 证据源：MySQL DDL `artemis-package/deployment/artemis-management.sql`（337 行）；SQLite 测试 DDL `artemis-test/src/test/resources/schema.sql`（298 行）；DAO `artemis-management/.../{dao,group/dao,zone/dao}/`。路径均相对原仓库根。

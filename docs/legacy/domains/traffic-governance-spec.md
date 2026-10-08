@@ -1,7 +1,5 @@
 # 流量治理 · 功能规格
 
-状态: 草案  日期: 2026-10-08
-
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：以需求语言规格化原产品「流量治理」域（分组 / 路由规则 / 两段式权重 / canary / 逻辑实例）行为，作为新产品需求设计输入。这是原产品区别于通用注册中心的差异化能力。摘除类运维操作见 [operations-audit-spec.md](operations-audit-spec.md)；发现链路见 [discovery-spec.md](discovery-spec.md)。
 > 证据引用约定同 [registry-lease-spec.md](registry-lease-spec.md)；标 **⚠ legacy** 为原产品特有行为或包袱；缺陷见同域 logic.md §7。

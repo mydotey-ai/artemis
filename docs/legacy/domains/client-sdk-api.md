@@ -1,7 +1,5 @@
 # 客户端 SDK 接口契约与报文协议
 
-状态: 草案  日期: 2026-10-08
-
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：**契约层**制品——客户端 SDK 的接口签名与契约、WS 报文格式、节点间复制协议报文、HTTP 通用约定，供 1:1 对标复刻。行为语义见 [client-sdk-spec](client-sdk-spec.md) / [client-sdk-logic](client-sdk-logic.md)。
 > 证据路径均相对原仓库根。**标注「待验证」项**为外部依赖（`org.mydotey.codec` / `org.mydotey.rpc` / `org.mydotey.java` 系列源码不在本仓库）无法取证者，须实机抓包确认，不得以推测填充。

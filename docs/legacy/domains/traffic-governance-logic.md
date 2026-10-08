@@ -1,7 +1,5 @@
 # 流量治理 · 业务逻辑蓝本
 
-状态: 草案  日期: 2026-10-08
-
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：分组路由 / 两段式发布 / canary / 逻辑实例的完整业务逻辑，作为新产品设计时逐单元评估与优化的蓝本。事实性；取舍依据引用基线 §5/§6，对照见 §8。阅读约定：L1–L7、D1–D4、F1–F4；证据引用约定同 [traffic-governance-spec.md](traffic-governance-spec.md)。
 

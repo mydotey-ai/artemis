@@ -1,7 +1,5 @@
 # 服务发现与变更通知 · 功能规格
 
-状态: 草案  日期: 2026-10-08
-
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：以需求语言规格化原产品「服务发现与变更通知」域的行为，作为新产品需求设计输入。传输设施（地址容灾 / 重试 / WS 生命周期 / 回调线程）见 [client-sdk-spec.md](client-sdk-spec.md)；过滤器的具体实现分属 traffic-governance / operations-audit 域。
 > 证据引用约定同 [registry-lease-spec.md](registry-lease-spec.md)；标 **⚠ legacy** 为原产品特有行为或包袱；缺陷见同域 logic.md §7。

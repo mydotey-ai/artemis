@@ -1,7 +1,5 @@
 # Artemis 原产品非功能性需求规格（NFR Spec）
 
-状态: 草案  日期: 2026-10-08
-
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：原产品的非功能性需求规格。量化目标 = 原产品配置默认值 / 设计值，作为新产品 NFR 的**基线锚点**；「满足度」为原产品开源形态实绩；标 ⚠ = 原产品未满足或部分满足，**新产品必须在设计中重立该需求**（对应基线 §6 局限）。量化值与机制的证据见各域 spec 的配置表与 FR 证据行（[domains/](domains/)）。
 > 功能性需求见 [domains/](domains/) 各域 spec；产品级总览见 [product-overview.md](product-overview.md)。

@@ -1,7 +1,5 @@
 # 实例注册与租约生命周期 · 功能规格
 
-状态: 草案  日期: 2026-10-08
-
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：以需求语言规格化原产品在「实例注册与租约生命周期」域的行为，作为新产品的需求设计输入。规格忠实于原产品实际行为；标 **⚠ legacy** 的条目为原产品特有行为或兼容包袱，新产品须显式决策继承或替换；缺陷性行为不进规格，见同域 logic.md §7。
 > 证据引用：前缀「原仓库」= 相对原仓库根路径；路径中 `...` = `src/main/java/org/mydotey/artemis` 下的包路径缩写；`基线 §x` = [legacy-product-analysis.md](../legacy-product-analysis.md)，`features §x` = [features.md](../features.md)。行号为 2.0.2 HEAD 快照。

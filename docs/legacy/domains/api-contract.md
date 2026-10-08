@@ -1,7 +1,5 @@
 # REST API 契约（逐端点）
 
-状态: 草案  日期: 2026-10-08
-
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：**契约层**制品——全部 77 个 REST 端点的请求/响应契约（字段级），供 1:1 对标复刻。实体字段定义见 [data-model.md](data-model.md)；SDK / WS / 复制协议见 [client-sdk-api.md](client-sdk-api.md)。
 > 证据路径均相对原仓库根。本制品**自足**（含全部请求/响应字段）。
