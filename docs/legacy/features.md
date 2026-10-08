@@ -1,12 +1,12 @@
 # Artemis 原产品实现清单（Legacy Feature Inventory）
 
-版本: 1.1    更新时间: 2026-10-08
+版本: 1.2    更新时间: 2026-10-08
 
 > 调研对象：`~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：**事实层 · 实现清单**——按代码结构（模块 → 包 → 类）组织的全量清单（REST/WS 端点、配置项与默认值、DAO/表、测试），作为规格层（[domains/](domains/)）的取证附录。行为语义与需求规格以域文档为准，本文不重复；**字段级 / 报文级 / 表结构级契约见 [domains/](domains/) 下的四份契约制品**（data-model / api-contract / db-schema / client-sdk-api）；关键事实以 ⚠ 标注并指向域文档。产品级入口 [product-overview.md](product-overview.md)。
 > 全部结论以原仓库源码为证据（原仓库 Readme 不作为依据）；证据路径相对原仓库根并注明「原仓库」。
 > API 清单唯一事实源：`artemis-common/src/main/java/org/mydotey/artemis/config/RestPaths.java`、`.../config/WebSocketPaths.java`（原仓库）与 `artemis-management/src/main/java/org/mydotey/artemis/management/config/RestPaths.java`（原仓库）；`CONTEXT_PATH = "/"`（`.../config/ArtemisPaths.java`，原仓库，2026-03 统一为 `/api/` 前缀时引入）。
-> 模块视图（职责/依赖链/Spring 依赖）见 [arch.md](arch.md) §2，规模数字见基线 §1。
+> 模块视图（职责/依赖链/Spring 依赖）见 [arch/structure.md](arch/structure.md)「工程与构建」，规模数字见基线 §1。
 
 ---
 
@@ -399,5 +399,6 @@ ZoneKey = serviceId+regionId+zoneId（按服务摘 zone，无全 zone 形态）�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.2 | 2026-10-08 | 模块视图指针改指 arch/structure.md（架构视图拆分） |
 | 1.1 | 2026-10-08 | 按规格层补证重整 |
 | 1.0 | 2026-10-07 | 初版 |

@@ -1,6 +1,6 @@
 # Artemis 原产品总览（Product Overview）
 
-版本: 1.0    更新时间: 2026-10-08
+版本: 1.3    更新时间: 2026-10-08
 
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：**产品级**综合梳理——从整个产品角度看全部业务域、横切主题与端到端场景，是规格层文档集（[domains/](domains/)）的入口与汇总；并汇总规格层补证（2026-10-08）对基线的勘误与新发现缺陷。判断层结论（资产 / 局限）见基线 §5/§6，本文不重复。
@@ -152,7 +152,10 @@ registry 100k / replication 1M / cluster（up-nodes）10k / status 30 / manageme
 | 冷启动空集群死锁（空数据拒绝就绪） | replication-cluster | logic §7.3 |
 | force-up 跳过全部初始同步；UP 无回退；DOWN 粘性；UP 后平面不可摘 | replication-cluster | logic §7.4–7.6 |
 | 成员清空时视图陈旧残留；定向重试不看成员表 | replication-cluster | logic §7.7–7.8 |
-| 复制 register/unregister 与节点探测无显式超时 | replication-cluster | logic §7.9 |
+| 复制 register/unregister 与节点探测无显式超时；节点探测**未设 socket timeout**（200ms 属性名被另一方法使用，命名与用途不符） | replication-cluster | logic §7.9、[arch/runtime](arch/runtime.md) §4.1 |
+| **批量复制通道的缓冲保护失效**：`BatchingTaskAcceptor._pendingTaskCount` 遮蔽父类同名字段，父类计数只减不加 → `buffer-full-dropped` 在心跳复制通道上**不触发**（单条通道正常） | replication-cluster | [arch/runtime](arch/runtime.md) §2.2 |
+| DISCOVERY 就绪门控**不含 ZoneRepository**（虽被 init，但不参与门控判定） | replication-cluster | [arch/runtime](arch/runtime.md) §3.2 |
+| 摘除判定**只看 operation 行是否存在，与取值无关** → 恢复只能删行，无法用反向记录抵消 | operations-audit | [arch/runtime](arch/runtime.md) §4.3 |
 | zone 摘除推送盲区（同服务第二条记录不触发推送） | operations-audit | logic §7.1 |
 | 合成事件 server 级只按 IP 匹配（跨 region 虚假 DELETE 且被放行） | operations-audit | logic §7.2 |
 | 恢复单条性 + operation 无枚举校验 | operations-audit | logic §7.3–7.4 |
@@ -186,6 +189,18 @@ registry 100k / replication 1M / cluster（up-nodes）10k / status 30 / manageme
 | leases 端点 **GET 参数名 `appIds` vs body 字段名 `serviceIds` 不一致**；`LeaseStatus.evitionTime` 拼写错误 | api-contract §1.D |
 | `GroupInstance` 用 public 字段；`DeleteGroupsInstancesRequest` 类名单复数错位；`service-instance` insert 返回异类 `OperationResponse` | api-contract §2.B |
 | 无全局异常处理——畸形 JSON 请求返回框架默认 400，**不是** `ResponseStatus` 结构 | client-sdk-api §5 |
+
+**架构视图补证追加（2026-10-08 第四批）**：
+
+| # | 位置 | 原表述 | 代码事实 | 出处 |
+|---|---|---|---|---|
+| 21 | 基线 §1 模块依赖树、原 arch.md §2 依赖链 | 依赖画成线性链 `common → service → management → server → package` | `artemis-server` **同时** compile 依赖 `artemis-service` 与 `artemis-management`（pom 首两项）——是 DAG 而非链；基线 §1 的树形缩进图无法表达该直连边 | [arch/structure](arch/structure.md) §5.1 |
+| 22 | 基线 §3.1 | 「10 万实例 × TTL 20s ≈ 5k 心跳/s 原生流量」 | 以 **TTL** 当心跳周期计算有误：默认心跳间隔为 **5s**，且心跳**按 manager（进程）聚合**为一条消息（payload = 该进程全量实例集），消息率自变量是**进程数**而非实例数 | [arch/quality](arch/quality.md) §5.2 |
+| 23 | 原 arch.md §7 / 基线 §3.4 | 「WS 8KB 缓冲上限」未区分侧别 | 8KB 是**客户端**的 incoming text message 上限（容器级，构造期一次生效）；**服务端无对应配置**（落 Tomcat 默认） | [arch/runtime](arch/runtime.md) §6.2 |
+| 24 | 原 arch.md §1 / §2 | 「管理面通过三个注入点作用于数据面」；「artemis-management 依赖 spring-jdbc/context」 | 管理面共 **5 个接入点**（其中 3 个作用于数据面，与原表述一致，另 2 个为启动门控参与与管理面内部 filter 链）；management 的 `spring-jdbc` 为 compile（当 JDBC 工具库），`spring-context`/`spring-webmvc` 为 **test scope**——两者并列易误读 | [arch/structure](arch/structure.md) §3.4、§4.5 |
+| 25 | 基线 §1 | 逐模块文件数 common 95 / client 27、test 52 | 实测 **common 93 / client 28、test 51**（`main` 总数 408 与基线一致，差异在逐模块计数口径） | [arch/structure](arch/structure.md) §5.1 |
+| 26 | 基线 §3.1 | 「10 万实例 × TTL 20s ≈ 5k 心跳/s 原生流量 ×(N−1) peer」 | `×(N−1)` 方向正确，但基数把 **TTL 当心跳周期**（默认 5s）且按**实例数**计——心跳按 manager 聚合，自变量是**进程数**。修正后的模型见 [arch/quality](arch/quality.md) §5.2 | [arch/quality](arch/quality.md) §5.2 |
+| 27 | 基线 §3.6 | 「ErrorCodes 定义了 no-permission 但无实现」 | 该码**有产出点**（region / zone 准入：`RegistryTool`、`DiscoveryServiceImpl`、`RegistryReplicationServiceImpl`）；基线的「无实现」指无**鉴权**实现，不是无产出 | [arch/quality](arch/quality.md) §1.1 |
 
 配置层（2026-10-08 第三批）：
 
@@ -225,18 +240,21 @@ registry 100k / replication 1M / cluster（up-nodes）10k / status 30 / manageme
 | 10 万实例下管理查询可用性 | 无分页为既定事实；实际退化程度需实测 | operations-audit §6 |
 | `destroyServers` 的历史调用方 | 需对比 1.5.x tag | operations-audit FR-OA-09 |
 | shipped `thread-pool-size` 是否曾为有效键 | 需对比 1.5.x tag（2.0.2 判定为死键） | nfr-spec NFR-41 |
-| 生产是否在引导地址前置 LB | 不可从代码证实 | arch §6 |
+| 生产是否在引导地址前置 LB | 不可从代码证实 | [arch/deployment](arch/deployment.md) §6 |
 | HTTP 心跳端点的旧代客户端用途 | 已判为死端点；为旧客户端保留的推断未证实 | registry-lease logic §7.7 |
 
 ## 8. 旧文档处置
 
 - [legacy-product-analysis.md](legacy-product-analysis.md)：**保留**为判断层（资产 / 局限，项目规则引用其 §5/§6）；已附 §8 勘误与增补。
 - [features.md](features.md)：**保留**为事实层实现清单（端点 / 配置 / 类级行为的取证附录），域文档的证据索引。
-- [arch.md](arch.md)：**保留**为事实层架构视图（分层 / 模块 / 线程 / 权衡），与域文档（行为 / 逻辑视角）互补。
+- [arch.md](arch.md) 与 [arch/](arch/README.md)：**保留**为事实层架构视图。arch.md 为总览入口（风格判定 / 部署全景 / 视图地图 / 关键架构约束），详细视图拆入 arch/ 目录（结构 / 运行时 / 部署 / 质量与容量 / 决策记录），与域文档（行为 / 逻辑视角）互补。
 - non-features.md（NFR 反推中间稿）：**已删除**（内容并入 [nfr-spec.md](nfr-spec.md) 与各域 spec 配置表）。
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.3 | 2026-10-08 | §5 新增勘误 #25–27（文件数 / 心跳率口径 / no-permission）；§7 LB 指针改指 arch/deployment |
+| 1.2 | 2026-10-08 | 架构视图补证：§5 新增勘误 #21–24，§6 新增缺陷 4 条（批量复制缓冲保护失效 / 探测无超时 / Zone 不入门控 / 摘除只看行存在） |
+| 1.1 | 2026-10-08 | §8 旧文档处置同步架构视图拆分（arch.md 为总览入口，详细视图入 arch/ 目录） |
 | 1.0 | 2026-10-08 | 初版 |
