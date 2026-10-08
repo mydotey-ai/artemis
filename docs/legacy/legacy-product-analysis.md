@@ -51,7 +51,7 @@ artemis-common（95 文件，零 Spring 基础库：模型/lease/taskdispatcher/
 | `InstanceKey` | regionId.serviceId.instanceId | 实例唯一标识三元组 |
 | `InstanceChange` | instance + changeType(new/delete/change/reload) + changeTime | 推送/增量统一语义；reload 用伪造 `0.0.0.0/reload` 假实例表示「全量重拉」 |
 | `Service` | serviceId, metadata, instances, logicInstances, routeRules | logicInstances/routeRules 是发现时由分组路由动态注入的派生视图，非注册数据 |
-| `ServiceGroup` / `RouteRule` | groupKey, weight[0–10000 默认 5000], instanceIds / routeId, strategy, groups | 内置两条保留规则：`default-route-rule` 与 `canary-route-rule`；策略两种：weighted-round-robin、close-by-visit（就近） |
+| `ServiceGroup` / `RouteRule` | groupKey, weight[0–10000 默认 5], instanceIds / routeId, strategy, groups | 内置两条保留规则：`default-route-rule` 与 `canary-route-rule`；策略两种：weighted-round-robin、close-by-visit（就近） |
 | `Region` / `Zone` / `ServerKey` | region→zones 层级 / serverId=IP | 三层空间模型 + 管理面机器标识 |
 
 层级模型：**Region（= 集群边界，region 间零同步）→ Zone（机房/单元，写入准入单位）→ ServiceGroup（服务内流量分组）**。
@@ -68,7 +68,7 @@ Artemis 最独特的设计——注册不走显式 HTTP 写路径，本地实例
 服务端注册表（纯内存，零持久化，`artemis-service/.../registry/RegistryRepository.java`）：
 
 - `_services: ConcurrentHashMap<serviceId, Service>` + `_leases: ConcurrentHashMap<serviceId, ConcurrentHashMap<instanceId, Lease<Instance>>>` + `_instanceChangeSet: ConcurrentSkipListSet<InstanceChange>`（按 changeTime 排序，容量 10k 满则挤掉最老）。
-- **双租约池**：普通实例 TTL 20s；legacy 实例（`metadata.java_registry` 非空）TTL 90s——兼容老客户端的过渡设计。
+- **双租约池**：普通实例 TTL 20s；legacy 实例（`metadata.java_registry` 非空）TTL 90s（发布配置值，代码默认两池同为 20s）——兼容老客户端的过渡设计。
 
 HTTP 注册 API 均为批量（`instances[]` 入参 + `failedInstances[]` 部分失败语义）：register.json / heartbeat.json / unregister.json（`RegistryController.java`）。
 
@@ -110,16 +110,16 @@ HTTP 注册 API 均为批量（`instances[]` 入参 + `failedInstances[]` 部分
 | **逻辑实例（静态实例）** | 维护不经过注册中心的实例（完整 ip/port/protocol/url/metadata），进发现结果 `logicInstances`——托管非 Java/第三方系统 | `GroupRepository#getServiceInstances`、`GroupDiscoveryFilter` |
 | **灰度元数据路由** | `DiscoveryConfig.discoveryData` 约定 key（appid/subenv）随 lookup 上送参与服务端筛选 | `util/DiscoveryConfigs.java` |
 
-分组路由的生效路径：写管理 DB → 各节点 `DynamicScheduledThread` 定时（默认 5s）重刷内存缓存 → diff 变化 → 推送 `InstanceChange` 通知订阅方。发现时 `GroupDiscoveryFilter` 将路由规则展开注入 `logicInstances` 与 `routeRules`。
+分组路由的生效路径：写管理 DB → 各节点 `DynamicScheduledThread` 定时（Group/Zone 默认 5s、Management 默认 1s）重刷内存缓存 → diff 变化 → 推送 `InstanceChange` 通知订阅方。发现时 `GroupDiscoveryFilter` 将路由规则展开注入 `logicInstances` 与 `routeRules`。
 
 ### 2.6 运维管控能力
 
 **四级摘除级联**：instance → server（物理机，serverId=IP）→ zone（机房级）→ group（组级），`ManagementRepository#isInstanceDown` 四级级联判定 + `SearchTree` 按 groupKey 级联匹配。摘除不删注册数据，只加一条「下线操作」记录（可叠加多条、各带原因、可审计），恢复即删记录——**操作记录即状态**。
 
-**操作面**（~60 个 API，6 组前缀，REST 由 artemis-server 的 5 个 Controller 暴露，逻辑在 artemis-management）：
+**操作面**（57 个 API，5 组前缀，REST 由 artemis-server 的 5 个 Controller 暴露，逻辑在 artemis-management）：
 
 - `/api/management/`：实例/server 上下线（operate-instance/server、instance-down/server-down 判定、operations 查询）、服务查询
-- `/api/management/group/`：33 个——group/tag/route-rule/rule-group/group-instance/service-instance 的 CRUD + create/release
+- `/api/management/group/`：32 个——group、group-tag、group-operation（组级摘除）、route-rule、route-rule-group、group-instance、service-instance 七族的 CRUD + operate + create/release
 - `/api/management/zone/`：5 个 zone 级摘除
 - `/api/management/canary/`：1 个
 - `/api/management/log/`：9 类审计日志查询（操作前后数据、operatorId、token、reason、complete 标志、时间戳）
@@ -293,7 +293,7 @@ HTTP 注册 API 均为批量（`instances[]` 入参 + `failedInstances[]` 部分
 
 **管理面产品**
 16. 无 UI、无分页、无模糊搜索——10 万实例下服务列表/日志查询不可用。
-17. 表驱动 API（60 个细粒度端点 = DB 表直透，灰度发布需前端串 5 个 API）。
+17. 表驱动 API（57 个细粒度端点 = DB 表直透，灰度发布需前端串 5 个 API）。
 18. 无鉴权/RBAC/审批流；token 不验；实例 metadata 不可改；无订阅关系/调用方视图；无变更 diff 预览与回滚。
 
 **安全**
@@ -316,7 +316,7 @@ HTTP 注册 API 均为批量（`instances[]` 入参 + `failedInstances[]` 部分
 - 服务端核心：`artemis-service/src/main/java/org/mydotey/artemis/`（`registry/RegistryRepository|RegistryServiceImpl|RegistryTool`、`registry/replication/*`、`cluster/{ClusterManager,NodeManager,RegistryReplicationInitializer}`、`discovery/notify/NotificationCenter`、`cache/VersionedCacheManager`）
 - 租约：`artemis-common/src/main/java/org/mydotey/artemis/lease/{Lease,LeaseManager,LeaseUpdateSafeChecker}.java`
 - 任务分发：`artemis-common/src/main/java/org/mydotey/artemis/taskdispatcher/`
-- 接入层：`artemis-server/src/main/java/org/mydotey/artemis/server/`（`rest/controller/*Controller.java` 11 个、`websocket/*WsHandler.java`）
+- 接入层：`artemis-server/src/main/java/org/mydotey/artemis/server/`（Controller 11 个 = `rest/controller/` 10 个 + `websocket/WsStatusController.java`；另 `websocket/` 包 9 类含 `*WsHandler`）
 - 管理面：`artemis-management/src/main/java/org/mydotey/artemis/management/`（`config/RestPaths.java`、`ManagementServiceImpl|ManagementRepository`、`GroupServiceImpl|GroupRepository`、`canary/CanaryServiceImpl`、`group/dao/BusinessDao|RouteRuleGroupDao`、`common/OperationContext`）
 - 配置与部署：`artemis-common/.../config/{ArtemisConfig,DeploymentConfig,RestPaths,WebSocketPaths}.java`、`artemis-package/src/main/resources/*`、`artemis-package/deployment/artemis-management.sql`、根目录 `SQLITE_SETUP.md`
 - 测试：`artemis-test/src/test/java/.../test/ArtemisTest.java`（进程内起服基础设施）

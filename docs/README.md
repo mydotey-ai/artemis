@@ -4,4 +4,4 @@
 
 | 文档 | 状态 | 说明 |
 |---|---|---|
-| [legacy-product-analysis.md](legacy-product-analysis.md) | 定稿 2026-10-07 | 原产品能力全景（重设计需求基线） |
+| [legacy/README.md](legacy/README.md) | — | 原产品调查文档索引（能力基线 / 功能 / 非功能 / 架构） |

@@ -17,7 +17,7 @@ model: inherit
 
 - 原产品：2016 年设计、2017 开源、2020-12 Spring Boot 重写的注册中心（version 2.0.2），曾支撑 10 万+ 实例。
 - 模块地图：artemis-common（数据模型/lease/taskdispatcher/配置）、artemis-service（注册/发现/复制/集群内核）、artemis-management（管理面+唯一 DB 使用者）、artemis-server（REST/WS 接入层）、artemis-client（SDK）、artemis-package（打包）、artemis-test（集成测试）。
-- 能力全景与已知文档陷阱（Readme 宣称与代码漂移等）见本仓库 `docs/legacy-product-analysis.md`，先查它避免重复调查；未覆盖的细节再读代码。
+- 能力全景与已知文档陷阱（Readme 宣称与代码漂移等）见本仓库 `docs/legacy/legacy-product-analysis.md`，先查它避免重复调查；未覆盖的细节再读代码。
 
 ## 输出要求
 
