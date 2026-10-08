@@ -1,0 +1,20 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "geist mono",
+        "createdAt": "2026-10-08T09:24:56.127Z",
+        "reason": "Agent: diagram-design skill style-guide.md mandates Geist Mono for sublabels/eyebrows/arrow labels and forbids other mono faces; the diagram type ramp is the governing spec, not a per-project font choice"
+      },
+      {
+        "rule": "overused-font",
+        "value": "instrument serif",
+        "createdAt": "2026-10-08T09:24:56.139Z",
+        "reason": "Agent: diagram-design skill style-guide.md mandates Instrument Serif for the page title and italic callouts, with the serif/sans/mono contrast called load-bearing"
+      }
+    ]
+  }
+}

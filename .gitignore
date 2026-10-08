@@ -25,3 +25,8 @@ replay_pid*
 
 # Claude Code worktrees
 .claude/worktrees/
+
+# Impeccable 设计钩子：config.json 是团队共享的抑制规则（入库），
+# local 配置与运行时缓存是个人的（不入库）
+.impeccable/config.local.json
+.impeccable/hook.cache.json
