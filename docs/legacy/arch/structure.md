@@ -1,6 +1,6 @@
 # 原产品结构视图（Structure View）
 
-版本: 1.5    更新时间: 2026-10-08
+版本: 1.6    更新时间: 2026-10-09
 
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：**事实层 · 架构视图——静态结构**。回答系统边界与外部依赖（§1）、运行期组件清单与依赖契约（§2–§3）、数据所有权与一致性总表（§4）、工程与构建（§5）。总览入口 [../arch.md](../arch.md)，视图地图与约束编号亦见该文。
@@ -50,7 +50,7 @@
 | MySQL / SQLite | 服务端 → DB | **仅管理面** | 唯一外部存储；`artemis.management.enabled=false` 时整体跳过，服务端零外部依赖（[架构约束 C8](../arch.md)） |
 | 配置源（scf `ConfigurationManager`） | 宿主 → SDK / 服务端 | 必需 | **由宿主注入**，产品自带默认三件套为静态源（[product-overview](../product-overview.md) §3.6、config-reference §0） |
 | 宿主 RPC 框架 | 宿主 → SDK | 必需 | 消费路由视图并执行选址 |
-| 网络 | — | 必需 | 客户端引导地址 + 存活节点列表；无 DNS / 无 LB 依赖（生产是否前置 LB 不可从代码证实） |
+| 网络 | — | 必需 | 客户端引导地址 + 存活节点列表；无 DNS / 无 LB 依赖（生产是否前置 LB：部署历史事实，已结项不再追溯，[deployment](deployment.md) §6） |
 
 ### 1.3 明确不做的部分
 
@@ -382,6 +382,7 @@ artemis-common ◄── artemis-service ◄──────────┐
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.6 | 2026-10-09 | §1.2 LB 前置一行随 deployment §6 结项同步 |
 | 1.5 | 2026-10-08 | §2 补组件全景图（核心组件与关系，[diagrams/structure-components](diagrams/structure-components.html)），含 management-service 统称说明 |
 | 1.4 | 2026-10-08 | §4.1 补数据所有权图（事实源与投影、双轨可视化，[diagrams/structure-data-ownership](diagrams/structure-data-ownership.html)） |
 | 1.3 | 2026-10-08 | 勘误修正：DAO 类数 24→21、模块文件数按实测、features §1→§4、基线 §6.19 误引删除、§4.3 补回第五重收敛路径 |

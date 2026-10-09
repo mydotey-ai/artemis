@@ -33,3 +33,6 @@ replay_pid*
 
 # Playwright MCP 的输出目录（快照 / 截图），验证产物不入库
 .playwright-mcp/
+
+# 临时开发计划与调研工作笔记（doc 规则：plans/ 不入库）
+docs/plans/

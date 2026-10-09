@@ -1,6 +1,6 @@
 # 运维管控与审计 · 功能规格
 
-版本: 1.0    更新时间: 2026-10-08
+版本: 1.1    更新时间: 2026-10-09
 
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：以需求语言规格化原产品「实例 / 服务器 / zone / 组四级摘除、审计、状态 API、节点运维开关」行为，作为新产品需求设计输入。NodeManager 状态机与 force 开关的机制细节见 [replication-cluster-spec.md](replication-cluster-spec.md) FR-RC-11；本域只管其**运维操作语义**。
@@ -155,11 +155,12 @@
 
 - 端点：`/api/management/` 10 个 + `/api/management/log/` 9 个 + `/api/management/zone/` 5 个 + `/api/status/` 7 个全覆盖 ✓（group 32 个属 traffic-governance，canary 1 个属 traffic-governance）
 - 判定链：四级级联各级键 / 匹配 / 影响范围全覆盖（FR-OA-02）✓
-- ⚠ 待验证清单遗留：`destroyServers` 的历史调用方（tag 对比）；10 万实例下管理查询可用性（无分页为既定事实）
+- 历史类遗留已结项（2026-10-09，作者确认生产实绩，[product-overview](../product-overview.md) §7.C）：`destroyServers` 的历史调用方不再追溯；10 万实例下管理查询可用性为生产实际运行事实（无分页为既定代码事实）
 - 未入本域：group 族 CRUD（traffic-governance）、NodeManager 机制（replication-cluster）
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-09 | §6 历史类遗留结项（destroyServers 考古不再追溯、管理查询可用性为生产事实，product-overview §7.C） |
 | 1.0 | 2026-10-08 | 初版 |

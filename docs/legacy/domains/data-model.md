@@ -1,10 +1,10 @@
 # 数据字典（字段级）
 
-版本: 1.0    更新时间: 2026-10-08
+版本: 1.3    更新时间: 2026-10-09
 
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：**契约层**制品——全部实体的字段级字典（类型 / JSON 键名 / 可空 / 默认 / 约束）+ 枚举字典 + 身份语义 + clone 深度，供 1:1 对标复刻编码。行为语义见各域 spec/logic；DB 持久化见 [db-schema.md](db-schema.md)；接口契约见 [api-contract.md](api-contract.md)（REST）与 [client-sdk-api.md](client-sdk-api.md)（SDK / WS / 复制）。
-> 证据路径均相对原仓库根。标「待验证」为外部依赖（`org.mydotey.codec` / `org.mydotey.lang` 系列源码不在本仓库）无法取证者。
+> 证据路径均相对原仓库根。原「待验证」外部依赖项（`org.mydotey.codec` / `org.mydotey.lang`）已于 2026-10-09 从 **Maven Central sources jar** 取证完毕（`jackson-codec-util:1.1.0`、`lang-extension:1.2.0`；见[基线](../legacy-product-analysis.md) §8-14），结论随文标注。
 
 ## 1. 序列化与命名规则
 
@@ -13,7 +13,7 @@
 | 路径 | 使用者 | 配置 | 键名规则 |
 |---|---|---|---|
 | **A. REST** | 全部 `/api/*.json` | `CustomObjectMapper` + `JsonSerializationHack` | Jackson 默认 bean 命名：键 = getter 去 `get`/`is` 前缀后首字母小写（驼峰保持）→ `_regionId` → `regionId`；`isComplete` → `complete`。**出站键按字母序**；入站**大小写不敏感**；未知属性忽略；`null` 原始类型按 0/false；**null 不省略** |
-| **B. WS + 客户端** | WS 心跳/推送、client SDK | 外部 `JacksonJsonCodec.DEFAULT`（`codec-util 1.1.0`） | 同为默认 bean 命名（camelCase，与 A 兼容）；**字段顺序与 null 处理待验证** |
+| **B. WS + 客户端** | WS 心跳/推送、client SDK | 外部 `JacksonJsonCodec.DEFAULT`（`org.mydotey.codec:jackson-codec-util:1.1.0`，**配置已取证**：Central sources jar） | 同为默认 bean 命名（camelCase，与 A 兼容）；容错与大小写不敏感同 A；**键序 = 声明序（非字母序）**、**null 不省略**（未设排序与 inclusion）——与 A 的唯一实质差异是键序 |
 
 **全仓库无任何 Jackson 注解**（`@JsonProperty` / `@JsonIgnore` / `@JsonInclude` / `@JsonNaming` 等 grep 为空）——键名完全由 getter 派生。
 
@@ -257,7 +257,7 @@
 ### 7.10 `groupKey` 格式
 
 `ServiceGroupKeys.of(serviceId, regionId, zoneId, groupId, instanceId)` → `FileExtension.concatPathParts(...)` 后 `toLowerCase()`，分隔符 `/`：**`serviceId/regionId/zoneId/groupId/instanceId`（小写）**；`groupId` blank 或 `default` 归一为 `"default"`。`ServiceGroupKey.toString()` = groupKey 小写；equals/hashCode 基于之。
-> 待验证：`FileExtension.concatPathParts`（外部 `mydotey-java` 库）的边界归一化行为。
+> **已取证**（2026-10-09，Maven Central `lang-extension-1.2.0-sources.jar`）：`concatPathParts` 边界归一化——null 数组返回 null；blank 段跳过，非空段先 `trim()`；拼接时已累积 url 尾部 `/` 不重复补、后续段移除**全部前导空白与前导 `/`**（`trimStart(item, '/')`）；**段尾 `/` 保留**、结果无前导 `/`；全部段 blank 时返回 null（非空串）。对 groupKey 的含义：`serviceId/regionId/zoneId/groupId/instanceId` 拼接后为小写、单 `/` 分隔、无前后缀斜杠（各段来自枚举/入参，正常输入不含斜杠）。
 
 ### 7.11 管理操作 `operation` 字段
 
@@ -294,9 +294,9 @@
 - `ResponseStatus.Status.UKNOWN`——零引用且拼写错误。
 - 模型与表不对齐字段（`GroupModel.type`/`deleted` 缺失、`GroupLogModel` 缺 3 列、`RouteRuleGroupLogModel.unreleasedWeight` 无表列、`ServiceInstanceModel.description` 在 log 表无列）——DAO 显式列名兜底，详见 [db-schema.md](db-schema.md) §6。
 
-### 8.4 待验证（外部依赖）
+### 8.4 待验证
 
-`JacksonJsonCodec.DEFAULT` 的 feature / 命名策略 / null 处理 / 键序；`FileExtension.concatPathParts` 边界归一化；`ServiceNodeUtil.isUp/isDown` 比较实现。
+无。外部依赖两项已于 2026-10-09 从 Maven Central sources jar 取证（结论在 §1、§7.10）；`ServiceNodeUtil.isUp/isDown` 同日从原仓库取证：`ServiceNodeStatus.Status.UP/DOWN.equals(status)`——**严格区分大小写的 String.equals**（常量为小写 `"up"/"down"/"unknown"`，`artemis-service/.../cluster/ServiceNodeStatus.java:13-15`、`util/ServiceNodeUtil.java:15-35`；入参 null 安全返回 false）。节点状态判定大小写敏感，与 serviceId 大小写敏感（discovery FR-DIS-13）同属全链路大小写敏感特征。
 
 ## 9. 对既有文档的勘误
 
@@ -316,10 +316,13 @@
 - management 模型：10 业务 + 10 日志 ✓
 - 枚举字典：11 组枚举/常量集中定义 + 大小写敏感性速查 ✓
 - 身份语义 / clone 深度 / 死字段汇总 ✓
-- 待验证项显式标注（外部依赖）✓
+- 外部依赖项已从 Maven Central sources jar 取证 ✓（§1、§7.10；§8.4 无待验证）
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.3 | 2026-10-09 | §1 B 行 artifactId 精确化（jackson-codec-util）；§10 自检行与 §8.4 对齐 |
+| 1.2 | 2026-10-09 | §8.4 待验证清零：`ServiceNodeUtil.isUp/isDown` 取证为严格大小写敏感 equals |
+| 1.1 | 2026-10-09 | 外部依赖两项取证完毕（Central sources jar）：§1 codec 配置（WS 键序=声明序、null 不省略）、§7.10 concatPathParts 边界归一化；§8.4 相应收窄 |
 | 1.0 | 2026-10-08 | 初版 |

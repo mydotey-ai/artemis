@@ -1,10 +1,10 @@
 # 客户端 SDK 接口契约与报文协议
 
-版本: 1.0    更新时间: 2026-10-08
+版本: 1.1    更新时间: 2026-10-09
 
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：**契约层**制品——客户端 SDK 的接口签名与契约、WS 报文格式、节点间复制协议报文、HTTP 通用约定，供 1:1 对标复刻。行为语义见 [client-sdk-spec](client-sdk-spec.md) / [client-sdk-logic](client-sdk-logic.md)。
-> 证据路径均相对原仓库根。**标注「待验证」项**为外部依赖（`org.mydotey.codec` / `org.mydotey.rpc` / `org.mydotey.java` 系列源码不在本仓库）无法取证者，须实机抓包确认，不得以推测填充。
+> 证据路径均相对原仓库根。原「待验证」外部依赖项（`org.mydotey.codec` / `org.mydotey.rpc` / `org.mydotey.java`）已于 2026-10-09 从 **Maven Central sources jar** 取证完毕（`jackson-codec-util:1.1.0`、`http-rpc-util:1.2.3`、`lang-extension:1.2.0`；坐标与版本覆盖见[基线](../legacy-product-analysis.md) §8-14），结论随文标注。
 
 ## 1. 序列化总纲（决定全部 JSON 形态）
 
@@ -12,7 +12,7 @@
 
 | 通道 | 编码器 | 证据 |
 |---|---|---|
-| 客户端发出的全部 WS 帧与 outbound JSON | `JacksonJsonCodec.DEFAULT`（外部依赖 `org.mydotey.codec:jackson-codec-util`，**源码不在本仓库**） | `artemis-client/.../registry/InstanceRepository.java:87`、`.../discovery/ServiceDiscovery.java:179-181`、`.../discovery/ArtemisDiscoveryHttpClient.java:41` |
+| 客户端发出的全部 WS 帧与 outbound JSON | `JacksonJsonCodec.DEFAULT`（外部依赖 `org.mydotey.codec:jackson-codec-util` 1.1.0，**配置已取证**见下注） | `artemis-client/.../registry/InstanceRepository.java:87`、`.../discovery/ServiceDiscovery.java:179-181`、`.../discovery/ArtemisDiscoveryHttpClient.java:41` |
 | 服务端 WS 帧（心跳响应 / InstanceChange 推送） | 同上 `JacksonJsonCodec.DEFAULT`（统一经 `StringUtil#toJson`） | `artemis-server/.../websocket/HeartbeatWsHandler.java:35,43-44`、`ServiceChangeWsHandler.java:43,73`、`AllServicesChangeWsHandler.java:46` |
 | 服务端 HTTP REST（registry / discovery / replication / status / 管理面） | `CustomObjectMapper`（经 `JsonSerializationHack` 注入 `MappingJackson2HttpMessageConverter`） | `artemis-server/.../rest/JsonSerializationHack.java:25-32` |
 
@@ -21,7 +21,7 @@
 
 **JSON 键名 = Java bean property 名**（Jackson 默认命名，全仓库无 `@JsonProperty` / 自定义命名策略 / `@JsonIgnore`——grep 仅命中 `CustomObjectMapper` / `JsonSerializationHack` 两处）。
 
-> **待验证**：`JacksonJsonCodec.DEFAULT`（WS 通道）的 feature、命名策略、null 包含策略、键序**无法在本仓库取证**（外部依赖）。下文的 WS 报文键名按 bean property 推导；**null 是否省略、键序**须以实机抓包为准。HTTP 通道则可确定：键名字母序 + 大小写不敏感解析。
+> **已取证**（2026-10-09，Maven Central `jackson-codec-util-1.1.0-sources.jar`）：`JacksonJsonCodec.DEFAULT` = `new ObjectMapper()` 配置：`AUTO_CLOSE_TARGET=false`、`IGNORE_UNKNOWN=true`、`ALLOW_UNQUOTED_CONTROL_CHARS=true`、`AUTO_CLOSE_SOURCE=false`、`IGNORE_UNDEFINED=true`、`FAIL_ON_EMPTY_BEANS=false`、`FAIL_ON_UNKNOWN_PROPERTIES=false`、`FAIL_ON_IGNORED_PROPERTIES=false`、`FAIL_ON_NULL_FOR_PRIMITIVES=false`、`READ_UNKNOWN_ENUM_VALUES_AS_NULL=true`、`ACCEPT_CASE_INSENSITIVE_PROPERTIES=true`。**未设置**：命名策略（默认 bean 驼峰）、`SORT_PROPERTIES_ALPHABETICALLY`（**WS 键序 = 声明序，非字母序**）、序列化 inclusion（**null 不省略**）。与 `CustomObjectMapper` 逐项对比：容错与大小写不敏感一致，**唯一实质差异 = 键序**（REST 字母序 / WS 声明序）。受检异常包装为 `CodecException`。
 
 文本帧编码：客户端与服务端均 `new String(bytes)` / `String.getBytes()`（**无显式 charset，平台默认**，Linux=UTF-8）——证据 `InstanceRepository.java:87`、`InstanceRegistry.java:105-107`、`HeartbeatWsHandler.java:43`。
 
@@ -90,7 +90,7 @@ void    registerServiceChangeListener(DiscoveryConfig discoveryConfig, ServiceCh
 | 方法与契约 | 内容 |
 |---|---|
 | `getService` | 校验（config 为 null → `NullPointerException`；serviceId 空白 → `IllegalArgumentException`）→ `ServiceRepository.getService`。**副作用**：serviceId 首次出现即注册服务（同步 lookup + 打开 WS 订阅）。⚠ **可能抛未受检 `RuntimeException`**：查找失败 `"not found any service by discoveryConfig:..."`、lookup 非 success `"lookup services failed..."`——**与「永不抛不存在异常」的行为规格（discovery FR-DIS-02）张力见 §6.6** |
-| `registerServiceChangeListener` | 校验同上；listener 为 null 抛（`ObjectExtension.requireNonNull`，精确类型**待验证**）；服务未注册则先注册；listener 加入 `Set`（**幂等**，同一实例不重复）；回调经**单线程 executor 串行异步**执行，listener 抛错被吞并 log |
+| `registerServiceChangeListener` | 校验同上；listener 为 null 抛 `IllegalArgumentException`（消息 `"listener is null"`；`ObjectExtension.requireNonNull`，**已取证** lang-extension 1.2.0 sources）；服务未注册则先注册；listener 加入 `Set`（**幂等**，同一实例不重复）；回调经**单线程 executor 串行异步**执行，listener 抛错被吞并 log |
 
 证据：`discovery/DiscoveryClient.java:11-13`、`discovery/DiscoveryClientImpl.java:32-44`、`discovery/ServiceRepository.java:37,139-148`。
 
@@ -250,7 +250,7 @@ Service changedService();                     // 新服务的浅拷贝快照
 
 - **Content-Type**：请求/响应 `application/json`（REST 端点显式声明；复制客户端由 `HttpRequestFactory` 携带 codec 设置）。
 - **字符编码**：UTF-8（`FilterConfig` 的 CrossDomainFilter / ziplet `CompressingFilter` / HiddenHttpMethodFilter 均 `encoding=UTF-8, forceEncoding=true`）；WS 帧为平台默认。
-- **gzip**：客户端全部 outbound 请求体压缩；服务端响应由 ziplet `CompressingFilter` 压缩（`/*` 全覆盖，REST 与 WS 握手都过）。**响应解压依赖外部库（待验证）**。
+- **gzip**：客户端全部 outbound 请求体压缩——`HttpRequestFactory.gzipRequest()` **显式**包装 `GzipCompressingEntity` + `Content-Encoding: gzip` 头（幂等，已包装则跳过）；服务端响应由 ziplet `CompressingFilter` 压缩（`/*` 全覆盖，REST 与 WS 握手都过）。**响应解压无显式代码**（已取证 http-rpc-util 1.2.3 sources）：`HttpRequestExecutors.execute` 直接 `entity.getContent()` 交 codec，解压依赖 Apache HttpClient 4 **内建内容压缩协商**（未禁用时请求自动带 `Accept-Encoding: gzip,deflate`、响应自动解压）。charset：`Content-Type` 头不带 charset 参数（值 = codec mime，如 `application/json`），请求字节由 codec 产生（Jackson → UTF-8）、响应靠 Jackson 编码自检（UTF-8）。异常映射：`SocketTimeoutException`→`HttpTimeoutException`、其它 `IOException`→`HttpConnectException`、状态码 ≥300 或无 statusLine→`ApacheHttpRequestException`、实体流读失败→`CodecException`。
 - **时间格式**：仅 `leases.json` 的租约时间有格式 `yyyy-MM-dd HH:mm:ss.SSS`（`SimpleDateFormat` 局部变量，非线程安全但无共享）；其余协议无日期格式字段（`changeTime` 为 epoch millis）。
 - **端口/上下文**：`application.properties` 无 `server.port` / `context-path` → Spring Boot 默认 **8080** + `/`。
 - ⚠ **错误响应统一结构 = `ResponseStatus`**（`{status, errorCode, message}`），业务错误一律 **HTTP 200 + body 内 responseStatus**；**无全局 `@RestControllerAdvice` / `ExceptionHandler`** → 畸形 JSON body 由 Spring 默认处理，返回框架默认 400 结构，**不是** `ResponseStatus`（复刻时需决定是否补齐）。
@@ -267,7 +267,7 @@ Service changedService();                     // 新服务的浅拷贝快照
 | 2 | `ArtemisClientManager` 双检锁字段**未加 `volatile`**——DCL 可见性隐患 | `ArtemisClientManager.java:21-22,34-56` |
 | 3 | `RegistryClientImpl#unregister` **重复调用校验**两次 | `RegistryClientImpl.java:39-40` |
 | 4 | `UnregisterResponse` 字段名拼写错误 `_failedFailedInstances`（getter 正确，序列化键无误） | `UnregisterResponse.java:13` |
-| 5 | **两套 mapper**：HTTP REST 键按字母序输出 + 大小写不敏感解析；WS 通道用外部 `JacksonJsonCodec`（策略未验证）——复刻时两通道键序/null 行为可能不一致 | §1 |
+| 5 | **两套 mapper 键序不一致（已取证为确定事实）**：HTTP REST 键按字母序（`SORT_PROPERTIES_ALPHABETICALLY=true`）；WS 通道 `JacksonJsonCodec.DEFAULT` 未设排序（**键序 = 声明序**）。null 行为两通道一致（均不省略）。复刻时若追求字节级一致需分别配置 | §1 |
 | 6 | `DiscoveryClient.getService` **可能抛未受检 `RuntimeException`**，与行为规格「永不返回 null / 永不抛『不存在』」的表述存在张力（规格描述的是缓存语义；首次同步 lookup 失败路径确实抛错）——[discovery-spec](discovery-spec.md) FR-DIS-02 已按缓存语义表述，此处补 SDK 边界 | `ArtemisDiscoveryHttpClient.java:34,47` |
 | 7 | 畸形 JSON 请求无统一错误结构（无全局异常处理） | §5 |
 | 8 | 无 `close()` / `shutdown()`——SDK 不可优雅停止（与 client-sdk FR-CS-02 一致，此处给出实现层证据：内部 `shutdown` 存在但未暴露） | `WebSocketSessionContext.java:242-244` |
@@ -281,10 +281,11 @@ Service changedService();                     // 新服务的浅拷贝快照
 - 复制协议：四端点请求响应体 + 客户端构造方式 + 超时 + gzip ✓
 - HTTP 通用约定：Content-Type / 编码 / gzip / 时间格式 / 端口 / 错误结构 / 重试 / up-nodes ✓
 - 序列化总纲（两套 mapper）✓
-- 待验证项（外部依赖）显式标注 ✓：`JacksonJsonCodec.DEFAULT` 策略、`ObjectExtension.requireNonNull` 异常类型、`HttpRequestExecutors` 响应解压细节
+- 外部依赖项已从 Maven Central sources jar 取证 ✓：`JacksonJsonCodec.DEFAULT` 策略（§1）、`ObjectExtension.requireNonNull` 异常类型（§2.5）、`HttpRequestExecutors` 响应解压细节（§5）
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-09 | 外部依赖三处待验证取证完毕（Central sources jar）：§1 codec 全配置（WS 键序=声明序、null 不省略）、§2.5 requireNonNull=IllegalArgumentException、§5 gzip/charset/异常映射；§6-5 改确定结论 |
 | 1.0 | 2026-10-08 | 初版 |

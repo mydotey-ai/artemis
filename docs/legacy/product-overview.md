@@ -1,6 +1,6 @@
 # Artemis 原产品总览（Product Overview）
 
-版本: 1.3    更新时间: 2026-10-08
+版本: 1.8    更新时间: 2026-10-09
 
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：**产品级**综合梳理——从整个产品角度看全部业务域、横切主题与端到端场景，是规格层文档集（[domains/](domains/)）的入口与汇总；并汇总规格层补证（2026-10-08）对基线的勘误与新发现缺陷。判断层结论（资产 / 局限）见基线 §5/§6，本文不重复。
@@ -8,7 +8,7 @@
 
 ## 1. 产品定位
 
-AP 型微服务注册中心：对等节点全对全异步复制 + 租约心跳（「心跳即注册」）+ Eureka 式自我保护 + 静态集群成员；**数据面**（注册表，纯内存）与**管理面**（DB 持久化流量治理元数据）双轨分离。差异化价值在流量治理（分组 / 加权路由 / 两段式灰度 / canary / 逻辑实例）。支撑过 10 万+ 服务实例（口头历史）。产品**只生产路由视图、不执行路由**——选址由宿主 RPC 完成。
+AP 型微服务注册中心：对等节点全对全异步复制 + 租约心跳（「心跳即注册」）+ Eureka 式自我保护 + 静态集群成员；**数据面**（注册表，纯内存）与**管理面**（DB 持久化流量治理元数据）双轨分离。差异化价值在流量治理（分组 / 加权路由 / 两段式灰度 / canary / 逻辑实例）。支撑过 10 万+ 服务实例（前公司生产实绩，作者确认）。产品**只生产路由视图、不执行路由**——选址由宿主 RPC 完成。
 
 ## 2. 业务域地图
 
@@ -185,7 +185,7 @@ registry 100k / replication 1M / cluster（up-nodes）10k / status 30 / manageme
 | `SQLITE_SETUP.md` 宣称「首次启动自动建表」——生产代码**零建表逻辑**（仅测试建表） | db-schema §8 |
 | `COMPLETE` 列 **DDL 注释与代码语义相反**（注释 true=未完成，代码 true=已完成） | db-schema §5 |
 | DDL↔DAO **10 处不一致**（service_group_log 五列从不落库、zone 日志 reason 不落库、route_rule_group_log.WEIGHT 实为 unreleasedWeight、service_group.type 恒默认、索引顺序反了…） | db-schema §6 |
-| `management/GetServiceRequest` 构造器 **regionId/zoneId 写反** | api-contract §2.A.10 |
+| `management/GetServiceRequest` 构造器 **regionId/zoneId 写反**（已取证：零调用死代码、无 GET 绑定路径，零运行时影响） | api-contract §2.A.10 |
 | leases 端点 **GET 参数名 `appIds` vs body 字段名 `serviceIds` 不一致**；`LeaseStatus.evitionTime` 拼写错误 | api-contract §1.D |
 | `GroupInstance` 用 public 字段；`DeleteGroupsInstancesRequest` 类名单复数错位；`service-instance` insert 返回异类 `OperationResponse` | api-contract §2.B |
 | 无全局异常处理——畸形 JSON 请求返回框架默认 400，**不是** `ResponseStatus` 结构 | client-sdk-api §5 |
@@ -212,36 +212,33 @@ registry 100k / replication 1M / cluster（up-nodes）10k / status 30 / manageme
 | 100+ 个键代码读取但发布配置未提供（全靠代码默认） | config-reference §7.2 |
 | 限流器实际 5 个（`features` 旧表列 4 个，遗漏 `artemis.service.management.group`） | config-reference §2.6 |
 
-## 7. 待验证清单（复刻的能力空洞）
+## 7. 待验证清单（本清单已全部结项）
 
-1:1 复刻时以下条目**尚无代码级结论**，须按类处理：
+原「复刻能力空洞」清单（A 外部依赖 / B 原仓库内 / C 历史与生产实绩三类）已于 2026-10-09 全部结项：A、B 两类取证完毕，C 类经作者确认为生产实绩/历史事实、不再验证。行级结论的属主为各出处文档（此处只记要点与指针）：
 
-**A. 外部依赖不可取证**（`org.mydotey.{codec,rpc,java,lang}` 系列源码不在原仓库、`~/.m2` 亦无）——须引入依赖源码或**实机抓包/实验**确认：
+**A. 外部依赖**——从 Maven Central sources jar 取证完毕（`jackson-codec-util:1.1.0`、`lang-extension:1.2.0`、`http-rpc-util:1.2.3`〔rpc-util-bom 1.3.1 所管〕；坐标与版本覆盖见基线 §8-14）：
 
-| 事项 | 影响 | 出处 |
+| 原事项 | 结论要点 | 行级出处 |
 |---|---|---|
-| `JacksonJsonCodec.DEFAULT` 的 feature / 命名策略 / null 包含策略 / 键序 | **WS 通道报文的确切字节**（与 HTTP REST 的字母序可能不同） | data-model §8.4、client-sdk-api §1 |
-| `FileExtension.concatPathParts` 的边界归一化 | groupKey 前缀匹配的精确行为 | data-model §7.10 |
-| `HttpRequestFactory` / `HttpRequestExecutors` 的响应 gzip 解压与 charset 处理 | HTTP 全链路压缩的兼容性 | client-sdk-api §5 |
-| `ObjectExtension.requireNonNull` 的精确异常类型 | SDK 异常契约 | client-sdk-api §2.5 |
+| `JacksonJsonCodec.DEFAULT` 配置 | WS 键序 = 声明序（与 REST 字母序不同）；null 不省略；大小写不敏感解析 | client-sdk-api §1、data-model §1 |
+| `FileExtension.concatPathParts` 边界归一化 | blank 跳过、段先 trim、尾 `/` 不重复；后续段去前导 `/`（首段原样）；全 blank → null | data-model §7.10 |
+| `HttpRequestFactory` / `HttpRequestExecutors` 的 gzip 与 charset | 请求 gzip 显式包装；响应解压靠 HttpClient 4 内建协商；异常映射四条 | client-sdk-api §5 |
+| `ObjectExtension.requireNonNull` 精确异常类型 | `IllegalArgumentException`（非 NPE） | client-sdk-api §2.5 |
 
-**B. 原仓库内可进一步取证**（本轮未展开，属可解项）：
+**B. 原仓库内可进一步取证**：无——最后一项（`GetServiceRequest` 构造器写反）已取证为死代码零影响（api-contract §2.A.10）。
 
-| 事项 | 出处 |
-|---|---|
-| `ServiceNodeUtil.isUp/isDown` 的比较实现（字符串 equals 还是 equalsIgnoreCase） | data-model §8.4 |
-| `management/GetServiceRequest` 构造器 regionId/zoneId 写反对 **GET 绑定**的实际影响 | api-contract §2.A.10 |
+> 注：结项范围限本清单。个别视图文档仍有自己的实验类待验证项（如 [arch/deployment](arch/deployment.md) §6 的 WAR 形态 WS 行为、`cluster.nodes` 动态源热更），不在本清单范围。
 
-**C. 历史与实测类**：
+**C. 历史与生产实绩类（结项，不再验证）**——以下事项属前公司生产环境的历史事实，作者已于 2026-10-09 确认生产数据真实性，仅作记录、不再列为待验证：
 
-| 事项 | 说明 | 出处 |
+| 事项 | 定性 | 出处 |
 |---|---|---|
-| 10 万+ 实例实绩 | 口头历史，仓库内无压测报告/数据 | nfr-spec NFR-1 |
-| 10 万实例下管理查询可用性 | 无分页为既定事实；实际退化程度需实测 | operations-audit §6 |
-| `destroyServers` 的历史调用方 | 需对比 1.5.x tag | operations-audit FR-OA-09 |
-| shipped `thread-pool-size` 是否曾为有效键 | 需对比 1.5.x tag（2.0.2 判定为死键） | nfr-spec NFR-41 |
-| 生产是否在引导地址前置 LB | 不可从代码证实 | [arch/deployment](arch/deployment.md) §6 |
-| HTTP 心跳端点的旧代客户端用途 | 已判为死端点；为旧客户端保留的推断未证实 | registry-lease logic §7.7 |
+| 10 万+ 实例实绩 | **生产实绩（作者确认）**；仓库内无压测报告/数据留档 | nfr-spec NFR-1 |
+| 10 万实例下管理查询可用性 | 生产实际运行（未成为阻断问题）；无分页为既定代码事实 | operations-audit §6 |
+| `destroyServers` 的历史调用方 | 历史代码考古，不再追溯 | operations-audit FR-OA-09 |
+| shipped `thread-pool-size` 是否曾为有效键 | 历史代码考古，不再追溯（2.0.2 判定为死键） | nfr-spec NFR-41 |
+| 生产是否在引导地址前置 LB | 部署历史事实，不再追溯 | [arch/deployment](arch/deployment.md) §6 |
+| HTTP 心跳端点的旧代客户端用途 | 已判为死端点；历史用途不再追溯 | registry-lease logic §7.7 |
 
 ## 8. 旧文档处置
 
@@ -254,6 +251,11 @@ registry 100k / replication 1M / cluster（up-nodes）10k / status 30 / manageme
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.8 | 2026-10-09 | §7 精确化：A/B 结论列压缩为要点指针、结项范围注明视图文档遗留实验项；concatPathParts 表述修正 |
+| 1.7 | 2026-10-09 | §7.B 清零（GetServiceRequest 取证：死代码零影响）；§7.C 结项——10 万+ 实例等定性为作者确认的生产实绩，不再验证；§1/§6.1 同步 |
+| 1.6 | 2026-10-09 | §7.B 移除 `ServiceNodeUtil.isUp/isDown`（已取证：严格大小写敏感 equals，data-model §8.4）——契约层待验证清零 |
+| 1.5 | 2026-10-09 | §7.A 四项外部依赖待验证全部取证完毕（Central sources jar），结论登记并同步 data-model / client-sdk-api |
+| 1.4 | 2026-10-09 | §7.A 补取证路径：org.mydotey.* 已发布 Maven Central（基线 §8-14），可拉 sources jar |
 | 1.3 | 2026-10-08 | §5 新增勘误 #25–27（文件数 / 心跳率口径 / no-permission）；§7 LB 指针改指 arch/deployment |
 | 1.2 | 2026-10-08 | 架构视图补证：§5 新增勘误 #21–24，§6 新增缺陷 4 条（批量复制缓冲保护失效 / 探测无超时 / Zone 不入门控 / 摘除只看行存在） |
 | 1.1 | 2026-10-08 | §8 旧文档处置同步架构视图拆分（arch.md 为总览入口，详细视图入 arch/ 目录） |

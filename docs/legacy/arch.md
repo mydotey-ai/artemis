@@ -1,6 +1,6 @@
 # Artemis 原产品架构总览（Legacy Architecture Overview）
 
-版本: 2.6    更新时间: 2026-10-08
+版本: 2.7    更新时间: 2026-10-09
 
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：**事实层 · 架构视图入口**。本文给出架构风格判定、部署全景、**视图地图**（各视图的归属）、**机制索引**（按机制查域文档编号）与**关键架构约束清单**；各视图的详细描述见 [arch/](arch/README.md)，判断层结论（可继承资产 / 局限）见[基线](legacy-product-analysis.md) §5/§6。
@@ -53,7 +53,7 @@
 | 生命周期 / 状态 | 启动序列与 readiness 门控、运行期状态机、关闭与重启、故障降级 | [runtime](arch/runtime.md) §3–§5 | 已建 | 关停路径**缺失**（无优雅停机） |
 | 接口 / 协议 | 三通道的架构分工、协议选型评价、版本与兼容 | [runtime](arch/runtime.md) §6 | 已建 | 报文见 [api-contract](domains/api-contract.md)、[client-sdk-api](domains/client-sdk-api.md) |
 | 场景 / 时序 | 核心机制**怎么动**：注册心跳、发现推送、复制扇出、失联剔除的端到端时序（4 张 sequence 图） | [runtime](arch/runtime.md) §7 | 已建 | |
-| 部署 / 拓扑 | 部署单元与打包形态、region/zone 拓扑、集群成员、配置体系架构 | [deployment](arch/deployment.md) | 已建 | 生产是否前置 LB 未证实 |
+| 部署 / 拓扑 | 部署单元与打包形态、region/zone 拓扑、集群成员、配置体系架构 | [deployment](arch/deployment.md) | 已建 | 生产是否前置 LB 已结项不再追溯（[product-overview](product-overview.md) §7.C） |
 | 横切关注点 | 错误处理与错误码、配置、安全、可观测性、限流 | [quality](arch/quality.md) §1–§4；配置见 [deployment](arch/deployment.md) §4 | 已建 | |
 | 质量属性 / 容量 | 性能、可用性、可扩展性的**定量模型**（内存 / 带宽 / 写放大 / 上限估算） | [quality](arch/quality.md) §5 | 已建 | 模型为**推导**，未实测校准 |
 | 决策与权衡 | 决策 → 背景 → 备选 → 理由 → 代价；敏感点与风险 | [decisions](arch/decisions.md) | 已建 | 11 条决策；备选与代价属推断 |
@@ -105,6 +105,7 @@
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 2.7 | 2026-10-09 | §3 视图地图 LB 未闭合项随 product-overview §7.C 结项同步 |
 | 2.6 | 2026-10-08 | §3 组件视图备注补组件全景图（[structure-components](arch/diagrams/structure-components.svg)，第 10 张图） |
 | 2.5 | 2026-10-08 | §2 改题「整体架构与部署全景」（图补双轨分离 / 客户端能力 / region-zone 语义三个论点）；新增 5 张图——4 张场景时序入 [runtime](arch/runtime.md) §7、数据所有权入 [structure](arch/structure.md) §4.1；§4 机制索引新增「配图」列、§3 数据视图备注配图；§3 视图地图补「场景 / 时序」行 |
 | 2.4 | 2026-10-08 | 新增 §4 机制索引（按机制查域文档 L/D/F 编号），原 §4 约束清单顺延为 §5；C 编号不变 |

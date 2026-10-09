@@ -1,6 +1,6 @@
 # 实例注册与租约生命周期 · 功能规格
 
-版本: 1.0    更新时间: 2026-10-08
+版本: 1.1    更新时间: 2026-10-09
 
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：以需求语言规格化原产品在「实例注册与租约生命周期」域的行为，作为新产品的需求设计输入。规格忠实于原产品实际行为；标 **⚠ legacy** 的条目为原产品特有行为或兼容包袱，新产品须显式决策继承或替换；缺陷性行为不进规格，见同域 logic.md §7。
@@ -106,7 +106,7 @@ Instance 其余字段（ip/port/protocol/url/healthCheckUrl/metadata 等 13 字�
 - 响应统一携带 `responseStatus{status, errorCode, message}` + `failedInstances[]{instance, errorCode, errorMessage}`；全部成功 = success，存在失败 = partial_fail。
 - 服务端处理管线对 WS 心跳与 HTTP 心跳一致（同一服务入口，仅传输层不同）。
 
-**⚠ legacy**：HTTP 心跳端点在原产品客户端内**无调用方**（客户端心跳只走 WS）；为旧代客户端保留的可能性未证实（原仓库内 grep 仅死代码 `RegistryServiceClient.java:55-67` 引用）。
+**⚠ legacy**：HTTP 心跳端点在原产品客户端内**无调用方**（客户端心跳只走 WS）；历史用途已结项不再追溯（[product-overview](../product-overview.md) §7.C；原仓库内 grep 仅死代码 `RegistryServiceClient.java:55-67` 引用）。
 
 **证据**：原仓库 `artemis-server/.../rest/controller/RegistryController.java:35-40`、`artemis-service/.../registry/RegistryServiceImpl.java:45-97`；features §4.1。
 
@@ -285,4 +285,5 @@ Instance 其余字段（ip/port/protocol/url/healthCheckUrl/metadata 等 13 字�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-09 | FR-RL-05 legacy 注随 product-overview §7.C 结项同步 |
 | 1.0 | 2026-10-08 | 初版 |

@@ -1,6 +1,6 @@
 # 配置项全量字典
 
-版本: 1.0    更新时间: 2026-10-08
+版本: 1.1    更新时间: 2026-10-09
 
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：**契约层**制品——每一个被代码读取的配置键及其读取点、默认值、取值范围、所属组件、读取时机，供 1:1 对标复刻。**共 127 个键模式**（展开实例数另计）。
@@ -315,10 +315,12 @@
 
 ## 9. 待验证
 
-| 事项 | 说明 |
+原两项外部依赖待验证已于 2026-10-09 从 Maven Central sources jar 取证结项（[product-overview](../product-overview.md) §7.A）：
+
+| 事项 | 结论 |
 |---|---|
-| http-rpc-util 实际解析版本 | pom 引 `rpc-util-bom` 1.3.1，本机仅 1.2.2（构造签名一致，判断为 1.2.2）；若为 1.3.x，`default-request-config` 键名可能不同 |
-| `ObjectExtension.isNullOrEmpty` 对空白串的精确判定 | 本机 lang-extension 仅 1.1.1，无该方法；影响「空字符串是否等同未配置」的边界 |
+| http-rpc-util 实际解析版本 | **1.2.3**（`rpc-util-bom:1.3.1` 所管，Central sources 取证；此前「本机 1.2.2」为本地缓存旧版）。`default-request-config` 键名按 1.2.3 判定（仍为事实死键，§5.1） |
+| `ObjectExtension.isNullOrEmpty` 对空白串的精确判定 | `obj instanceof String → StringExtension.isBlank`——**空白串（含空串）等同「未配置」**（lang-extension 1.2.0 sources） |
 
 ## 10. 复刻完备性自检（本制品）
 
@@ -334,4 +336,5 @@
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-09 | §9 两项外部依赖取证结项（http-rpc-util=1.2.3、isNullOrEmpty 空白串判定） |
 | 1.0 | 2026-10-08 | 初版 |

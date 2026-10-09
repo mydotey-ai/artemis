@@ -1,6 +1,6 @@
 # REST API 契约（逐端点）
 
-版本: 1.0    更新时间: 2026-10-08
+版本: 1.1    更新时间: 2026-10-09
 
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：**契约层**制品——全部 77 个 REST 端点的请求/响应契约（字段级），供 1:1 对标复刻。实体字段定义见 [data-model.md](data-model.md)；SDK / WS / 复制协议见 [client-sdk-api.md](client-sdk-api.md)。
@@ -129,7 +129,7 @@ errorCode：1.E.1/1.E.2 = success / bad-request / service-unavailable / no-permi
 | 2.A.10 | `POST service.json`（**无 GET**） | — | `GetServiceRequest`: `serviceId` / `zoneId` / `regionId` | `service`(Service) / **`groups`(List&lt;ServiceGroup&gt;)** / `responseStatus` |
 
 `InstanceOperations`：`instanceKey` / `operations`(List&lt;String&gt;)。`ServerOperations`：`serverKey` / `operations`。
-⚠ `management/GetServiceRequest` 构造器**把 regionId/zoneId 写反**（`this.zoneId = regionId; this.regionId = zoneId;`，`:18-22`）——不影响 POST（走 setter），GET 绑定受影响待验证。证据：`ManagementController.java:41-132`、`ManagementServiceImpl.java:108-142`。
+⚠ `management/GetServiceRequest` 构造器**把 regionId/zoneId 写反**（`this.zoneId = regionId; this.regionId = zoneId;`，`GetServiceRequest.java:18-22`）。**已取证（2026-10-09）：零运行时影响**——该三参构造器在 main 代码中**零调用**：唯一请求绑定处 `ManagementController.java:133` 为 `@RequestBody` POST（Jackson 走无参构造 + setter，不经过该构造器），且本端点**无 GET 版本**、不存在 GET 绑定路径；`DiscoveryController.java:49` 的 `new GetServiceRequest(new DiscoveryConfig(...), ...)` 属**另一个类** `org.mydotey.artemis.discovery.GetServiceRequest`（构造签名 `(DiscoveryConfig, String, String)`），与本类无关。定性：**死代码缺陷**，复刻时直接修正或删除该构造器。
 
 ### 2.B ManagementGroupController — `/api/management/group/`（32 端点）
 
@@ -283,7 +283,7 @@ errorCode：success / bad-request / service-unavailable（checkCurrentNode）/ i
 | # | 内容 | 说明 |
 |---|---|---|
 | 1 | **GET 参数名 vs body 字段名不一致**（leases 的 `appIds` vs `serviceIds`）——基线/features 未记 | §1.D.3 |
-| 2 | `management/GetServiceRequest` 构造器 **regionId/zoneId 写反** | §2.A.10 |
+| 2 | `management/GetServiceRequest` 构造器 **regionId/zoneId 写反**（已取证：零调用、无 GET 绑定路径，**死代码缺陷零运行时影响**） | §2.A.10 |
 | 3 | `GroupInstance` 用 **public 字段**（无 getter/setter）；`DeleteGroupsInstancesRequest` 类名**单复数错位**；`service-instance` insert 返回 **`OperationResponse`**（异类） | §2.B.6/§2.B.7 |
 | 4 | `LeaseStatus.evitionTime` **拼写错误**（原文如此，复刻须保留字段语义但可选是否保留拼写） | §1.D |
 | 5 | `GetLeasesStatusResponse.isSafe` 的 getter 为 `isIsSafe` | §1.D |
@@ -303,4 +303,5 @@ errorCode：success / bad-request / service-unavailable（checkCurrentNode）/ i
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-09 | §2.A.10 取证闭环：构造器写反为零调用死代码（@RequestBody 走 setter、无 GET 端点、DiscoveryController 用的是另一同名类），零运行时影响 |
 | 1.0 | 2026-10-08 | 初版 |

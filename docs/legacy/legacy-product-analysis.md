@@ -1,6 +1,6 @@
 # Artemis 原产品能力全景（Legacy Product Analysis）
 
-版本: 1.1    更新时间: 2026-10-08
+版本: 1.3    更新时间: 2026-10-09
 
 > 调研对象：`~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）
 > 方法：四域并行源码调查（客户端 / 服务端 / 管理面 / 工程全貌），每条能力均追溯到代码；「文档宣称」与「代码事实」严格区分。
@@ -10,7 +10,7 @@
 
 ## 1. 产品概览
 
-**定位**：携程框架部门 SOA 服务注册表（Readme.md 自述，pom 开发者 6 人中 5 人 organization 为 Ctrip, Inc. 可佐证）。支撑过 10 万+ 服务实例的注册发现（规模数字来自口头历史，代码中可见为规模设计的痕迹：批量接口、批量复制、限流、lease TTL，均详见下文）。
+**定位**：携程框架部门 SOA 服务注册表（Readme.md 自述，pom 开发者 6 人中 5 人 organization 为 Ctrip, Inc. 可佐证）。支撑过 10 万+ 服务实例的注册发现（规模数字为作者确认的前公司生产实绩，仓库内无压测报告留档；代码中可见为规模设计的痕迹：批量接口、批量复制、限流、lease TTL，均详见下文）。
 
 **时间线**（26 commits，单分支 master，tag 1.5.13 / 1.5.16 / 2.0.1）：
 
@@ -235,7 +235,7 @@ HTTP 注册 API 均为批量（`instances[]` 入参 + `failedInstances[]` 部分
 
 ### 3.8 兼容性
 
-仅 Java 8 SDK；强绑定私有依赖链 org.mydotey.*（scf 配置 / rpc-util HTTP / caravan 线程限流指标 / codec / lang-extension，均不在 Maven Central，外部落地必须连号移植）；无多语言客户端；双租约池（20s/90s）是内部老客户端兼容包袱。
+仅 Java 8 SDK；绑定 org.mydotey.* 自研库栈（scf 配置 / rpc-util HTTP / caravan 线程限流指标 / codec / lang-extension）——勘误 §8-14：这些库**均已发布 Maven Central** 且版本覆盖原产品所用，可解析获取，非私有不可得；无多语言客户端；双租约池（20s/90s）是内部老客户端兼容包袱。
 
 ---
 
@@ -288,7 +288,7 @@ HTTP 注册 API 均为批量（`instances[]` 入参 + `failedInstances[]` 部分
 11. 无生命周期 API（无 close()、无 shutdown hook、无法优雅下线）；register() 语义隐晦（实际靠心跳通道生效，WS 起不来则不可发现且消费方不可见）。
 12. 每 manager 7+ 线程线性放大；discovery/registry 两套连接设施完全重复。
 13. 回调单线程无界队列（一个慢消费者拖垮全部通知）；getService 深克隆 + 重建路由。
-14. 无 Spring Boot starter / 多语言 SDK / 自动配置；私有库链不可获取。
+14. 无 Spring Boot starter / 多语言 SDK / 自动配置；org.mydotey.* 依赖栈已发布 Maven Central（勘误 §8-14），但属自研小众库，生态与文档面窄。
 15. 缓存数据无新鲜度元信息（消费方不知数据是否陈旧/降级）。
 
 **管理面产品**
@@ -342,6 +342,7 @@ HTTP 注册 API 均为批量（`instances[]` 入参 + `failedInstances[]` 部分
 | 11 | features §3.2（基线未述及） | destroyServers 按 ServerKey 批量物理删除 | 死代码（无端点无调用方），instance 侧删除条件错位 |
 | 12 | §2.5 | 管理面统一 5s 重刷 | 两级：instance/server 摘除缓存 1s、group/zone 5s |
 | 13 | §2.8、§3.7 | 配置「全热更」（改造点仅部署身份） | 缺**源层前提**：产品属性声明层全部可动态更新（scf `PropertyConfig.isStatic` 默认 false，原产品未使用该标志），但**配置源由宿主注入**——默认三件套为静态源故不生效；使用层另有构造快照键。详见 config-reference §0 |
+| 14 | §3.8、§6.14 | org.mydotey.* 私有依赖链「均不在 Maven Central，外部落地必须连号移植」 | **误判**：scf / rpc / caravan / codec / lang-extension / circular-buffer 均已发布 Maven Central 且版本覆盖原产品所用（2026-10 实测 repo1.maven.org：scf-core 1.6.3→latest 1.6.4、caravan-util 2.0.1→2.0.3、jackson-codec-util 1.1.0、lang-extension 1.2.0→1.2.1、circular-buffer 1.0.0、http-rpc-util 已发布），外部可解析获取；易用性缺口在 starter/多语言/生命周期 API，非依赖可得性 |
 
 增补（§6 局限清单之外的**新发现缺陷**，约 20 条，含大小写键语义分裂导致永不清理的发现残留、冷启动空集群死锁、UP 无回退 / DOWN 粘性、zone 摘除推送盲区、合成事件 region 不匹配、SQLite 分支破坏两段式发布、摘除过滤不作用于路由视图成员、WebSocketContainer 全局单例跨 manager 污染等）：汇总索引见 [product-overview.md](product-overview.md) §6，行级证据见各域 `domains/*-logic.md` §7。这些缺陷是重设计负输入的组成部分，与 §6 合并使用。
 
@@ -349,5 +350,7 @@ HTTP 注册 API 均为批量（`instances[]` 入参 + `failedInstances[]` 部分
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.3 | 2026-10-09 | §1 规模数字定性更新：10 万+ 实例为作者确认的前公司生产实绩（原「口头历史」） |
+| 1.2 | 2026-10-09 | §8 勘误 #14：org.mydotey.* 依赖已发布 Maven Central（修正 §3.8/§6.14「私有不可得」误判） |
 | 1.1 | 2026-10-08 | §8 勘误与增补 |
 | 1.0 | 2026-10-07 | 初版 |

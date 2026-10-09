@@ -1,6 +1,6 @@
 # 实例注册与租约生命周期 · 业务逻辑蓝本
 
-版本: 1.0    更新时间: 2026-10-08
+版本: 1.1    更新时间: 2026-10-09
 
 > 调研对象：原仓库 `~/Projects/mydotey/artemis`（version 2.0.2，git HEAD 9727bb5）。
 > 定位：原产品本域的完整业务逻辑——概念模型 / 状态机 / 决策规则 / 流程（含失败路径）/ 并发时序 / 已知缺陷，作为新产品设计时**逐单元评估与优化**的蓝本。本文保持事实性，不展开改进方案；取舍依据引用基线 §5（资产）/ §6（局限），对照表见 §8。
@@ -205,7 +205,7 @@ WS 断开 / 服务端会话 TTL(6min) 强制关闭 → 客户端健康检查（1
 4. **自我保护不覆盖显式下线**：保护期 unregister / 管理摘除照常生效——语义上是「保护被动失联，不干预主动运维」，为原产品取舍；新产品须显式重申或修改该边界。证据：`LeaseManager.java:133`。
 5. **WS 心跳解析异常回固定 success**：畸形心跳消息被静默吞掉，客户端无从感知注册未生效。证据：`HeartbeatWsHandler.java:32-53`。
 6. **事件缓冲有界丢弃**：超 1 万条丢最老，通知可能不完整——设计取舍，由发现域全量兜底（15min）收敛。证据：`RegistryRepository.java:58-60,263-275`。
-7. **HTTP 心跳端点无调用方**：客户端心跳仅走 WS；`heartbeat.json` 与 `RegistryServiceClient` 为有实现无调用的死路径（供旧代客户端的推断未证实）。证据：`ArtemisRegistryHttpClient.java:28-68`（仅 register/unregister 两方法）。
+7. **HTTP 心跳端点无调用方**：客户端心跳仅走 WS；`heartbeat.json` 与 `RegistryServiceClient` 为有实现无调用的死路径（历史用途已结项不再追溯，[product-overview](../product-overview.md) §7.C）。证据：`ArtemisRegistryHttpClient.java:28-68`（仅 register/unregister 两方法）。
 8. **allow-from-other-zone 默认值漂移**：代码 false / 发布配置 true——引用原产品行为时以发布配置为准。证据：`NodeManager.java:56-57`、`artemis.properties:33`。
 
 ## 8. 逻辑单元 × 基线资产 / 局限对照
@@ -225,4 +225,5 @@ WS 断开 / 服务端会话 TTL(6min) 强制关闭 → 客户端健康检查（1
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-09 | §7.7 历史用途随 product-overview §7.C 结项同步 |
 | 1.0 | 2026-10-08 | 初版 |
