@@ -16,4 +16,4 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 当前状态
 
-仓库处于设计起步阶段：无构建系统、无测试、无源码。首次搭建脚手架后，请更新本文件补充构建/测试命令与架构说明。
+仓库处于设计起步阶段：无构建系统、无测试、无源码。新一代产品设计初稿已完成（评审中）：架构设计见 `docs/arch/artemis-next-architecture.md`，版本路线图见 `docs/product/artemis-next-roadmap.md`。首次搭建脚手架后，请更新本文件补充构建/测试命令与架构说明。
