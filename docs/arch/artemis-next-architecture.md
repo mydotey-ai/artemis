@@ -1,6 +1,6 @@
 # 新一代 Artemis 架构设计
 
-版本: 1.2    更新时间: 2026-10-10
+版本: 1.4    更新时间: 2026-10-10
 
 > 本文是新一代 Artemis（重设计产品）的架构设计基线：总体架构、核心机制、技术栈策略与关键决策记录。产品定位与版本切分见 [产品规划与路线图](../product/artemis-next-roadmap.md)；设计输入来自 [原产品能力基线](../legacy/legacy-product-analysis.md)（§5 可继承资产 / §6 局限清单）与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -67,7 +67,7 @@
 | discovery ↔ management（规则流/状态上行） | gRPC | 内部端口 |
 | console / Admin API | HTTP | management 外部端口 |
 
-所有 proto 按服务与版本组织（`artemis.common.v1`（公共数据模型）/ `artemis.registry.v1` / `artemis.replication.v1` / `artemis.projection.v1` / `artemis.discovery.v1` / `artemis.management.v1`），作为语言中立的稳定契约（工程落地形态见[Java 技术选型](../dev/tech-stack-java.md) §2：纯契约目录 + 各消费模块各自生成）。
+所有 proto 按服务与版本组织（`artemis.common.v1`（公共数据模型）/ `artemis.registry.v1` / `artemis.replication.v1` / `artemis.projection.v1` / `artemis.discovery.v1` / `artemis.management.v1`），作为语言中立的稳定契约，居多语言 monorepo 顶层 `proto/` 目录（组织与治理见[proto 契约规范](../dev/proto-contract.md)；Java 侧生成矩阵见[Java 技术选型](../dev/tech-stack-java.md) §2：各消费模块从契约目录各自生成）。
 
 ### 2.3 部署形态
 
@@ -195,6 +195,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 | D8 | Java 25 + Spring Boot 4.1 先行，Rust 后补混合集群 | 作者主场先出活；契约冻结后 Rust 只做一次 | 直接双语言起步 |
 | D9 | 安全内建（v0.1 默认认证） | 开源产品可上生产的前提；后补代价高（Nacos 教训） | v1.0 一次性补安全 |
 | D10 | namespace 进 v0.1 数据模型 | 行业基线、多租户地基，后加迁移代价大 | 后加字段 |
+| D11 | 多语言 monorepo：契约居仓库顶层 `proto/` 纯目录（取消 `artemis-proto` Maven 模块），顶层按语言分目录（`java/` 现行，`rust/` v1.x 才创建） | 契约变更一次 commit 原子带动全部语言实现（多仓库存在漂移窗口）；各端 protoc 与编译版本自由（落地见[Java 技术选型](../dev/tech-stack-java.md) §2） | 契约独立仓库 + 各语言实现仓库（版本对齐负担）；proto 共享 artifact（protoc 版本被锁死） |
 
 ## 8. 与原产品的对照（资产继承与局限修复）
 
@@ -232,6 +233,8 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.4 | 2026-10-10 | review 修复：§7 决策表补 D11（多语言 monorepo 与顶层 proto/ 契约目录的结构决策，含否决方案） |
+| 1.3 | 2026-10-10 | proto 组织定案多语言 monorepo 落地形态：契约居多语言 monorepo 顶层 `proto/` 纯目录（`artemis-proto` Maven 模块取消），链接新增的 proto 契约规范（wire 兼容与变更流程跨语言单一来源） |
 | 1.2 | 2026-10-10 | proto 组织补 `artemis.common.v1` 公共数据模型组，并链接 Java 技术选型的工程落地形态（随 dev 文档定案同步）；修正资产引用失真：「内核零 Spring」「双轨分离」标注为组件层实践的延续（基线 §1–§2 / §2.5–§2.7），不再冒称 §5 资产条目 |
 | 1.1 | 2026-10-09 | review 修复：拓扑图边方向/依赖边修正（④ 补全）；discovery 容灾语义与 SDK 范围对齐；局限归档补 #7/#8/#13/#18 子项与滚动升级；§1 二层偏离显式标注；canary 补架构依据；账户/认证/指标/namespace 时间线对齐；生态位引用词项还原 |
 | 1.0 | 2026-10-09 | 初版：三服务架构、数据面/治理面机制、关键决策、资产/局限对照 |

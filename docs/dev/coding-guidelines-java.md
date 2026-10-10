@@ -1,6 +1,6 @@
 # Java 开发规范
 
-版本: 1.2    更新时间: 2026-10-10
+版本: 1.4    更新时间: 2026-10-10
 
 > 本文是新一代 Artemis Java 实现的开发规范：包结构、代码风格、并发与线程、错误处理、日志、测试、proto 兼容、SDK 特殊约束与配置管理。技术选型（组件与版本）见[Java 技术选型](tech-stack-java.md)；Git 分支与 commit 规范见 `.claude/rules/git.md`，不在此重复。
 
@@ -9,7 +9,7 @@
 模块划分与 proto 生成矩阵以[技术选型](tech-stack-java.md) §2 为准，此处固化执行纪律：
 
 - **跨模块只走 wire 协议，绝不在模块边界传递 proto 消息类**——同一 proto 组在多模块生成的类是不同 artifact 的同名类，二进制不共享；模块间数据交换一律序列化。
-- **client（artemis-client）不得依赖任何服务端模块**（core/server/common），仅从 `artemis-proto/` 目录引用 .proto 文件自行生成。
+- **client（artemis-client）不得依赖任何服务端模块**（core/server/common），仅从仓库顶层 `proto/` 目录引用 .proto 文件自行生成。
 - **core 模块禁 Spring**（enforcer 强制）：内核不感知 Spring 类型、不读 Spring 配置抽象；配置经普通 Java 配置类注入。
 - 服务实现类放 server 模块（实现 core 定义的接口/ proto `ImplBase`），core 只含内核逻辑与契约。
 
@@ -29,7 +29,7 @@ org.mydotey.ai.artemis.registry
 
 ## 3. 代码风格
 
-- 格式化：Spotless + Palantir java-format，提交前 `mvn spotless:apply`，CI `spotless:check` 强制。不做手工格式讨论，formatter 输出即终态。
+- 格式化：Spotless + Palantir java-format，提交前 `mvn -f java/pom.xml spotless:apply`，CI `spotless:check` 强制。不做手工格式讨论，formatter 输出即终态。
 - 命名：类名 UpperCamelCase、方法/变量 lowerCamelCase、常量 UPPER_SNAKE_CASE；布尔方法 `isXxx`/`hasXxx`；避免缩写（除 `id`、`url` 等公认项）。
 - **Lombok 使用纪律**（全项目启用，`provided` scope）：
   - 值对象/配置类：`@Value`、`@Builder`、`@RequiredArgsConstructor` 优先；
@@ -85,10 +85,9 @@ org.mydotey.ai.artemis.registry
 
 ## 8. proto 与 API 兼容规范
 
-- **field number 只增不改**；弃用字段标 `deprecated` 后删除时必须 `reserved`（编号与名字都保留）。
-- 禁 `required`、禁改已有字段类型/编号、新增字段必须 optional 且老代码容忍未知字段（protobuf 默认满足，注意别依赖「缺省值 = 未设置」做语义）。
-- 状态/错误码全走 proto enum，不引入字符串状态码（继承「字符串状态码漂移」教训）。
-- proto 变更走 review：数据面 proto（common/registry/replication/projection/discovery——**common.v1 是公共 wire 契约，同样受冻结约束**）受契约冻结策略约束（架构 §3），v0.2–v1.0 期间可改但必须向后兼容，冻结后只增不改。
+proto 的 wire 兼容规则与变更流程是**跨语言不变量**，单一来源见[proto 契约规范](proto-contract.md)，此处不复制。Java 侧补充：
+
+- proto 生成的消息类永不加 Lombok（§3）。
 - Java API（api 包/SDK 公共类）变更：新增标 `@since`；弃用先 `@Deprecated`（给替代方案）至少一个 minor 版本再删。
 
 ## 9. SDK（artemis-client / starter）特殊规范
@@ -134,6 +133,8 @@ org.mydotey.ai.artemis.registry
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.4 | 2026-10-10 | review 修复：§3 构建命令补 `-f java/pom.xml`（根目录无 pom）；§8 删除「此处不复制」之后的规则复述与 §1 已有内容的重复条 |
+| 1.3 | 2026-10-10 | §8 wire 兼容规则与变更流程上移至 proto 契约规范（跨语言单一来源），本节收窄为 Java 生成代码纪律与 Java API 兼容；§1 契约目录引用改仓库顶层 `proto/` |
 | 1.2 | 2026-10-10 | 新增 §10 配置管理规范（SCF）：分层解耦、动态/静态分型纪律、合规校验（fail-fast 分级）；原 §10 版本规范顺移 §11；§9 依赖清单补 SCF |
 | 1.1 | 2026-10-10 | review 修复：两处「继承资产 #13」更正为「修复局限 #13」；契约冻结范围补 common.v1；日志规范明确 client 仅 SLF4J API；§9 依赖清单补 grpc-stub/grpc-protobuf |
 | 1.0 | 2026-10-10 | 初版：工程纪律、包结构、风格（Palantir + Lombok 纪律）、并发（不可变快照发布）、错误处理、日志、测试、proto 兼容、SDK 约束、版本规范 |

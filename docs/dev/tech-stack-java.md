@@ -1,8 +1,8 @@
 # Java 技术选型
 
-版本: 1.2    更新时间: 2026-10-10
+版本: 1.4    更新时间: 2026-10-10
 
-> 本文是新一代 Artemis Java 实现的技术选型基线：语言与运行时、工程结构、全量技术组件清单与依赖冲突策略。设计依据为[架构设计](../arch/artemis-next-architecture.md)（§3 技术栈策略、§7 关键决策 D8），开发规范见[Java 开发规范](coding-guidelines-java.md)。Rust 实现（v1.x 混合集群）直接消费 `artemis-proto/` 契约目录，不受本文 Java 组件约束。
+> 本文是新一代 Artemis Java 实现的技术选型基线：语言与运行时、工程结构、全量技术组件清单与依赖冲突策略。设计依据为[架构设计](../arch/artemis-next-architecture.md)（§3 技术栈策略、§7 关键决策 D8），开发规范见[Java 开发规范](coding-guidelines-java.md)。Rust 实现（v1.x 混合集群）直接消费仓库顶层 `proto/` 契约目录（见[proto 契约规范](proto-contract.md)），不受本文 Java 组件约束。
 
 ## 1. 语言与运行时
 
@@ -18,14 +18,22 @@
 
 ## 2. 工程结构
 
-### 2.1 模块划分
+### 2.1 仓库布局与模块划分
 
-Maven 多模块单 reactor，groupId 统一 `org.mydotey.ai.artemis`，artifactId 前缀 `artemis-`（两个例外：parent 为 `artemis`；starter 为 `spring-boot-starter-artemis-client`，遵循 Spring starter 命名惯例）：
+仓库为**多语言 monorepo，顶层按语言分目录**；契约是语言无关纯目录（组织与治理见[proto 契约规范](proto-contract.md)）：
 
+```text
+artemis/
+├── proto/        契约：六组 .proto（common + 五组 service，各 v1），语言无关，非 Maven 模块
+├── java/         Java 实现：Maven 单 reactor（本节）
+└── rust/         Rust 实现（v1.x 才创建）：Cargo workspace，从 ../proto 生成
 ```
-org.mydotey.ai.artemis:artemis (parent)
-├── artemis-proto                纯契约目录 (packaging=pom)，只放 .proto 文件，不生成代码
-│     common/ registry/ replication/ projection/ discovery/ management/   (各 v1)
+
+Java reactor 居 `java/`（构建入口 `mvn -f java/pom.xml`；根目录不放聚合构建文件，各语言构建入口在各自目录）。groupId 统一 `org.mydotey.ai.artemis`，artifactId 前缀 `artemis-`（两个例外：parent 为 `artemis`；starter 为 `spring-boot-starter-artemis-client`，遵循 Spring starter 命名惯例）：
+
+```text
+java/
+├── pom.xml                      org.mydotey.ai.artemis:artemis (parent)
 ├── artemis-common               服务端公共规范/工具 (Java 25)
 ├── artemis-registry-core        registry 内核，纯 Java 零 Spring (Java 25)
 ├── artemis-registry-server      Spring Boot 装配 (Java 25)
@@ -40,7 +48,7 @@ org.mydotey.ai.artemis:artemis (parent)
 
 ### 2.2 proto 契约模型
 
-`artemis-proto` 是**纯契约目录**：Maven 模块 `packaging=pom` 只管版本，不含 Java 产物。各消费模块引用需要的 .proto 文件，各自生成代码到自己的包：
+Java 各消费模块从仓库顶层 `proto/`（组织与治理见[proto 契约规范](proto-contract.md)）引用需要的 .proto 文件（`protoSourceRoot` 相对路径 `../../proto/<组>`），各自生成代码到自己的包：
 
 | 模块 | 生成的 proto 组 | protoc 基线 | 编译版本 |
 |---|---|---|---|
@@ -54,17 +62,17 @@ org.mydotey.ai.artemis:artemis (parent)
 
 要点：
 
-- **公共数据模型消息**（Instance、ServiceInstances 等）定义在 `artemis-proto/common/v1/`，各组 proto import 之；import 方向永远「内部协议 → 共享」，不出现环。
+- **公共数据模型消息**（Instance、ServiceInstances 等）定义在 `proto/common/v1/`，各组 proto import 之；import 方向永远「内部协议 → 共享」，不出现环。
 - **客户端用 protoc 3.25.x 生成、服务端用 4.x 生成**：3.25 生成代码在 protobuf runtime ≥ 3.25（含 4.x）的宿主上均可运行（protobuf 官方政策：runtime 版本须 ≥ gencode 版本，老 runtime 不在支持范围），这是「各自生成」模型的直接红利——共享 artifact 方案无法两端分叉 protoc 版本。
 - 同一 proto 组会在多个模块生成同 FQCN 的类（如 registry.v1 在 core 与 client 各一份）。**跨模块只走 wire 协议，绝不在模块边界传递 proto 消息类**（纪律见开发规范 §1）。
-- 插件对 JDK 25 + protoc 4.x/3.25 + grpc-java 组合的支持、跨模块 proto import 与 `protoSourceRoot` 相对路径（`../artemis-proto/<组>`）的具体配置，均在脚手架阶段一并验证；跨仓库复用需求出现时再升级为 proto-sources 依赖机制。
+- 插件对 JDK 25 + protoc 4.x/3.25 + grpc-java 组合的支持、跨模块 proto import 与 `protoSourceRoot` 相对路径（`../../proto/<组>`）的具体配置，均在脚手架阶段一并验证；跨仓库复用需求出现时再升级为 proto-sources 依赖机制。
 
 ### 2.3 依赖硬约束
 
 | 约束 | 执行机制 |
 |---|---|
 | core 模块零 Spring（延续原产品实践，能力基线 §1–§2 组件事实） | maven-enforcer `bannedDependencies` 禁 `org.springframework:*`，CI 强制 |
-| client 不依赖任何服务端模块 | 同样用 enforcer `bannedDependencies` 硬约束：禁 `org.mydotey.ai.artemis` 下 `artemis-common` 与各 `*-core`/`*-server` artifact；proto 契约经文件级引用（`artemis-proto` 为 packaging=pom，本就无 jar 可依赖） |
+| client 不依赖任何服务端模块 | 同样用 enforcer `bannedDependencies` 硬约束：禁 `org.mydotey.ai.artemis` 下 `artemis-common` 与各 `*-core`/`*-server` artifact；proto 契约经文件级引用（`proto/` 为纯目录非 Maven 模块，本就无 jar 可依赖） |
 | 全 reactor 统一版本 | parent `${revision}` 占位符 + **flatten-maven-plugin**（Maven 3.x CI Friendly Versions 必须：无 flatten 时 install/deploy 产物 pom 残留字面量 `${revision}`，外部不可消费） |
 
 ## 3. 技术组件总表
@@ -76,16 +84,16 @@ org.mydotey.ai.artemis:artemis (parent)
 | 1 | 语言运行时 | 服务端 JDK | Java 25 LTS（`release=25`） | common、各 core、各 server | 虚拟线程（JEP 491 后无 pinning 顾虑） |
 | 2 | 语言运行时 | SDK 编译目标 | Java 8（`release=8`） | artemis-client、starter | 同 reactor 混合编译 |
 | 3 | 语言运行时 | GC | 默认 G1 | 服务端 | ZGC 大堆选项留 v1.0 压测后定 |
-| 4 | 构建 | 构建系统 | Maven 3.9.x | 全仓单 reactor | Maven 4 成熟后评估 |
-| 5 | 构建 | 依赖治理 | maven-enforcer-plugin + flatten-maven-plugin | 全仓 | enforcer：Java/Maven 版本、依赖上界（requireUpperBoundDeps）、core 禁 Spring 与 client 禁服务端模块（§2.3）；flatten：`${revision}` 落库（§2.3） |
+| 4 | 构建 | 构建系统 | Maven 3.9.x | java/ 单 reactor | Maven 4 成熟后评估 |
+| 5 | 构建 | 依赖治理 | maven-enforcer-plugin + flatten-maven-plugin | java/ reactor | enforcer：Java/Maven 版本、依赖上界（requireUpperBoundDeps）、core 禁 Spring 与 client 禁服务端模块（§2.3）；flatten：`${revision}` 落库（§2.3） |
 | 6 | 构建 | proto 生成 | protobuf-maven-plugin（**ascopes**）+ protoc + grpc-java 插件 | 各消费模块 | xolstice 已于 2025-04 archived，其 README 推荐 ascopes 为后继；`protoSourceRoot` 相对路径，按 §2.2 生成矩阵 |
 | 7 | 框架 | 应用框架 | Spring Boot 4.1.x | 仅各 server 模块 | DI、配置绑定、MVC、actuator；不出现在 core/client classpath |
 | 8 | 通信 | RPC 框架 | grpc-java 1.7x | 服务端 grpc-netty；client grpc-netty-shaded | 五通道全 gRPC；client shaded 隔离宿主 netty |
 | 9 | 通信 | 序列化（服务端） | protobuf-java 4.x | 服务端 proto 消息 + 服务端快照文件格式 | 快照 = proto 二进制 + 版本头，不自研格式 |
 | 10 | 通信 | 序列化（client） | protobuf-java **3.25.x**（protoc 3.25 生成） | artemis-client | 宿主 3.25+/4.x runtime 双兼容，见 §5 |
 | 11 | HTTP | HTTP 辅助通道 | Spring MVC（SB 内置） | server 模块 | 外部 HTTP 辅助端点 + console REST；不引 WebFlux |
-| 12 | 代码简化 | Lombok | 1.18.x | 全项目 | `provided` scope，不传递给 SDK 使用方 |
-| 31 | 配置管理 | SCF（Spark Configuration Framework） | `org.mydotey.scf:scf-bom` 1.6.x（scf-core + scf-simple） | 全仓（含 client） | manager / sources / property 三层抽象，与具体配置源解耦；原产品同栈（Maven Central 在库）；Java 8 目标两端通用，传递闭包仅 scf-core + lang-extension + slf4j-api；动静分型与合规校验规范见[开发规范](coding-guidelines-java.md) §10 |
+| 12 | 代码简化 | Lombok | 1.18.x | java/ reactor | `provided` scope，不传递给 SDK 使用方 |
+| 31 | 配置管理 | SCF（Spark Configuration Framework） | `org.mydotey.scf:scf-bom` 1.6.x（scf-core + scf-simple） | java/ reactor（含 client） | manager / sources / property 三层抽象，与具体配置源解耦；原产品同栈（Maven Central 在库）；Java 8 目标两端通用，传递闭包仅 scf-core + lang-extension + slf4j-api；动静分型与合规校验规范见[开发规范](coding-guidelines-java.md) §10 |
 | 13 | 数据（期 3） | ORM | MyBatis-Plus 3.5.x + SB starter | 仅 management | 版本锁 SB 4.1 适配线，期 3 实施时锁定 |
 | 14 | 数据（期 3） | Schema migration | Flyway（SB 管版本） | 仅 management | MySQL/PG 双方言脚本 |
 | 15 | 数据（期 3） | 连接池 | HikariCP（SB 自带） | 仅 management | — |
@@ -93,14 +101,14 @@ org.mydotey.ai.artemis:artemis (parent)
 | 17 | 可观测 | Metrics | Micrometer + Prometheus registry | 全服务端 | actuator 端点，v0.1 第一天 |
 | 18 | 可观测 | Trace | OpenTelemetry（SB 4.1 官方集成） | 全服务端 | v0.1 传播 + 基础 span |
 | 19 | 可观测 | 日志 | SLF4J + Logback + logstash-logback-encoder | 服务端；client 仅依赖 SLF4J API | 结构化 JSON 第一天；SDK 不打日志实现进宿主（避免 multiple SLF4J providers 冲突） |
-| 20 | 测试 | 单元测试 | JUnit 5 + Mockito + AssertJ | 全仓 | — |
+| 20 | 测试 | 单元测试 | JUnit 5 + Mockito + AssertJ | java/ reactor | — |
 | 21 | 测试 | 集成测试 | Testcontainers | DB（期 3）、K8s 验收（v1.0） | 集群语义测试用进程内多实例（随机端口），不起容器 |
 | 22 | 测试 | 压测工具 | 待定（v1.0 容量验证时选型） | — | v0.x 不引入 |
-| 23 | 质量 | 格式化 | Spotless + Palantir java-format | 全仓 | CI 强制 `spotless:check` |
-| 24 | 质量 | 静态检查 | Checkstyle | 全仓 | 命名/结构规则 |
-| 25 | 质量 | Bug 模式 | Error Prone | 全仓 | 经 compiler `annotationProcessorPaths` |
-| 26 | 质量 | 覆盖率 | JaCoCo | 全仓 | 出报告，不设强制门槛 |
-| 27 | CI/CD | CI | GitHub Actions | 全仓 | PR 全量检查；**JDK 25 单构建 job**（工具/插件进程全跑 JDK 25），client 的 Java 8 运行时兼容经 **Maven toolchains 以 JDK 8 fork 测试 JVM** 验证——不设 JDK 8 独立构建 job（`release=25` 模块在其上无法构建） |
+| 23 | 质量 | 格式化 | Spotless + Palantir java-format | java/ reactor | CI 强制 `spotless:check` |
+| 24 | 质量 | 静态检查 | Checkstyle | java/ reactor | 命名/结构规则 |
+| 25 | 质量 | Bug 模式 | Error Prone | java/ reactor | 经 compiler `annotationProcessorPaths` |
+| 26 | 质量 | 覆盖率 | JaCoCo | java/ reactor | 出报告，不设强制门槛 |
+| 27 | CI/CD | CI | GitHub Actions | 全仓（按路径触发：java/** Java job、rust/** Rust job、proto/** 全量） | **JDK 25 单构建 job**（工具/插件进程全跑 JDK 25），client 的 Java 8 运行时兼容经 **Maven toolchains 以 JDK 8 fork 测试 JVM** 验证——不设 JDK 8 独立构建 job（`release=25` 模块在其上无法构建） |
 | 28 | CI/CD | 发布渠道 | Maven Central（Central Portal）+ 容器镜像仓库 | SDK/starter（v1.0）、镜像 | 镜像仓库 GHCR vs Docker Hub 待 v1.0 定 |
 | 29 | SDK 分发 | starter 自动装配 | `AutoConfiguration.imports` + `spring.factories` 双注册 | starter | 覆盖 SB 2.7+ 与老 SB 2.x；编译目标 Java 8 |
 | 30 | SDK 分发 | client 依赖纪律 | grpc-netty-shaded + grpc-stub + grpc-protobuf（传递 protobuf-java 3.25.x）+ SCF（scf-simple，传递 scf-core/lang-extension）+ SLF4J API | artemis-client | grpc-netty-shaded **不传递** stub/protobuf 集成类，生成代码必需 grpc-stub/grpc-protobuf；冲突策略见 §5 |
@@ -156,6 +164,8 @@ shaded 版将 netty 重打包进 `io.grpc.netty.shaded.*` 命名空间，与宿�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.4 | 2026-10-10 | review 修复：组件表范围随 monorepo 更正（#4/#5/#12/#20/#23–26/#31 的「全仓/全项目」→「java/ reactor」）；#27 CI 改按路径触发口径（与 .claude/rules/project.md 一致）；§2.1 代码块补 text 标注、rust/ 注明 v1.x 才创建；§2.2 开头与 §4.2 去重（仓库布局事实归 §2.1，契约治理归 proto 契约规范） |
+| 1.3 | 2026-10-10 | 多语言 monorepo 定案：§2.1 改为仓库布局（顶层 `proto/` 契约 + `java/` reactor + `rust/` v1.x），`artemis-proto` Maven 模块（packaging=pom）取消、契约目录提升仓库顶层；proto 引用路径改 `../../proto/<组>`；wire 兼容规则上移至新增的 proto 契约规范（跨语言单一来源） |
 | 1.2 | 2026-10-10 | 新增配置管理选型 SCF（#31）：三层解耦、动静分型、RangeValueFilter/TypeConverter 校验（§4.5）；client 依赖纪律与 v0.1 依赖面同步；组件表编号改为稳定 ID 不重排 |
 | 1.1 | 2026-10-10 | review 修复：client 依赖清单补 grpc-stub/grpc-protobuf；生成矩阵补 common.v1 与 registry-core 的 projection.v1、Rust 行 protoc 基线更正；`${revision}` 补 flatten-maven-plugin；日志范围改「服务端，client 仅 SLF4J API」；零 Spring 引用改 §1–§2 组件事实；protobuf 兼容口径统一为 runtime ≥ 3.25；proto 插件换 ascopes（xolstice 已 archived）；CI 改 JDK 25 单 job + toolchains JDK 8 fork 测试；artifactId 前缀补例外；client 禁依赖升级为 enforcer 硬约束 |
 | 1.0 | 2026-10-10 | 初版：语言/运行时、工程结构与 proto 契约模型、30 项技术组件总表、依赖冲突策略 |
