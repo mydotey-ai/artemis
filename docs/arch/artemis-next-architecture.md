@@ -1,6 +1,6 @@
 # 新一代 Artemis 架构设计
 
-版本: 1.1    更新时间: 2026-10-09
+版本: 1.2    更新时间: 2026-10-10
 
 > 本文是新一代 Artemis（重设计产品）的架构设计基线：总体架构、核心机制、技术栈策略与关键决策记录。产品定位与版本切分见 [产品规划与路线图](../product/artemis-next-roadmap.md)；设计输入来自 [原产品能力基线](../legacy/legacy-product-analysis.md)（§5 可继承资产 / §6 局限清单）与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -10,7 +10,7 @@
 
 **设计输入三层**（行业对标报告 §6）：
 
-1. **直接继承**（原产品 10 万级验证过的资产）：心跳即注册幂等对账、四级摘除级联、两段式权重发布、逻辑实例、双轨分离、readiness 门控、三级地址容灾、错误码驱动容错、批量贯穿、状态 API 排障面。
+1. **直接继承**（原产品 10 万级验证过的资产）：心跳即注册幂等对账、四级摘除级联、两段式权重发布、逻辑实例、readiness 门控、三级地址容灾、错误码驱动容错、批量贯穿、状态 API 排障面（对照能力基线 §5 的 12 项资产）。另有**双轨分离**为原产品组件层结构实践（基线 §2.5/§2.7），随 D5 延续，不属 §5 资产条目。
 2. **现代化改造**：传输 gRPC 化、复制报文增量化、自我保护显式化、可观测对齐 Prometheus/tracing 事实标准、管理面规则下发闭环化。其中对标报告建议的部分项**经评审明确偏离**：「数据版本/世代」「peer 定期对账」被否决（临时数据最终一致，见 D3/D6）；「Distro 负责制」后置为规模选项（D4）；「告警」「发现通道限流」列入[路线图后置项](../product/artemis-next-roadmap.md)。
 3. **从零新建**：安全（认证/TLS/RBAC）、持久化与双端快照、客户端生态（starter/生命周期 API/多语言）、工程基线（测试/CI/容器化/滚动升级）。
 
@@ -67,7 +67,7 @@
 | discovery ↔ management（规则流/状态上行） | gRPC | 内部端口 |
 | console / Admin API | HTTP | management 外部端口 |
 
-所有 proto 按服务与版本组织（`artemis.registry.v1` / `artemis.replication.v1` / `artemis.projection.v1` / `artemis.discovery.v1` / `artemis.management.v1`），作为语言中立的稳定契约。
+所有 proto 按服务与版本组织（`artemis.common.v1`（公共数据模型）/ `artemis.registry.v1` / `artemis.replication.v1` / `artemis.projection.v1` / `artemis.discovery.v1` / `artemis.management.v1`），作为语言中立的稳定契约（工程落地形态见[Java 技术选型](../dev/tech-stack-java.md) §2：纯契约目录 + 各消费模块各自生成）。
 
 ### 2.3 部署形态
 
@@ -81,7 +81,7 @@ v1.0 起提供三种部署形态：
 
 | 项 | 决策 |
 |---|---|
-| 服务端先行实现 | Java 25 + Spring Boot 4.1（Spring 只在装配层，内核纯 Java——继承原产品「内核零 Spring」资产） |
+| 服务端先行实现 | Java 25 + Spring Boot 4.1（Spring 只在装配层，内核纯 Java——延续原产品内核零 Spring 的组件实践，能力基线 §1–§2） |
 | 服务端后补 | Rust 实现 registry 数据面，**同一集群可混布 Java/Rust 节点** |
 | 混合集群互通面 | 只需数据面协议互通（心跳/复制/分发/成员 proto）；management/discovery 无集群协议，Rust 无需实现 |
 | 契约冻结策略 | 数据面 proto 经 v0.2–v1.0 稳定后再冻结，Rust 实现只做一次 |
@@ -232,5 +232,6 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.2 | 2026-10-10 | proto 组织补 `artemis.common.v1` 公共数据模型组，并链接 Java 技术选型的工程落地形态（随 dev 文档定案同步）；修正资产引用失真：「内核零 Spring」「双轨分离」标注为组件层实践的延续（基线 §1–§2 / §2.5–§2.7），不再冒称 §5 资产条目 |
 | 1.1 | 2026-10-09 | review 修复：拓扑图边方向/依赖边修正（④ 补全）；discovery 容灾语义与 SDK 范围对齐；局限归档补 #7/#8/#13/#18 子项与滚动升级；§1 二层偏离显式标注；canary 补架构依据；账户/认证/指标/namespace 时间线对齐；生态位引用词项还原 |
 | 1.0 | 2026-10-09 | 初版：三服务架构、数据面/治理面机制、关键决策、资产/局限对照 |

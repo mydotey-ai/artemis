@@ -1,6 +1,6 @@
 # 新一代 Artemis 产品规划与版本路线图
 
-版本: 1.1    更新时间: 2026-10-09
+版本: 1.2    更新时间: 2026-10-10
 
 > 本文是新一代 Artemis 的产品规划与版本路线图：定位与成功标准、迭代式版本切分（每版可发布可 eval）、各版本范围与验收要点。架构设计详见 [架构设计](../arch/artemis-next-architecture.md)；设计输入见 [原产品能力基线](../legacy/legacy-product-analysis.md) 与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -39,7 +39,7 @@
 - **安全**：默认开启的单账户认证。
 - **可观测**：metrics（Micrometer/Prometheus）+ 结构化 log + OpenTelemetry trace，第一天内建。
 - **客户端**：Java 8 SDK 注册侧——心跳客户端、实例管理、生命周期 API（close/优雅下线）、磁盘快照、三级地址容灾骨架；随附 Spring Boot starter（注册侧自动装配）。
-- **工程**：Maven 多模块（三服务边界第一天就定）、proto 契约（五组 service proto，数据模型含 namespace 字段——架构 D10）、CI、Dockerfile。
+- **工程**：Maven 多模块（三服务边界第一天就定）、proto 契约（六组 proto：common 公共数据模型 + 五组 service proto，数据模型含 namespace 字段——架构 D10）、CI、Dockerfile。
 - **验收要点**：单节点起停、SDK 注册/心跳、实例经状态/管理 API 可观测、摘除/恢复经管理查询 API 的**有效视图**（已应用摘除过滤）可验证、快照重启回放、认证生效、指标可抓取。（服务发现查询归 discovery，v0.3 起验收）
 
 ### v0.2 registry 集群
@@ -110,5 +110,6 @@
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.2 | 2026-10-10 | v0.1 工程项 proto 契约同步为六组（补 common 公共数据模型组，随架构 1.2 / 技术选型定案） |
 | 1.1 | 2026-10-09 | review 修复：namespace 明确进 v0.1 proto 契约；starter 排期（v0.1 注册侧 / v0.3 发现侧 / v1.0 发布）；`stale` 出口移至 v0.3；v0.1 摘除验收改有效视图；v0.5 归治理期 3；v1.0 补滚动升级验收；后置项补审批流、发现通道限流 |
 | 1.0 | 2026-10-09 | 初版：v0.1–v1.x 版本切分（治理三期、三种部署形态） |
