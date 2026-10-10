@@ -1,6 +1,6 @@
 # 新一代 Artemis 架构设计
 
-版本: 1.4    更新时间: 2026-10-10
+版本: 1.5    更新时间: 2026-10-10
 
 > 本文是新一代 Artemis（重设计产品）的架构设计基线：总体架构、核心机制、技术栈策略与关键决策记录。产品定位与版本切分见 [产品规划与路线图](../product/artemis-next-roadmap.md)；设计输入来自 [原产品能力基线](../legacy/legacy-product-analysis.md)（§5 可继承资产 / §6 局限清单）与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -181,21 +181,21 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 ## 7. 关键决策记录
 
-实施期按需将下列决策落为 ADR（`docs/decisions/`）：
+重大决策以 ADR 记录（[decisions/](../decisions/README.md)，一决策一文件：背景/决策/理由/否决方案/后果）。下表为总览索引：
 
-| # | 决策 | 理由 | 放弃的备选 |
-|---|---|---|---|
-| D1 | 三服务拆分 + 统一网络协议（all-in-one 也是） | 独立扩缩/故障隔离/多集群聚合；一种通信语义无特例 | 进程内直连优化 all-in-one（两套语义） |
-| D2 | discovery 不组集群 | 多源聚合语义只在本机发生；集群协议只剩 registry 复制一条，Rust 互通面最小 | discovery 对等集群（多源合并语义复杂化） |
-| D3 | 数据面 AP + 无版本管理 | 临时数据最终一致；全局单调版本需要协调等价共识；自愈链（变更扇出 + TTL 轮换 + bootstrap）已被 10 万级验证 | per-service 版本、全局 era+seq（过度设计，讨论中否决） |
-| D4 | 全对全 + 增量报文，负责制后置 | 心跳即注册下写到达节点随机，负责制需转发一跳；≤10 节点增量扇出无压力 | Distro 负责制先行（v1.x 作为 20+ 节点选项） |
-| D5 | 双轨 + 外部 DB（治理元数据） | 原产品血统延续；Java/Rust 互通面最小化；治理面实现简单 | 内嵌 Raft 分层（工程量大、混合集群互通难）；全 AP（规则竞态） |
-| D6 | peer 间无拉对账 | 心跳周期全量上报 + 客户端 TTL 轮换 = 分布式对账 | 定期 hash 比对拉全量（多余） |
-| D7 | 推送单元 = service 实例集快照 | 原子、幂等覆盖、消费方无需增量拼接 | 实例级 delta 推送（拼接复杂，乱序难处理） |
-| D8 | Java 25 + Spring Boot 4.1 先行，Rust 后补混合集群 | 作者主场先出活；契约冻结后 Rust 只做一次 | 直接双语言起步 |
-| D9 | 安全内建（v0.1 默认认证） | 开源产品可上生产的前提；后补代价高（Nacos 教训） | v1.0 一次性补安全 |
-| D10 | namespace 进 v0.1 数据模型 | 行业基线、多租户地基，后加迁移代价大 | 后加字段 |
-| D11 | 多语言 monorepo：契约居仓库顶层 `proto/` 纯目录（取消 `artemis-proto` Maven 模块），顶层按语言分目录（`java/` 现行，`rust/` v1.x 才创建） | 契约变更一次 commit 原子带动全部语言实现（多仓库存在漂移窗口）；各端 protoc 与编译版本自由（落地见[Java 技术选型](../dev/tech-stack-java.md) §2） | 契约独立仓库 + 各语言实现仓库（版本对齐负担）；proto 共享 artifact（protoc 版本被锁死） |
+| # | 决策 | ADR |
+|---|---|---|
+| D1 | 三服务拆分 + 统一网络协议（all-in-one 也是） | [adr-001](../decisions/adr-001-three-services-uniform-protocol.md) |
+| D2 | discovery 不组集群 | [adr-002](../decisions/adr-002-discovery-no-cluster.md) |
+| D3 | 数据面 AP + 无版本管理 | [adr-003](../decisions/adr-003-ap-no-versioning.md) |
+| D4 | 全对全 + 增量报文，负责制后置 | [adr-004](../decisions/adr-004-full-mesh-replication.md) |
+| D5 | 双轨 + 外部 DB（治理元数据） | [adr-005](../decisions/adr-005-dual-track-external-db.md) |
+| D6 | peer 间无拉对账 | [adr-006](../decisions/adr-006-no-peer-reconciliation.md) |
+| D7 | 推送单元 = service 实例集快照 | [adr-007](../decisions/adr-007-snapshot-push-unit.md) |
+| D8 | Java 25 + Spring Boot 4.1 先行，Rust 后补混合集群 | [adr-008](../decisions/adr-008-java-first-rust-hybrid.md) |
+| D9 | 安全内建（v0.1 默认认证） | [adr-009](../decisions/adr-009-security-by-default.md) |
+| D10 | namespace 进 v0.1 数据模型 | [adr-010](../decisions/adr-010-namespace-day-one.md) |
+| D11 | 多语言 monorepo：契约居仓库顶层 `proto/` 纯目录 | [adr-011](../decisions/adr-011-monorepo-top-level-proto.md) |
 
 ## 8. 与原产品的对照（资产继承与局限修复）
 
@@ -233,6 +233,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.5 | 2026-10-10 | 启用 decisions/ ADR：D1–D11 迁移为 adr-001~011（背景/决策/理由/否决方案/后果），§7 改为总览索引（链接各 ADR） |
 | 1.4 | 2026-10-10 | review 修复：§7 决策表补 D11（多语言 monorepo 与顶层 proto/ 契约目录的结构决策，含否决方案） |
 | 1.3 | 2026-10-10 | proto 组织定案多语言 monorepo 落地形态：契约居多语言 monorepo 顶层 `proto/` 纯目录（`artemis-proto` Maven 模块取消），链接新增的 proto 契约规范（wire 兼容与变更流程跨语言单一来源） |
 | 1.2 | 2026-10-10 | proto 组织补 `artemis.common.v1` 公共数据模型组，并链接 Java 技术选型的工程落地形态（随 dev 文档定案同步）；修正资产引用失真：「内核零 Spring」「双轨分离」标注为组件层实践的延续（基线 §1–§2 / §2.5–§2.7），不再冒称 §5 资产条目 |

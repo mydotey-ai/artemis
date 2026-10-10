@@ -11,6 +11,7 @@
 | 紧急修复 | `hotfix/<name>` | `hotfix/security-patch` |
 | 发布 | `release/v<version>` | `release/v1.0.0` |
 | 文档 | `docs/<name>` | `docs/api-guide` |
+| 开发工作流（/dev-java） | `{milestone}-phase<N>-{title}` | `v0.1-phase2-heartbeat` |
 
 ## Commit 规范
 
