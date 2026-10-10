@@ -6,7 +6,7 @@
 
 | 版本 | 状态 | 备注 |
 |---|---|---|
-| v0.1 | planned | 启动产物已写，待基线提交 |
+| v0.1 | in-progress | 当前版本 |
 
 状态枚举：planned | in-progress | acceptance | done（planned = 启动产物已写、基线未提交）。
 
