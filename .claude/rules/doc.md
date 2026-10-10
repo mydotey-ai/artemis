@@ -14,7 +14,7 @@
 | `deploy/` | 部署文档 |
 | `decisions/` | 架构决策记录 (ADR)，一决策一文件：`adr-<序号>-<名称>.md`，如 `adr-001-use-redis.md` |
 | `issues/` | 问题记录文档 |
-| `milestones/` | 里程碑规划：每个里程碑一个 `v<版本>/` 子目录（如 `v0.1/`），内含规划文档（`plan.md`）、开发状态文件（`dev-state.md`，工作流自动维护）和 `phases/`（阶段文档 `phase-X-xxx.md` + 测试文档 `phase-X-xxx-test.md`） |
+| `milestones/` | 里程碑规划：根级开发状态文件 `dev-state.md`（`/dev-java` 工作流自动维护，全局单文件）+ 每个里程碑一个 `v<版本>/` 子目录（如 `v0.1/`），内含规划文档（`plan.md`）和 `phases/`（阶段文档 `phase-X-xxx.md` + 测试文档 `phase-X-xxx-test.md`） |
 | `plans/` | 临时开发计划，完成后保留；目录加入 `.gitignore`，不入库 |
 | `product/` | 产品文档 |
 

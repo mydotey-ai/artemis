@@ -10,3 +10,4 @@
 | [dev/README.md](dev/README.md) | — | 开发文档索引（proto 契约规范、Java 技术选型与开发规范） |
 | [decisions/README.md](decisions/README.md) | — | 架构决策记录索引（ADR，一决策一文件：D1–D11 等） |
 | [issues/README.md](issues/README.md) | — | 问题记录索引（现象 / 根因 / 诊断依据 / 修复 / 残留；含环境与工具链问题） |
+| [milestones/README.md](milestones/README.md) | — | 里程碑索引（版本规划 plan、phase 设计与测试文档、开发状态 dev-state） |
