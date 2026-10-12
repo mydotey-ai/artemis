@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Maven toolchains 模板（Java 8 运行时验证前提，技术选型 #27）。
+  用法：复制到 ~/.m2/toolchains.xml 并把 jdkHome 改成本机 JDK 8 路径——
+  artemis-client 的 surefire 经 jdkToolchain 以 JDK 8 fork 测试 JVM
+  （release=8 的运行时兼容在测试层验证）；缺失时 client 测试会因找不到 toolchain 失败。
+-->
+<toolchains>
+  <toolchain>
+    <type>jdk</type>
+    <provides>
+      <version>8</version>
+    </provides>
+    <configuration>
+      <jdkHome>/path/to/jdk8</jdkHome>
+    </configuration>
+  </toolchain>
+</toolchains>

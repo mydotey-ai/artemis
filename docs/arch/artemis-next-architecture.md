@@ -1,6 +1,6 @@
 # 新一代 Artemis 架构设计
 
-版本: 1.5    更新时间: 2026-10-10
+版本: 1.11    更新时间: 2026-10-12
 
 > 本文是新一代 Artemis（重设计产品）的架构设计基线：总体架构、核心机制、技术栈策略与关键决策记录。产品定位与版本切分见 [产品规划与路线图](../product/artemis-next-roadmap.md)；设计输入来自 [原产品能力基线](../legacy/legacy-product-analysis.md)（§5 可继承资产 / §6 局限清单）与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -60,14 +60,14 @@
 
 | 通道 | 协议 | 说明 |
 |---|---|---|
-| SDK → registry（心跳/注册、实例管理） | gRPC（主）+ HTTP（辅） | 外部端口；gRPC client-stream 承载心跳 |
+| SDK → registry（心跳/注册、实例管理） | gRPC（主）+ HTTP（辅） | 外部端口；gRPC 双向流承载心跳（逐条 ack） |
 | SDK → discovery（查询/订阅） | gRPC（主）+ HTTP（辅） | 外部端口；gRPC server-stream 承载推送 |
 | registry ↔ registry（复制/成员） | gRPC | 内部 peer 端口，与外部端口分离 |
 | registry → discovery（数据分发） | gRPC | 内部端口；订阅流 + 快照 bootstrap |
 | discovery ↔ management（规则流/状态上行） | gRPC | 内部端口 |
 | console / Admin API | HTTP | management 外部端口 |
 
-所有 proto 按服务与版本组织（`artemis.common.v1`（公共数据模型）/ `artemis.registry.v1` / `artemis.replication.v1` / `artemis.projection.v1` / `artemis.discovery.v1` / `artemis.management.v1`），作为语言中立的稳定契约，居多语言 monorepo 顶层 `proto/` 目录（组织与治理见[proto 契约规范](../dev/proto-contract.md)；Java 侧生成矩阵见[Java 技术选型](../dev/tech-stack-java.md) §2：各消费模块从契约目录各自生成）。
+所有 proto 按服务与版本组织（`artemis.common.v1`（公共数据模型）/ `artemis.registry.v1` / `artemis.replication.v1` / `artemis.projection.v1` / `artemis.discovery.v1` / `artemis.management.v1`），作为语言中立的稳定契约，居多语言 monorepo 顶层 `proto/` 目录（组织与治理见[proto 契约规范](../dev/proto-contract.md)；Java 侧生成矩阵见[Java 技术选型](../dev/tech-stack-java.md) §2.2）。
 
 ### 2.3 部署形态
 
@@ -92,11 +92,11 @@ v1.0 起提供三种部署形态：
 
 ### 4.1 registry-service
 
-**心跳即注册（继承）**：SDK 本地实例集为唯一事实源；心跳 = 进程级全量实例集幂等上报（gRPC client-stream），断网重连自动对账，免显式注册状态机。心跳消息率 ∝ 进程数而非实例数（批量贯穿资产）。事实权判定：**心跳连接在哪个节点，该 service 的事实就在哪个节点**。
+**注册模型：显式四操作 + 心跳全量上报（D12，资产 #1 继承演化）**：SDK 本地实例集为唯一事实源；register / deregister / update 显式操作先更新本地集再上报、服务端按语义处理（register 无条件覆盖发 NEW；deregister 意图幂等、不受自我保护拦截、发 DELETE；update 幂等 upsert——命中覆盖发 UPDATE，缺席按 NEW 建租约）；心跳 = 进程级全量实例集幂等上报（gRPC bidi-stream，逐条即时 ack）：逐实例**续约 + 缺席自动注册**（upsert，修复原产品「miss 报告 → 客户端补注册」跨网络环）；**不做集合 diff**——上报中缺席的实例不摘除，由租约 TTL 过期清理最终一致（与原产品消失方向语义一致）。register/update 丢失由心跳 upsert 即时自愈，deregister 丢失等 TTL；SDK 无需重试状态机。心跳消息率 ∝ 进程数而非实例数（批量贯穿资产）。事实权判定：**心跳连接在哪个节点，该 service 的事实就在哪个节点**。
 
 **不做版本管理（明确决策）**：注册数据是动态临时数据，最终一致即可。全对全无 leader 下任何全局单调版本都需要协调（等价于引入共识），复杂度不值得。正确性由自愈链承担（见下）。
 
-**变更事件扇出**：心跳 diff 出变更才扇出（稳态心跳零复制流量）；增量小报文（service 级 diff）批量异步投递全部 peer；失败定向重试（指数退避 + 抖动）。全对全复制保留，负责制分片作为 v1.x 规模选项（20+ 节点）预留。
+**变更事件扇出**：四操作与心跳缺席补注册（upsert）产生的变更事件才扇出（稳态心跳 = 纯续约，零复制流量）；增量小报文（service 级变更）批量异步投递全部 peer；失败定向重试（指数退避 + 抖动）。全对全复制保留，负责制分片作为 v1.x 规模选项（20+ 节点）预留。
 
 **丢失自愈链（无对账设计）**——「+实例 X」事件丢失后 peer 缺 X 的恢复路径：
 
@@ -121,11 +121,11 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 ### 4.2 discovery-service
 
-**投影构建**：启动/重连时向配置的 registry 集群 bootstrap 全量拉取，之后消费变更流；重连即重新 bootstrap（全量覆盖幂等，即自愈）。数据按 `(cluster, namespace, service, group)` 组织；**namespace 字段 v0.1 进数据模型**（多租户地基，后加代价大）。
+**投影构建**：启动/重连时向配置的 registry 集群 bootstrap 全量拉取，之后消费变更流；重连即重新 bootstrap（全量覆盖幂等，即自愈）。数据按 `(cluster, namespace, service)` 组织；**namespace 字段 v0.1 进数据模型**（多租户地基，后加代价大）；**分组不进数据模型**（定案 2026-10-12，[adr-013](../decisions/adr-013-group-as-instance-metadata.md)）——需要时以实例 metadata 元素表达（如 `metadata["group"]`），治理分组路由按 metadata 选择器过滤。
 
 **多集群聚合**：各源投影独立维护；查询/推送时刻按选择器合并（默认 union，可按 cluster/namespace 过滤）。
 
-**推送模型（继承语义，协议升级）**：推送单元 = **service 实例集快照**（原子、幂等覆盖）；gRPC server-streaming 单流内天然有序；乱序/丢失窗口由兜底轮询收敛；订阅选择器 service/group/label，一流多目标。
+**推送模型（继承语义，协议升级）**：推送单元 = **service 实例集快照**（原子、幂等覆盖）；gRPC server-streaming 单流内天然有序；乱序/丢失窗口由兜底轮询收敛；订阅选择器 service/label，一流多目标。
 
 **三层兜底轮询（继承资产）**：订阅推送失败或空服务 60s 主动拉、15min 全量刷新——at-most-once 推送的自愈底线。
 
@@ -149,7 +149,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 ### 5.2 API 与规则下发
 
-**资源导向 API**（替换原产品 57 个表直透端点）：领域资源 `service` / `group` / `route-rule` / `release` / `ejection` / `logical-instance`；一个 API 完成一个运维意图（灰度发布 = 一个 release 调用）。
+**资源导向 API**（替换原产品 57 个表直透端点）：领域资源 `service` / `route-rule` / `release` / `ejection` / `logical-instance`——分组非独立资源，以实例 metadata 表达（[adr-013](../decisions/adr-013-group-as-instance-metadata.md)）；一个 API 完成一个运维意图（灰度发布 = 一个 release 调用）。
 
 **规则版本 + ack 生效闭环**（替换原产品 sleep(2s) 轮询盲下发）：management 写 DB → 规则变更带版本推订阅流 → discovery 应用后回 ack → management 可见生效水位（哪个版本、多少节点已生效）。治理规则是持久数据，版本管理合理（与数据面临时数据不搞版本的决策对照）。
 
@@ -158,7 +158,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 - 四级摘除级联（instance → server → zone → group）+ 操作记录即状态（下线 = 可叠加、带原因、可审计的记录；恢复 = 反向记录）。
 - 两段式权重发布（`weight / unreleased_weight` + 显式 `release`）；规则版本化 → diff 预览 + 一键回滚（回滚 = 指向历史版本的反向 release）。
 - 逻辑实例：第三方/异构服务注册为静态实例，纳入统一发现视图。
-- 分组路由：Group filter 语义延续。
+- 分组路由：Group filter 语义延续（分组以实例 metadata 元素表达，filter 按 metadata 选择器过滤）。
 - canary：自动创建专属规则组——route-rule + release 的预置派生用法，由 management 生成并下发，执行在 discovery 过滤器链。
 
 ### 5.3 console 与账户
@@ -196,6 +196,9 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 | D9 | 安全内建（v0.1 默认认证） | [adr-009](../decisions/adr-009-security-by-default.md) |
 | D10 | namespace 进 v0.1 数据模型 | [adr-010](../decisions/adr-010-namespace-day-one.md) |
 | D11 | 多语言 monorepo：契约居仓库顶层 `proto/` 纯目录 | [adr-011](../decisions/adr-011-monorepo-top-level-proto.md) |
+| D12 | 注册模型显式四操作化（显式操作 + 心跳全量上报续约/补注册） | [adr-012](../decisions/adr-012-explicit-registration-ops.md) |
+| D13 | 分组退出数据模型（以实例 metadata 元素表达） | [adr-013](../decisions/adr-013-group-as-instance-metadata.md) |
+| D14 | cluster 不进 ServiceKey（来源标识在投影边界注入） | [adr-014](../decisions/adr-014-cluster-out-of-service-key.md) |
 
 ## 8. 与原产品的对照（资产继承与局限修复）
 
@@ -205,7 +208,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 | 资产 | 处置 |
 |---|---|
-| #1 心跳即注册幂等对账 | 继承（gRPC client-stream） |
+| #1 心跳即注册幂等对账 | 继承实质（本地集唯一事实源 + 全量幂等上报），形态演化为显式四操作 + 心跳逐实例续约/缺席补注册——不做集合 diff，缺席等 TTL（D12） |
 | #2 三级地址容灾 | 继承 + TTL 轮换承担分布式对账新职责 |
 | #3 错误码驱动容错 | 继承（gRPC status 映射） |
 | #4 四级摘除级联 + 操作记录即状态 | 继承（期 3 持久化） |
@@ -225,14 +228,20 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 | 传输与协议 #1–#3 | gRPC 长连接统一（心跳/推送/复制），消除 WS 截断与三套传输重复；delta 未用问题随「service 实例集快照推送 + 兜底轮询」语义消解；#3 后半「数据版本/世代暴露」被 D3 明确放弃（新鲜度标记替代） |
 | 一致性与容量 #4–#10 | #4 增量扇出 + bootstrap（负责制 D4 后置）；#5 服务端快照；#6 客户端磁盘快照；#7 delta 窗口/version 单调性随 D3 零版本决策消解（无 delta 窗口与版本，兜底轮询承担）；#8 规则版本 + ack 生效水位（§5.2）；#9 自我保护 2.0；#10 成员抽象 v0.1 接口先行、动态成员后置 |
 | 客户端工程 #11–#15 | #11 生命周期 API（close/优雅下线）；#12 单连接复用（gRPC stream 天然）；#13 回调有界队列、订阅快照引用（避免深克隆）为 SDK 设计约束；#14 starter 自动装配（v0.1 注册侧随 SDK 交付、v0.3 发现侧补全）；#15 新鲜度标记 |
-| 管理面产品 #16–#18 | #16/#17 资源导向 API + console（分页/搜索/订阅视图/diff/回滚）；#18 鉴权→D9、审批流→后置项（[路线图](../product/artemis-next-roadmap.md) §4）、动态实例 metadata 由客户端事实源持有（心跳即注册语义内，设计性不可改）、逻辑实例（静态）metadata 可管理（期 3） |
+| 管理面产品 #16–#18 | #16/#17 资源导向 API + console（分页/搜索/订阅视图/diff/回滚）；#18 鉴权→D9、审批流→后置项（[路线图](../product/artemis-next-roadmap.md) §4）、动态实例 metadata 由客户端事实源持有（update 显式操作与心跳全量上报两通道，设计性不可改）、逻辑实例（静态）metadata 可管理（期 3） |
 | 安全 #19 | D9 内建 |
-| 可观测与工程 #20–#23 | metrics/log/trace 第一天（告警走 Alertmanager 生态）、核心路径测试 + CI、容器化、滚动升级协议（proto 版本化 + v1.0 滚动升级验收）、全栈升级 Java 25/SB 4.1、proto 契约化消除字符串状态码 |
+| 可观测与工程 #20–#23 | metrics/log/trace 第一天（告警走 Alertmanager 生态）、核心路径测试 + CI、容器化、滚动升级协议（proto 版本化 + v1.0 滚动升级验收）、全栈升级 Java 25/SB 4.1、proto 契约化治理状态码（数据枚举 proto enum + UNKNOWN 哨兵；错误码 `ErrorInfo` string code 契约注册表，见 proto 契约规范 §2） |
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.11 | 2026-10-12 | code-review 修复：全局清除「心跳 diff/对账」残留（§4.1 扇出、§7 D12、§8 资产 #1/#16-18）；§5.2 资源清单去 group；§2.2 生成矩阵内联副本改指针；错误码消息名 Error→ErrorInfo；新增 D13/D14（adr-013/adr-014） |
+| 1.10 | 2026-10-12 | §4.2 投影组织改 (cluster, namespace, service)、订阅选择器去 group、§5.2 分组路由标注 metadata 表达 |
+| 1.9 | 2026-10-12 | §4.1 心跳语义精化：逐实例续约 + 缺席自动注册（upsert），不做集合 diff、缺席等 TTL 最终一致 |
+| 1.8 | 2026-10-12 | 心跳 rpc 形态表述统一为 gRPC 双向流（逐条 ack），消除与契约的 client-stream 漂移 |
+| 1.7 | 2026-10-11 | §2.2 proto 生成表述更新（服务端 common.v1 统一生成于 artemis-common、client 独立自生成，随技术选型 §2.2 定案同步） |
+| 1.6 | 2026-10-11 | v0.1 phase-1 契约设计 review 定案（D12）：§4.1 注册模型改写为显式四操作 + 心跳全量对账（替代「免显式注册状态机」）；§7 增 D12；§8 资产 #1 处置更新、状态码治理表述修订（proto 契约规范 §2 同步） |
 | 1.5 | 2026-10-10 | 启用 decisions/ ADR：D1–D11 迁移为 adr-001~011（背景/决策/理由/否决方案/后果），§7 改为总览索引（链接各 ADR） |
 | 1.4 | 2026-10-10 | review 修复：§7 决策表补 D11（多语言 monorepo 与顶层 proto/ 契约目录的结构决策，含否决方案） |
 | 1.3 | 2026-10-10 | proto 组织定案多语言 monorepo 落地形态：契约居多语言 monorepo 顶层 `proto/` 纯目录（`artemis-proto` Maven 模块取消），链接新增的 proto 契约规范（wire 兼容与变更流程跨语言单一来源） |

@@ -1,6 +1,6 @@
 # Java 技术选型
 
-版本: 1.4    更新时间: 2026-10-10
+版本: 1.8    更新时间: 2026-10-12
 
 > 本文是新一代 Artemis Java 实现的技术选型基线：语言与运行时、工程结构、全量技术组件清单与依赖冲突策略。设计依据为[架构设计](../arch/artemis-next-architecture.md)（§3 技术栈策略、§7 关键决策 D8），开发规范见[Java 开发规范](coding-guidelines-java.md)。Rust 实现（v1.x 混合集群）直接消费仓库顶层 `proto/` 契约目录（见[proto 契约规范](proto-contract.md)），不受本文 Java 组件约束。
 
@@ -48,24 +48,25 @@ java/
 
 ### 2.2 proto 契约模型
 
-Java 各消费模块从仓库顶层 `proto/`（组织与治理见[proto 契约规范](proto-contract.md)）引用需要的 .proto 文件（`protoSourceRoot` 相对路径 `../../proto/<组>`），各自生成代码到自己的包：
+Java 各消费模块从仓库顶层 `proto/`（组织与治理见[proto 契约规范](proto-contract.md)）引用需要的 .proto 文件（`sourceDirectories` 指向 `../../proto` 单 root，模块以 includes 按下表矩阵圈定生成组），生成代码到自己的包：
 
 | 模块 | 生成的 proto 组 | protoc 基线 | 编译版本 |
 |---|---|---|---|
-| artemis-registry-core | common.v1 + registry.v1 + replication.v1 + **projection.v1** | 4.x | Java 25 |
-| artemis-discovery-core | common.v1 + discovery.v1 + projection.v1 | 4.x | Java 25 |
-| artemis-management-core | common.v1 + management.v1 + registry.v1（读注册表视图） | 4.x | Java 25 |
+| artemis-common | **common.v1 + projection.v1（服务端共享，各 core 依赖）** | 4.x | Java 25 |
+| artemis-registry-core | registry.v1 + replication.v1 | 4.x | Java 25 |
+| artemis-discovery-core | discovery.v1 | 4.x | Java 25 |
+| artemis-management-core | management.v1 + registry.v1（读注册表视图） | 4.x | Java 25 |
 | artemis-client | common.v1 + registry.v1 + discovery.v1 | **3.25.x** | Java 8 |
 | Rust registry（v1.x） | common.v1 + registry.v1 + replication.v1 + projection.v1 | prost/tonic 构建锁定（v1.x 定基线） | — |
 
-**每个 Java 消费模块都生成 common.v1**：被各组 import 的公共消息随该模块的生成范围一起产出（模块间不共享生成类，见下）。registry-core 含 projection.v1 是因为 registry 是分发流（registry → discovery 订阅 + 快照 bootstrap）的**服务端**。
+**服务端 common.v1 与 projection.v1 统一生成于 artemis-common**（common 定案 2026-10-11；projection 定案 2026-10-12）：被各组 import 的公共消息在服务端只生成一份，各 core 经 Maven 依赖共用——单 artifact 单 FQCN，服务端模块间可直接传递。projection.v1 归 artemis-common 是因 registry-core 与 discovery-core 均消费（分发流服务端与投影消费端），双生成同 FQCN 会在 v0.3 all-in-one 同 JVM classpath 加载序碰撞。client 独立于服务端（enforcer 禁依赖 + protoc/runtime 分叉），自生成 common+registry+discovery。其余各组仍在多模块各自生成（如 registry.v1 见 registry-core 与 management-core，同 FQCN 异 artifact），跨模块只走 wire（开发规范 §1）。
 
 要点：
 
 - **公共数据模型消息**（Instance、ServiceInstances 等）定义在 `proto/common/v1/`，各组 proto import 之；import 方向永远「内部协议 → 共享」，不出现环。
-- **客户端用 protoc 3.25.x 生成、服务端用 4.x 生成**：3.25 生成代码在 protobuf runtime ≥ 3.25（含 4.x）的宿主上均可运行（protobuf 官方政策：runtime 版本须 ≥ gencode 版本，老 runtime 不在支持范围），这是「各自生成」模型的直接红利——共享 artifact 方案无法两端分叉 protoc 版本。
-- 同一 proto 组会在多个模块生成同 FQCN 的类（如 registry.v1 在 core 与 client 各一份）。**跨模块只走 wire 协议，绝不在模块边界传递 proto 消息类**（纪律见开发规范 §1）。
-- 插件对 JDK 25 + protoc 4.x/3.25 + grpc-java 组合的支持、跨模块 proto import 与 `protoSourceRoot` 相对路径（`../../proto/<组>`）的具体配置，均在脚手架阶段一并验证；跨仓库复用需求出现时再升级为 proto-sources 依赖机制。
+- **客户端用 protoc 3.25.x 生成、服务端用 4.x 生成**：3.25 生成代码的宿主 runtime 支持窗口为 **3.25.x–4.x**（protobuf 官方政策是双侧窗口：gencode V 仅保证 runtime V 与 V+1；≥ V+2 在 class-init 时 poison-pill 硬失败——宿主 protobuf 5.x 与 < 3.25 同列不支持场景），这是「各自生成」模型的直接红利——共享 artifact 方案无法两端分叉 protoc 版本。
+- 同一 proto 组会在多个模块生成同 FQCN 的类（如 registry.v1 在 core 与 client 各一份）；跨模块传递边界纪律见开发规范 §1。
+- 插件对 JDK 25 + protoc 4.x/3.25 + grpc-java 组合的支持、跨模块 proto import 与 `sourceDirectories` 单 root + includes 的具体配置，均在脚手架阶段一并验证；跨仓库复用需求出现时再升级为 proto-sources 依赖机制。
 
 ### 2.3 依赖硬约束
 
@@ -86,11 +87,11 @@ Java 各消费模块从仓库顶层 `proto/`（组织与治理见[proto 契约�
 | 3 | 语言运行时 | GC | 默认 G1 | 服务端 | ZGC 大堆选项留 v1.0 压测后定 |
 | 4 | 构建 | 构建系统 | Maven 3.9.x | java/ 单 reactor | Maven 4 成熟后评估 |
 | 5 | 构建 | 依赖治理 | maven-enforcer-plugin + flatten-maven-plugin | java/ reactor | enforcer：Java/Maven 版本、依赖上界（requireUpperBoundDeps）、core 禁 Spring 与 client 禁服务端模块（§2.3）；flatten：`${revision}` 落库（§2.3） |
-| 6 | 构建 | proto 生成 | protobuf-maven-plugin（**ascopes**）+ protoc + grpc-java 插件 | 各消费模块 | xolstice 已于 2025-04 archived，其 README 推荐 ascopes 为后继；`protoSourceRoot` 相对路径，按 §2.2 生成矩阵 |
+| 6 | 构建 | proto 生成 | protobuf-maven-plugin（**ascopes**）+ protoc + grpc-java 插件 | 各消费模块 | xolstice 已于 2025-04 archived，其 README 推荐 ascopes 为后继；`sourceDirectories` 相对路径，按 §2.2 生成矩阵 |
 | 7 | 框架 | 应用框架 | Spring Boot 4.1.x | 仅各 server 模块 | DI、配置绑定、MVC、actuator；不出现在 core/client classpath |
 | 8 | 通信 | RPC 框架 | grpc-java 1.7x | 服务端 grpc-netty；client grpc-netty-shaded | 五通道全 gRPC；client shaded 隔离宿主 netty |
 | 9 | 通信 | 序列化（服务端） | protobuf-java 4.x | 服务端 proto 消息 + 服务端快照文件格式 | 快照 = proto 二进制 + 版本头，不自研格式 |
-| 10 | 通信 | 序列化（client） | protobuf-java **3.25.x**（protoc 3.25 生成） | artemis-client | 宿主 3.25+/4.x runtime 双兼容，见 §5 |
+| 10 | 通信 | 序列化（client） | protobuf-java **3.25.x**（protoc 3.25 生成） | artemis-client | 宿主 runtime 窗口 3.25.x–4.x，见 §5 |
 | 11 | HTTP | HTTP 辅助通道 | Spring MVC（SB 内置） | server 模块 | 外部 HTTP 辅助端点 + console REST；不引 WebFlux |
 | 12 | 代码简化 | Lombok | 1.18.x | java/ reactor | `provided` scope，不传递给 SDK 使用方 |
 | 31 | 配置管理 | SCF（Spark Configuration Framework） | `org.mydotey.scf:scf-bom` 1.6.x（scf-core + scf-simple） | java/ reactor（含 client） | manager / sources / property 三层抽象，与具体配置源解耦；原产品同栈（Maven Central 在库）；Java 8 目标两端通用，传递闭包仅 scf-core + lang-extension + slf4j-api；动静分型与合规校验规范见[开发规范](coding-guidelines-java.md) §10 |
@@ -123,9 +124,9 @@ Java 各消费模块从仓库顶层 `proto/`（组织与治理见[proto 契约�
 
 原产品内核零 Spring 是组件层既成事实（能力基线 §1–§2：artemis-common 为零 Spring 基础库；非 §5 资产清单条目，此处延续实践而非引用资产编号）。本设计将 core 与 server 拆为独立模块，用 enforcer `bannedDependencies` 硬约束而非包约定——依赖检查在构建期失败，比 review/ArchUnit 可靠。该边界同时为 v1.x Rust 对照实现划出清晰内核范围。
 
-### 4.2 proto 纯契约目录（不生成共享 artifact）
+### 4.2 proto 纯契约目录（语言无关，按端生成）
 
-契约定义为**文件目录而非 Java artifact**：任何语言（Java/Rust/Go）直接从 .proto 文件生成，各端编译版本与 protoc 版本自由（client Java 8 + protoc 3.25，服务端 Java 25 + protoc 4.x）。代价是同一 proto 组多端各生成一份同 FQCN 类，以「跨模块只走 wire」纪律消解。多语言路线（Rust 混合集群、Go/Rust SDK）下这是最干净的模型，etcd 等项目同路线。
+契约定义为**文件目录而非 Maven 模块**：任何语言（Java/Rust/Go）直接从 .proto 文件生成，各端编译版本与 protoc 版本自由（client Java 8 + protoc 3.25，服务端 Java 25 + protoc 4.x）。Java 服务端内部以 artemis-common 集中生成 common.v1 与 projection.v1 消除服务端重复（§2.2）；其余组多端各生成一份同 FQCN 类，以「跨模块只走 wire」纪律消解。多语言路线（Rust 混合集群、Go/Rust SDK）下这是最干净的模型，etcd 等项目同路线。
 
 ### 4.3 client 用 grpc-netty-shaded
 
@@ -147,7 +148,7 @@ shaded 版将 netty 重打包进 `io.grpc.netty.shaded.*` 命名空间，与宿�
 | 组件 | 对宿主影响 | 结论 |
 |---|---|---|
 | netty | grpc-netty-shaded 命名空间隔离 | **零影响**（任意宿主 netty 版本） |
-| protobuf | client 用 3.25 生成代码，宿主 runtime ≥ 3.25（含 4.x）均可运行（protobuf 政策：runtime 须 ≥ gencode） | 宿主 protobuf < 3.25 属不支持场景，文档声明 |
+| protobuf | client 用 3.25 生成代码，宿主 runtime 支持窗口 3.25.x–4.x（protobuf 政策为双侧窗口：gencode V 仅保证 runtime V/V+1） | 宿主 protobuf < 3.25 或 ≥ 5.x 属不支持场景，文档声明 |
 | grpc | 宿主自用 grpc 时 classpath 调解只留一个版本 | 无法根除；grpc stub API 高度稳定，实践中风险低，声明支持的宿主 grpc 下限 |
 | guava/perfmark | grpc-java 传递依赖，不 shaded | 理论冲突源；grpc 使用 guava API 子集极窄，业内普遍接受，标注即可 |
 
@@ -164,6 +165,10 @@ shaded 版将 netty 重打包进 `io.grpc.netty.shaded.*` 命名空间，与宿�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.8 | 2026-10-12 | 脚手架实测修正：§2.2 与 #6 的 `protoSourceRoot`（xolstice 旧参数）改为 ascopes 实际参数 `sourceDirectories`（误用会被静默忽略致生成失败） |
+| 1.7 | 2026-10-12 | code-review 修复：生成矩阵 projection.v1 归 artemis-common（v0.3 all-in-one classpath 去重）；protobuf 宿主窗口改双侧 3.25.x–4.x（gencode V 仅保证 runtime V/V+1）；§2.2 重复规则句去重 |
+| 1.6 | 2026-10-12 | review 修复：§2.2 引言与要点对齐生成矩阵（protoSourceRoot 单 root + includes；同源 artifact 边界） |
+| 1.5 | 2026-10-11 | review 定案：proto 生成模型 server/client 分治——§2.2 生成矩阵调整（common.v1 移至 artemis-common 服务端共享，各 core 不再自生成）、§4.2 理由与代价表述更新 |
 | 1.4 | 2026-10-10 | review 修复：组件表范围随 monorepo 更正（#4/#5/#12/#20/#23–26/#31 的「全仓/全项目」→「java/ reactor」）；#27 CI 改按路径触发口径（与 .claude/rules/project.md 一致）；§2.1 代码块补 text 标注、rust/ 注明 v1.x 才创建；§2.2 开头与 §4.2 去重（仓库布局事实归 §2.1，契约治理归 proto 契约规范） |
 | 1.3 | 2026-10-10 | 多语言 monorepo 定案：§2.1 改为仓库布局（顶层 `proto/` 契约 + `java/` reactor + `rust/` v1.x），`artemis-proto` Maven 模块（packaging=pom）取消、契约目录提升仓库顶层；proto 引用路径改 `../../proto/<组>`；wire 兼容规则上移至新增的 proto 契约规范（跨语言单一来源） |
 | 1.2 | 2026-10-10 | 新增配置管理选型 SCF（#31）：三层解耦、动静分型、RangeValueFilter/TypeConverter 校验（§4.5）；client 依赖纪律与 v0.1 依赖面同步；组件表编号改为稳定 ID 不重排 |

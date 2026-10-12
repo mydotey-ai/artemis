@@ -1,0 +1,88 @@
+syntax = "proto3";
+package artemis.registry.v1;
+import "common/v1/model.proto";
+option java_package = "org.mydotey.ai.artemis.proto.registry.v1";
+option java_multiple_files = true;
+
+// ---- 心跳：进程级全量实例集上报（逐实例续约 + 缺席自动注册） ----
+
+message HeartbeatRequest {
+  // 全量实例集：SDK 进程持有的全部服务实例，幂等上报；
+  // 逐实例处理：续约 + 缺席自动注册（upsert）；不做集合 diff——
+  // 上报中缺席的实例不摘除，由租约 TTL 过期清理最终一致
+  repeated artemis.common.v1.ServiceInstances services = 1;
+  // 心跳序号：客户端进程内单调递增（重启可重置），ack 原样回填——
+  // gRPC bidi 不保证 1:1 响应（服务端可合并 ack），seq 使 ack 可归属、丢 ack 可检测；
+  // SDK 不阻塞等待特定 seq 的 ack（超时即重发，全量幂等上报自愈）
+  int64 seq = 2;
+}
+
+message HeartbeatResponse {
+  artemis.common.v1.ResponseStatus status = 1;
+  HeartbeatResponseData data = 2;
+}
+
+// ---- 显式实例操作：批量 + 部分失败语义（批量贯穿资产 #11） ----
+
+// 注册：无条件覆盖（幂等）
+message RegisterRequest {
+  repeated artemis.common.v1.ServiceInstances services = 1;
+}
+
+// 反注册：意图语义——目标缺席即目标状态已达成（幂等成功）
+message DeregisterRequest {
+  repeated artemis.common.v1.InstanceKey instances = 1;
+}
+
+// 更新：幂等 upsert——已存在则全量覆盖（非字段 patch），不存在则自动注册
+message UpdateRequest {
+  repeated artemis.common.v1.ServiceInstances services = 1;
+}
+
+// Response 统一规范：status + data。proto 无泛型——「泛型 T」以约定落地：
+// 每个 Response 固定两字段，data 类型命名 XxxResponseData（T 的具体化），
+// 独立定义独立演化；请求结构在 data 中对齐体现（service 单位请求 → service 分组明细）
+message RegisterResponse {
+  artemis.common.v1.ResponseStatus status = 1;
+  RegisterResponseData data = 2;
+}
+
+message DeregisterResponse {
+  artemis.common.v1.ResponseStatus status = 1;
+  DeregisterResponseData data = 2;
+}
+
+message UpdateResponse {
+  artemis.common.v1.ResponseStatus status = 1;
+  UpdateResponseData data = 2;
+}
+
+message HeartbeatResponseData {
+  int64 server_time_ms = 1;            // ack 基准时间，租约语义 phase-2 细化
+  int64 seq = 2;                       // echo 对应 HeartbeatRequest.seq
+}
+
+// 注册：失败明细按 service 分组，与请求结构对齐
+message RegisterResponseData {
+  repeated artemis.common.v1.ServiceInstanceErrors services = 1;
+}
+
+// 反注册：请求为实例键平铺，失败明细同为平铺
+message DeregisterResponseData {
+  repeated artemis.common.v1.InstanceError instances = 1;
+}
+
+// 更新：失败明细按 service 分组，与请求结构对齐
+message UpdateResponseData {
+  repeated artemis.common.v1.ServiceInstanceErrors services = 1;
+}
+
+service RegistryService {
+  // bidi-stream：每条心跳经 seq 关联 ack（gRPC 双向流承载心跳，架构 §2.2）；
+  // 流断开 = 租约进入倒计时
+  rpc Heartbeat(stream HeartbeatRequest) returns (stream HeartbeatResponse);
+  // 显式操作：unary，同步语义
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Deregister(DeregisterRequest) returns (DeregisterResponse);
+  rpc Update(UpdateRequest) returns (UpdateResponse);
+}

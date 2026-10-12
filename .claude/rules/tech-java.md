@@ -14,11 +14,11 @@
 - core 模块禁 `org.springframework:*`，内核不感知 Spring 类型与配置抽象。
 - client 禁依赖 artemis-common 与各 `*-core`/`*-server`；运行时依赖封闭清单：grpc-netty-shaded + grpc-stub + grpc-protobuf + scf-simple + SLF4J API（精确版本见技术选型组件总表）。
 - **新增任何依赖组件须先进 `docs/dev/tech-stack-java.md` 组件总表（评审）再进 pom**。
-- 跨模块只走 wire 协议序列化，不在模块边界传递 proto 生成类。
+- 跨模块传递 proto 生成类以同源 artifact 为界：服务端 common.v1 与 projection.v1 统一生成于 artemis-common，服务端模块间可直传；其余多模块各自生成的组（同 FQCN 异 artifact）与跨进程边界只走 wire 序列化。
 
 ## proto
 
-- 契约在仓库顶层 `proto/`，各模块从 `../../proto/<组>` 文件级引用各自生成（client 用 protoc 3.25.x，服务端用 4.x）；wire 兼容与变更流程见 `docs/dev/proto-contract.md`（跨语言单一来源）。
+- 契约在仓库顶层 `proto/`，各模块以单 `sourceDirectories` 指向 `../../proto` + includes 矩阵圈定各自生成组（client 用 protoc 3.25.x，服务端用 4.x，矩阵见 `docs/dev/tech-stack-java.md` §2.2）；wire 兼容与变更流程见 `docs/dev/proto-contract.md`（跨语言单一来源）。
 - proto 生成的消息类永不加 Lombok。
 
 ## 代码约束

@@ -20,13 +20,27 @@
 
 ## 当前 phase 步骤进度
 
-（无 in-progress phase）
+| 步骤 | 状态 | 备注 |
+|---|---|---|
+| worktree 开工 | — | |
+| 上下文加载 | — | |
+| 设计 | — | |
+| 实现 | — | |
+| 测试 | — | |
+| code-review | — | |
+| fix | — | |
+| 回归测试 | — | |
+| 验证（人工） | — | |
+| 文档同步 | — | |
+| 完工 | — | |
+
+步骤状态枚举：pending | in-progress | done | skipped。
 
 ## phase 总览（当前版本，版本 done 后清空；只记状态，主题/工作量以 plan 为准）
 
 | phase | 状态 |
 |---|---|
-| phase-1-scaffold | planned |
+| phase-1-scaffold | done |
 | phase-2-heartbeat | planned |
 | phase-3-protect-snapshot | planned |
 | phase-4-server-assembly | planned |

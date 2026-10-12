@@ -15,3 +15,6 @@
 | [adr-009-security-by-default.md](adr-009-security-by-default.md) | Accepted | D9：安全内建（v0.1 默认认证） |
 | [adr-010-namespace-day-one.md](adr-010-namespace-day-one.md) | Accepted | D10：namespace 进 v0.1 数据模型 |
 | [adr-011-monorepo-top-level-proto.md](adr-011-monorepo-top-level-proto.md) | Accepted | D11：多语言 monorepo，契约居仓库顶层 proto/ 纯目录 |
+| [adr-012-explicit-registration-ops.md](adr-012-explicit-registration-ops.md) | Accepted | D12：注册模型显式四操作化（显式操作 + 心跳全量上报续约/补注册） |
+| [adr-013-group-as-instance-metadata.md](adr-013-group-as-instance-metadata.md) | Accepted | D13：分组退出数据模型（以实例 metadata 元素表达） |
+| [adr-014-cluster-out-of-service-key.md](adr-014-cluster-out-of-service-key.md) | Accepted | D14：cluster 不进 ServiceKey（来源标识在投影边界注入） |

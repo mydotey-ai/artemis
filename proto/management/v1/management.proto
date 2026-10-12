@@ -1,0 +1,6 @@
+syntax = "proto3";
+package artemis.management.v1;
+option java_package = "org.mydotey.ai.artemis.proto.management.v1";
+option java_multiple_files = true;
+
+// v0.1 占位：治理面契约随期 2（v0.5）演进，不受数据面冻结约束（proto-contract.md §2）。

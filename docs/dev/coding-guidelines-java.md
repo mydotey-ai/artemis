@@ -1,6 +1,6 @@
 # Java 开发规范
 
-版本: 1.4    更新时间: 2026-10-10
+版本: 1.7    更新时间: 2026-10-12
 
 > 本文是新一代 Artemis Java 实现的开发规范：包结构、代码风格、并发与线程、错误处理、日志、测试、proto 兼容、SDK 特殊约束与配置管理。技术选型（组件与版本）见[Java 技术选型](tech-stack-java.md)；Git 分支与 commit 规范见 `.claude/rules/git.md`，不在此重复。
 
@@ -8,7 +8,7 @@
 
 模块划分与 proto 生成矩阵以[技术选型](tech-stack-java.md) §2 为准，此处固化执行纪律：
 
-- **跨模块只走 wire 协议，绝不在模块边界传递 proto 消息类**——同一 proto 组在多模块生成的类是不同 artifact 的同名类，二进制不共享；模块间数据交换一律序列化。
+- **跨模块传递 proto 生成类以同源 artifact 为界**——服务端 common.v1 与 projection.v1 统一生成于 artemis-common，服务端模块间可直接共用；其余多模块各自生成的组（同 FQCN 异 artifact，如 registry.v1 在 registry-core 与 management-core 各一份）与一切跨进程边界，只走 wire 序列化、不传递生成类。
 - **client（artemis-client）不得依赖任何服务端模块**（core/server/common），仅从仓库顶层 `proto/` 目录引用 .proto 文件自行生成。
 - **core 模块禁 Spring**（enforcer 强制）：内核不感知 Spring 类型、不读 Spring 配置抽象；配置经普通 Java 配置类注入。
 - 服务实现类放 server 模块（实现 core 定义的接口/ proto `ImplBase`），core 只含内核逻辑与契约。
@@ -44,7 +44,7 @@ org.mydotey.ai.artemis.registry
 
 ### 4.1 注册表数据结构
 
-- **不可变快照 + volatile 发布**：service 实例集的当前版本是不可变对象（内部结构构建完成后不再修改），经 `volatile` 引用发布；读侧无锁拿引用（订阅推送直接持有引用，零深克隆——修复原产品局限 #13「getService 深克隆」）；写侧（心跳 diff）构建新快照后整体替换。
+- **不可变快照 + volatile 发布**：service 实例集的当前版本是不可变对象（内部结构构建完成后不再修改），经 `volatile` 引用发布；读侧无锁拿引用（订阅推送直接持有引用，零深克隆——修复原产品局限 #13「getService 深克隆」）；写侧（显式操作/心跳 upsert 产生变更）构建新快照后整体替换。
 - 禁止在读路径加锁、禁止 `Collections.unmodifiableXxx` 包装可变底层后继续写底层（假不可变）。
 - 聚合统计（自我保护窗口计数）用 `LongAdder`/并发队列，不用 `AtomicLong` 高频自旋。
 
@@ -63,7 +63,7 @@ org.mydotey.ai.artemis.registry
 
 ## 5. 错误处理
 
-- **错误码驱动容错**（继承资产 #3）：错误码是 api 包内的 enum，稳定编号；每类错误映射固定 gRPC status（`NOT_FOUND`/`FAILED_PRECONDITION`/`RESOURCE_EXHAUSTED`/`UNAVAILABLE`/…），映射表集中定义，客户端按错误码 + status 双维度决策容灾。
+- **错误码驱动容错**（继承资产 #3）：错误码为契约注册表内稳定 string code（wire 走 `ErrorInfo` 消息，单一来源见[proto 契约规范](proto-contract.md) §2）；语言内在 api 包封装常量/枚举，未知码保留原样字符串（SDK 可映射本地 UNKNOWN）；整体性失败（不可进入业务处理）走 gRPC status（`NOT_FOUND`/`FAILED_PRECONDITION`/`RESOURCE_EXHAUSTED`/`UNAVAILABLE`/…），映射表集中定义，客户端按错误码 + status 双维度决策容灾。
 - 内核不吞异常：捕获必须记录日志并携带上下文（service、instance 标识），转错误码向上抛或计入指标；禁止空 catch。
 - 对外（SDK/console）错误一律错误码 + 可读 message，不泄露堆栈；堆栈只进日志。
 - 前置校验在信任边界（外部 API 入口）一次完成，内核不做重复防御。
@@ -78,7 +78,7 @@ org.mydotey.ai.artemis.registry
 ## 7. 测试规范
 
 - 命名：`XxxTest`（单测）、`XxxIT`（集成）；测试方法 `should_<期望>_when_<条件>`。
-- 单测覆盖核心机制：租约状态机、心跳 diff/扇出、自我保护窗口、快照回放、投影合并、过滤器链——这些是 10 万实例正确性的根，必须测；不为覆盖率数字写空转测试。
+- 单测覆盖核心机制：租约状态机、心跳续约/缺席补注册（upsert）与变更扇出、自我保护窗口、快照回放、投影合并、过滤器链——这些是 10 万实例正确性的根，必须测；不为覆盖率数字写空转测试。
 - 集群语义测试用**进程内多实例**（随机端口组集群），不起容器；Testcontainers 只用于期 3 DB 与 v1.0 K8s 验收。
 - 每个版本的验收要点（路线图各版本末条）须有对应可执行测试，随版本一起交付。
 - 测试代码同样过 Spotless/Checkstyle；测试里允许 `@Data` 等 Lombok 简化。
@@ -133,6 +133,9 @@ proto 的 wire 兼容规则与变更流程是**跨语言不变量**，单一来�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.7 | 2026-10-12 | code-review 修复：§4/§7 清除「心跳 diff」残留（upsert 变更语义）；§1 projection.v1 入 artemis-common 共享；§5 错误码 wire 消息名 Error→ErrorInfo |
+| 1.6 | 2026-10-12 | §5 错误码模型对齐契约定案（string code 注册表 + api 包封装 + gRPC status 分工） |
+| 1.5 | 2026-10-11 | §1 proto 类跨模块边界改为「以同源 artifact 为界」：服务端 common.v1 经 artemis-common 共享可直传，其余组与跨进程只走 wire（随 proto 生成模型 server/client 分治定案） |
 | 1.4 | 2026-10-10 | review 修复：§3 构建命令补 `-f java/pom.xml`（根目录无 pom）；§8 删除「此处不复制」之后的规则复述与 §1 已有内容的重复条 |
 | 1.3 | 2026-10-10 | §8 wire 兼容规则与变更流程上移至 proto 契约规范（跨语言单一来源），本节收窄为 Java 生成代码纪律与 Java API 兼容；§1 契约目录引用改仓库顶层 `proto/` |
 | 1.2 | 2026-10-10 | 新增 §10 配置管理规范（SCF）：分层解耦、动态/静态分型纪律、合规校验（fail-fast 分级）；原 §10 版本规范顺移 §11；§9 依赖清单补 SCF |

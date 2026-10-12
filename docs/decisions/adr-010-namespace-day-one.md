@@ -1,6 +1,6 @@
 # ADR-010：namespace 进 v0.1 数据模型
 
-版本: 1.0    更新时间: 2026-10-10
+版本: 1.1    更新时间: 2026-10-12
 
 ## 状态
 
@@ -24,11 +24,12 @@ namespace 字段进入 v0.1 的 proto 公共数据模型（`common.v1`）。
 
 ## 后果
 
-- discovery 投影/查询按 `(cluster, namespace, service, group)` 组织。
+- discovery 投影/查询按 `(cluster, namespace, service)` 组织（分组以实例 metadata 表达，见 adr-013）。
 - v0.1 即支持按 namespace 的选择器过滤（聚合语义本地合并）。
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-12 | code-review 修复：后果中投影组织 tuple 去 group（对齐 D13 分组退出数据模型） |
 | 1.0 | 2026-10-10 | 自架构文档 §7 决策表 D10 迁移成文 |

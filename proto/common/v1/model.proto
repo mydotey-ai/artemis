@@ -1,0 +1,78 @@
+syntax = "proto3";
+package artemis.common.v1;
+option java_package = "org.mydotey.ai.artemis.proto.common.v1";
+option java_multiple_files = true;
+
+// 服务标识：namespace 多租户隔离（D10）。
+// 分组不进数据模型：需要时以 metadata 元素表达（如 metadata["group"]），
+// 治理分组路由按 metadata 选择器过滤（定案 2026-10-12）
+message ServiceKey {
+  string namespace = 1;
+  string service = 2;
+}
+
+// 实例标识：定位单个实例（deregister/update 的操作目标）
+message InstanceKey {
+  ServiceKey service = 1;
+  string instance_id = 2;
+}
+
+// 实例状态：客户端自报（服务端不做主动探测，架构 §4.2 哲学）；
+// 未设置（UNSPECIFIED）语义等同 UP；客户端对不能识别的值统一映射 INSTANCE_STATUS_UNKNOWN
+enum InstanceStatus {
+  INSTANCE_STATUS_UNSPECIFIED = 0;     // 未设置，语义同 UP
+  INSTANCE_STATUS_UNKNOWN = 1;         // 客户端无法识别（本地映射目标）
+  INSTANCE_STATUS_UP = 2;
+  INSTANCE_STATUS_DOWN = 3;
+}
+
+// 服务实例：由客户端上报（显式操作与心跳全量），服务端只存事实
+message Instance {
+  string instance_id = 1;
+  string host = 2;
+  int32 port = 3;
+  InstanceStatus status = 4;
+  int32 weight = 5;                    // LB 权重；≤ 0 等同未设置，入口归一为 100
+  map<string, string> metadata = 6;
+}
+
+// 单服务实例集：上报（操作与心跳）与推送的原子单元
+message ServiceInstances {
+  ServiceKey key = 1;
+  repeated Instance instances = 2;
+}
+
+// ---- 操作结果（各服务响应共用组件；Response 规范形式见 registry.v1） ----
+
+// 操作整体判定：二态——任一失败即 FAIL，失败明细与范围经 data 携带
+enum Ack {
+  ACK_SUCCESS = 0;                     // 成功（0 = 默认值；fail-open 有意取舍，同 gRPC OK=0，传输级异常由 gRPC status 兜底）
+  ACK_FAIL = 1;                        // 失败（含部分失败：逐实例明细见 data）
+}
+
+// 错误：code 为错误类型标识（契约注册表内稳定字符串，只增不改、永不重命名）；
+// message 人类可读排障描述，非状态码。
+// 命名 ErrorInfo 而非 Error：避开与 java.lang.Error 在通配 import 下的歧义
+message ErrorInfo {
+  string code = 1;
+  string message = 2;
+}
+
+// 实例级错误：批量操作部分失败明细（data 侧组件）
+message InstanceError {
+  InstanceKey instance = 1;
+  ErrorInfo error = 2;
+}
+
+// 服务对齐的错误分组：与 ServiceInstances 请求结构对齐（key + 逐实例失败明细）
+message ServiceInstanceErrors {
+  ServiceKey key = 1;
+  repeated InstanceError failed = 2;
+}
+
+// 操作结果状态：ack 整体判定 + error 失败错误（FAIL 时携带代表性错误，SUCCESS 不设；
+// 逐实例明细在 data）
+message ResponseStatus {
+  Ack ack = 1;
+  ErrorInfo error = 2;
+}

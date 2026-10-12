@@ -49,6 +49,7 @@
 - 分支命名 `{milestone}-phase<N>-{title}`（如 `v0.1-phase2-heartbeat`，git.md 分支命名表「开发工作流」行）；worktree 居 `.claude/worktrees/`，目录名与分支名一致。
 - **幂等**：开工前检测同名分支/worktree 是否已存在——已存在则采纳续用（以文件系统为准），补齐 state 登记后继续，不重建。
 - 建 worktree 前检查 `.gitignore` 是否含 `.claude/worktrees/`，未含则添加。
+- worktree 就绪后**会话即切入 worktree 内工作**：②–⑩ 的文件读写与命令一律在 worktree 目录执行，不从主工作区以绝对路径远程操作 worktree 文件；⑪ 完工删 worktree 时切回主工作区。
 - **产出**：分支 + worktree；**phase 设计文档骨架**（附录 B 模板）；`phases/README.md` 登记本 phase 两份文档。滚动细化的 phase 清单调整（拆分/新增）在本步同步更新 plan.md 与 dev-state phase 总览，随分支提交。
 
 ### ② 上下文加载（强制清单，缺一不可）
@@ -68,7 +69,9 @@
 - **phase 设计文档「产品设计」节**（附录 B）：行为、接口签名、数据结构与语义（接口为主，不含实现细节）。
 - **测试文档**（附录 C，`phases/phase-<N>-<name>-test.md`）：测试方案（形态与覆盖面）+ 用例清单（用例名、场景一句话、形态：单测 / 进程内多实例集群语义测试，guidelines §7）。
 
-**转换点（设计 review）**：两份制品产出后呈现给用户人工 review，**通过后方可进入 ④ 实现**；有修改意见则修订制品并再次呈现，直至通过。③ 的 done 以 review 通过为准——等待与修订期间 state 该行标 in-progress（备注「待人工 review」/「review 修订中」）。
+**转换点（设计 review）**：两份制品**先落盘**（写入 `phases/` 目录），用户对落盘文档人工 review 确认——不在 chat 摘要中确认，chat 只呈现文件路径与决策要点；**确认通过后方可进入 ④ 实现**；有修改意见则修订制品落盘并再次呈现路径，直至通过。③ 的 done 以 review 通过为准——等待与修订期间 state 该行标 in-progress（备注「待人工 review」/「review 修订中」）。
+
+**架构同步纪律**：review 定案的决策若变更架构文档（或 roadmap、proto 契约规范等）已记载的设计（机制、协议、数据模型、规则），须**同时修订对应原始文档**——重大决策同步新增 ADR 并登记架构 §7 总览表，不以「⑩ 记账」延后，避免架构文档与实际设计漂移；phase 设计文档的 review 定案节只记录决策与理由并指向已同步的文档，**每个定案 bullet 声明其触及的原始文档与同步落点**（review 通过以对照可查为前提，不靠记忆）；「决策理由」不复述原始文档规则本身（单一来源，防多副本漂移）。（④ 实现中出现同类变更同此纪律）
 
 ### ④ 实现
 
@@ -79,9 +82,11 @@
 
 ### ⑤ 测试 / ⑧ 回归测试
 
-`mvn -f java/pom.xml verify`（spotless + enforcer + 测试一体）。⑤ 为实现后首跑；⑧ 为 review 修复后的回归，结果记入测试文档「回归记录」节。失败即修，全绿才进下一步。
+测试经自动化测试入口 `java/scripts/dev-test.sh` 执行——作用：统一测试执行入口，三模式 unit（surefire `*Test` 单测）/ integration（failsafe `*IT` 集群语义测试）/ all（全量 verify：spotless + enforcer + 测试一体）。⑤/⑧ 以 **all** 模式执行（≡ `mvn -f java/pom.xml verify`）；⑤ 为实现后首跑，⑧ 为 review 修复后的回归，轮次与模式记入测试文档「回归记录」节。失败即修，全绿才进下一步。
 
-**产出**：verify 全绿；测试文档用例清单「结果」列更新。
+**脚本同步义务**：测试方案引入既有形态↔模式映射之外的新形态，或测试基础设施变化（插件、toolchains 等影响脚本命令）时，dev-test.sh 须同步更新——③ 设计在测试方案中明确扩展，④⑤ 实现随代码落地，脚本与测试制品不得漂移（如 phase-4 集群语义测试接入：failsafe 入 parent pom，integration 模式随之生效）。
+
+**产出**：dev-test.sh all 全绿；测试文档用例清单「结果」列更新。
 
 ### ⑥ /code-review max
 
@@ -105,7 +110,7 @@
 
 按 `.claude/rules/doc.md`「文档更新机制」执行。
 
-**产出**：API 变更 → `docs/api/` 对应文档；架构变更 → `docs/arch/` + **重大决策在 `docs/decisions/` 新增 ADR**（`adr-<序号>-<名称>.md`，一决策一文件）并登记架构 §7 总览表与 `decisions/README.md`；各级索引同步；**CLAUDE.md 若因本 phase 过时（构建命令、模块结构、当前状态——尤其 phase-1 脚手架）则同步更新**。变更清单登记于 phase 设计文档「文档同步」节。
+**产出**：**产品文档 `docs/product/artemis.md` 同步更新（必须步骤）——本 phase 交付的对外可见能力（产品定位、核心概念、操作语义、配置与使用等）落入产品文档，与开发进度同步递补；文档不存在则首个收尾的 phase 建立**；API 变更 → `docs/api/` 对应文档；架构变更 → `docs/arch/` + **重大决策在 `docs/decisions/` 新增 ADR**（`adr-<序号>-<名称>.md`，一决策一文件）并登记架构 §7 总览表与 `decisions/README.md`；各级索引同步；**CLAUDE.md 若因本 phase 过时（构建命令、模块结构、当前状态——尤其 phase-1 脚手架）则同步更新**。变更清单登记于 phase 设计文档「文档同步」节。
 
 ### ⑪ 完工
 
@@ -189,7 +194,7 @@ java/ 模块与 proto 组。
 
 ## 文档同步（⑩ 填）
 
-变更文档清单。
+变更文档清单；产品文档 `docs/product/artemis.md` 本 phase 增量为必含项（规则见 ⑩），review 定案触及的原始文档逐条登记同步落点。
 
 ## 更新历史
 
@@ -207,7 +212,7 @@ java/ 模块与 proto 组。
 
 ## 测试方案
 
-形态（单测 / 进程内多实例集群语义测试）与覆盖面说明。
+形态（单测 / 进程内多实例集群语义测试）与覆盖面说明。执行入口 `java/scripts/dev-test.sh`（模式定义与形态↔模式映射见 ⑤ 节，此处不复制）；用例形态超出既有映射时，须在本节设计 dev-test.sh 的模式扩展，实现（④⑤）同步落地。
 
 ## 用例清单
 
@@ -220,10 +225,10 @@ java/ 模块与 proto 组。
 | # | 命令 / 步骤 | 预期 | 结论 |
 |---|---|---|---|
 
-## 回归记录（⑧ 填）
+## 回归记录（⑧ 填，经 dev-test.sh）
 
-| 轮次 | 范围 | 结果 |
-|---|---|---|
+| 轮次 | 模式 | 范围 | 结果 |
+|---|---|---|---|
 
 ## 更新历史
 

@@ -1,0 +1,7 @@
+syntax = "proto3";
+package artemis.replication.v1;
+option java_package = "org.mydotey.ai.artemis.proto.replication.v1";
+option java_multiple_files = true;
+
+// v0.1 占位：对等复制协议契约随 phase-3（自我保护/快照）前后定稿，
+// 组织与冻结范围见 proto-contract.md §1–§2。
