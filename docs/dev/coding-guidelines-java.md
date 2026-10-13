@@ -1,6 +1,6 @@
 # Java 开发规范
 
-版本: 1.7    更新时间: 2026-10-12
+版本: 1.8    更新时间: 2026-10-12
 
 > 本文是新一代 Artemis Java 实现的开发规范：包结构、代码风格、并发与线程、错误处理、日志、测试、proto 兼容、SDK 特殊约束与配置管理。技术选型（组件与版本）见[Java 技术选型](tech-stack-java.md)；Git 分支与 commit 规范见 `.claude/rules/git.md`，不在此重复。
 
@@ -12,6 +12,10 @@
 - **client（artemis-client）不得依赖任何服务端模块**（core/server/common），仅从仓库顶层 `proto/` 目录引用 .proto 文件自行生成。
 - **core 模块禁 Spring**（enforcer 强制）：内核不感知 Spring 类型、不读 Spring 配置抽象；配置经普通 Java 配置类注入。
 - 服务实现类放 server 模块（实现 core 定义的接口/ proto `ImplBase`），core 只含内核逻辑与契约。
+- **内部 RPC 通信领域层定义接口、infra 层提供实现**（双向）：
+  - **入站**：server 模块持有 gRPC/HTTP 端点（proto `ImplBase` 等），协议解析后委托 core 定义的领域接口。
+  - **出站**（peer 复制、registry→discovery 分发、discovery↔management 规则流等内部通道）：core 定义端口接口，gRPC client 实现（channel、stub、`StreamObserver`、重试/退避策略）放 server 模块。
+  - core 源码不 import `io.grpc.*`——传输技术与 Spring 同属装配层关注点，内核纯 Java（proto 消息类为 `com.google.protobuf` 系，不受此限）；接口方法签名可用 proto 消息类型，是否引入独立领域模型由各 phase 设计时定。proto 消息与 stub 仍在 core 单源生成（避免同 FQCN 异 artifact），core 只需不消费 stub 类型。
 
 ## 2. 包结构
 
@@ -133,6 +137,7 @@ proto 的 wire 兼容规则与变更流程是**跨语言不变量**，单一来�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.8 | 2026-10-12 | §1 新增内部 RPC 分层纪律：领域层（core）定义端口接口、infra（server）提供 gRPC 实现，core 源码禁 import `io.grpc.*`（入站/出站双向） |
 | 1.7 | 2026-10-12 | code-review 修复：§4/§7 清除「心跳 diff」残留（upsert 变更语义）；§1 projection.v1 入 artemis-common 共享；§5 错误码 wire 消息名 Error→ErrorInfo |
 | 1.6 | 2026-10-12 | §5 错误码模型对齐契约定案（string code 注册表 + api 包封装 + gRPC status 分工） |
 | 1.5 | 2026-10-11 | §1 proto 类跨模块边界改为「以同源 artifact 为界」：服务端 common.v1 经 artemis-common 共享可直传，其余组与跨进程只走 wire（随 proto 生成模型 server/client 分治定案） |
