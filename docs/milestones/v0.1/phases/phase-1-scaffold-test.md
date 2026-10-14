@@ -1,6 +1,6 @@
 # Phase 1 测试：Maven 脚手架 + proto 契约骨架
 
-版本: 1.10    更新时间: 2026-10-12
+版本: 1.11    更新时间: 2026-10-14
 
 ## 测试方案
 
@@ -33,9 +33,9 @@
 
 | # | 命令 / 步骤 | 预期 | 结论 |
 |---|---|---|---|
-| 1 | 在 `java/artemis-registry-core/pom.xml` 临时加 `org.springframework.boot:spring-boot-starter` 依赖 → `mvn -f java/pom.xml validate -pl artemis-registry-core` → 还原 | 构建失败，`bannedDependencies` 报 `org.springframework:*` | ✅ 通过：`Rule 0 BannedDependencies failed`，`spring-core/spring-context:7.0.9 banned` |
-| 2 | 在 `java/artemis-client/pom.xml` 临时加 `artemis-common` 依赖 → `mvn -f java/pom.xml validate -pl artemis-client` → 还原 | 构建失败，`bannedDependencies` 报 `org.mydotey.ai.artemis:artemis-common` | ✅ 通过（排除传递依赖后）：`Rule 0 BannedDependencies failed`，`artemis-common:0.1.0-SNAPSHOT banned`。附注：不排除传递时先撞 `requireUpperBoundDeps`（protobuf 4.36.2 vs 3.25.9）——同为构建失败，安全性未受损 |
-| 3 | `java/scripts/dev-test.sh unit` → `grep -o 'java.version" value="[^"]*"' java/artemis-client/target/surefire-reports/TEST-*.xml` | client 报告 `1.8.0_504`（toolchains fork JDK 8）；其余模块报告 `25.0.4` | ✅ 通过：client=`1.8.0_504`，artemis-common=`25.0.4` |
+| 1 | 在 `java/server/artemis-registry-core/pom.xml` 临时加 `org.springframework.boot:spring-boot-starter` 依赖 → `mvn -f java/pom.xml validate -pl artemis-registry-core` → 还原 | 构建失败，`bannedDependencies` 报 `org.springframework:*` | ✅ 通过：`Rule 0 BannedDependencies failed`，`spring-core/spring-context:7.0.9 banned` |
+| 2 | 在 `java/client/artemis-client/pom.xml` 临时加 `artemis-common` 依赖 → `mvn -f java/pom.xml validate -pl artemis-client` → 还原 | 构建失败，`bannedDependencies` 报 `org.mydotey.ai.artemis:artemis-common` | ✅ 通过（排除传递依赖后）：`Rule 0 BannedDependencies failed`，`artemis-common:0.1.0-SNAPSHOT banned`。附注：不排除传递时先撞 `requireUpperBoundDeps`（protobuf 4.36.2 vs 3.25.9）——同为构建失败，安全性未受损 |
+| 3 | `java/scripts/dev-test.sh unit` → `grep -o 'java.version" value="[^"]*"' java/client/artemis-client/target/surefire-reports/TEST-*.xml` | client 报告 `1.8.0_504`（toolchains fork JDK 8）；其余模块报告 `25.0.4` | ✅ 通过：client=`1.8.0_504`，artemis-common=`25.0.4` |
 | 4 | `mvn -f java/pom.xml process-resources -q` → `grep -c '\${revision}' java/.flattened-pom.xml java/*/.flattened-pom.xml` | 无 `${revision}` 残留；各 `.flattened-pom.xml` 的 `<version>` 为 `0.1.0-SNAPSHOT` | ✅ 通过：`${revision}` 占位符计数全 0；`<version>0.1.0-SNAPSHOT</version>`（`<revision>` property 定义保留、值已解析，正常） |
 | 5 | `for m in artemis-common artemis-registry-core artemis-discovery-core artemis-management-core artemis-client; do echo -n "$m: "; find java/$m/target/generated-sources -type d -path "*artemis/proto/*/v1" \| sed 's\|.*artemis/proto/\|\|;s\|/v1\|\|' \| sort -u \| tr '\n' ' '; echo; done` | common: `common projection`；registry-core: `registry replication`；discovery-core: `discovery`；management-core: `management registry`；client: `common discovery registry`（与 tech-stack §2.2 矩阵一致，不缺不多） | ✅ 通过：逐模块与矩阵完全一致 |
 | 6 | `java/scripts/dev-test.sh unit`；`… integration`；`… all`；`java/scripts/dev-test.sh bogus; echo exit=$?` | 前三者成功（integration 无 `*IT` 时亦成功）；`bogus` 打印 usage 且 `exit=2` | ✅ 通过：三模式均 `exit=0`；`bogus` 打印 usage、`exit=2`；多参数亦 `exit=2` |
@@ -51,6 +51,7 @@
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.11 | 2026-10-14 | 路径随 reactor 目录重组（server/client 分线）更新：enforcer 验证与 toolchains 检查三处（phase-2 第 2 轮 fix） |
 | 1.10 | 2026-10-12 | ⑨ 验证清单 6 项全部执行通过并记录结论 |
 | 1.9 | 2026-10-12 | ⑧ 回归记录两轮全绿；⑨ 验证清单就绪（6 项，待人工执行） |
 | 1.8 | 2026-10-12 | ⑤ 用例清单结果全量 pass（dev-test.sh all 全绿，client fork JDK 8 验证） |

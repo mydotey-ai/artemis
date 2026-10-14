@@ -1,6 +1,6 @@
 # 新一代 Artemis 架构设计
 
-版本: 1.11    更新时间: 2026-10-12
+版本: 1.16    更新时间: 2026-10-13
 
 > 本文是新一代 Artemis（重设计产品）的架构设计基线：总体架构、核心机制、技术栈策略与关键决策记录。产品定位与版本切分见 [产品规划与路线图](../product/artemis-next-roadmap.md)；设计输入来自 [原产品能力基线](../legacy/legacy-product-analysis.md)（§5 可继承资产 / §6 局限清单）与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -88,15 +88,29 @@ v1.0 起提供三种部署形态：
 | 客户端 SDK | 先 Java 8（照顾存量）+ Spring Boot starter；后 Go、Rust |
 | 通信 | 内部 gRPC；外部 gRPC + HTTP 双协议；内部/外部端口分离 |
 
+### 3.1 模块内分层与模型边界
+
+每个 core 模块按 **DDD 四层**组织，**领域层为核心**：
+
+| 层 | 物理落点 | 模型 |
+|---|---|---|
+| 接入层 | server 模块（http/gRPC 端点绑定、传输生命周期） | dto/vo（proto 生成消息） |
+| application（应用层） | core `application` 包（用例编排、校验/归一 + dto↔domain 转换） | 复用领域请求/响应模型（不另立模型） |
+| domain（领域层，核心） | core `domain` 包（领域模型 + 请求/响应 + 聚合/领域语义 + 端口接口） | 领域类型（record/枚举）+ `XxxRequest`/`XxxResponse` |
+| infrastructure（基础设施层） | core `infrastructure` 包 + server 内出站传输 | — |
+
+- 依赖方向单向指向领域，领域定义端口、基础设施实现、装配层注入（依赖倒置 + 控制反转）；dto 只出现在接入层与 application 的转换边界。
+- **分层定义、取舍与层间模型转换模式**（单一 mapper、MapStruct、wire 契约解耦）见 [ADR-015](../decisions/adr-015-layered-model-inside-core.md)；**执行纪律**（包结构、导入限制）见 [Java 开发规范](../dev/coding-guidelines-java.md) §1/§2；**组件与版本**见[技术选型](../dev/tech-stack-java.md) §4.6/§4.7。
+
 ## 4. 数据面核心机制
 
 ### 4.1 registry-service
 
-**注册模型：显式四操作 + 心跳全量上报（D12，资产 #1 继承演化）**：SDK 本地实例集为唯一事实源；register / deregister / update 显式操作先更新本地集再上报、服务端按语义处理（register 无条件覆盖发 NEW；deregister 意图幂等、不受自我保护拦截、发 DELETE；update 幂等 upsert——命中覆盖发 UPDATE，缺席按 NEW 建租约）；心跳 = 进程级全量实例集幂等上报（gRPC bidi-stream，逐条即时 ack）：逐实例**续约 + 缺席自动注册**（upsert，修复原产品「miss 报告 → 客户端补注册」跨网络环）；**不做集合 diff**——上报中缺席的实例不摘除，由租约 TTL 过期清理最终一致（与原产品消失方向语义一致）。register/update 丢失由心跳 upsert 即时自愈，deregister 丢失等 TTL；SDK 无需重试状态机。心跳消息率 ∝ 进程数而非实例数（批量贯穿资产）。事实权判定：**心跳连接在哪个节点，该 service 的事实就在哪个节点**。
+**注册模型：显式四操作 + 心跳全量上报（D12，资产 #1 继承演化）**：SDK 本地实例集为唯一事实源；register / deregister / update 显式操作先更新本地集再上报、服务端按语义处理（register 无条件覆盖发 NEW；deregister 意图幂等、不受自我保护拦截、发 DELETE；update 幂等 upsert——命中覆盖发 UPDATE，缺席按 NEW 建租约）；心跳 = 进程级全量实例集幂等上报（gRPC bidi-stream，逐条即时 ack）：逐实例**续约 + 缺席自动注册**（upsert，修复原产品「miss 报告 → 客户端补注册」跨网络环），**命中且内容变化 → 覆盖并发 UPDATE**（update 丢失的自愈路径；内容相同纯续约零事件）；**不做集合 diff**——上报中缺席的实例不摘除，由租约 TTL 过期清理最终一致（与原产品消失方向语义一致）。register/update 丢失由心跳 upsert 即时自愈，deregister 丢失等 TTL；SDK 无需重试状态机。心跳消息率 ∝ 进程数而非实例数（批量贯穿资产）。事实权判定：**心跳连接在哪个节点，该 service 的事实就在哪个节点**。
 
 **不做版本管理（明确决策）**：注册数据是动态临时数据，最终一致即可。全对全无 leader 下任何全局单调版本都需要协调（等价于引入共识），复杂度不值得。正确性由自愈链承担（见下）。
 
-**变更事件扇出**：四操作与心跳缺席补注册（upsert）产生的变更事件才扇出（稳态心跳 = 纯续约，零复制流量）；增量小报文（service 级变更）批量异步投递全部 peer；失败定向重试（指数退避 + 抖动）。全对全复制保留，负责制分片作为 v1.x 规模选项（20+ 节点）预留。
+**变更事件扇出**：四操作与心跳缺席补注册、内容变化覆盖（upsert）产生的变更事件才扇出（稳态心跳 = 纯续约，零复制流量）；增量小报文（service 级变更）批量异步投递全部 peer；失败定向重试（指数退避 + 抖动）。全对全复制保留，负责制分片作为 v1.x 规模选项（20+ 节点）预留。
 
 **丢失自愈链（无对账设计）**——「+实例 X」事件丢失后 peer 缺 X 的恢复路径：
 
@@ -196,9 +210,10 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 | D9 | 安全内建（v0.1 默认认证） | [adr-009](../decisions/adr-009-security-by-default.md) |
 | D10 | namespace 进 v0.1 数据模型 | [adr-010](../decisions/adr-010-namespace-day-one.md) |
 | D11 | 多语言 monorepo：契约居仓库顶层 `proto/` 纯目录 | [adr-011](../decisions/adr-011-monorepo-top-level-proto.md) |
-| D12 | 注册模型显式四操作化（显式操作 + 心跳全量上报续约/补注册） | [adr-012](../decisions/adr-012-explicit-registration-ops.md) |
+| D12 | 注册模型显式四操作化（显式操作 + 心跳全量上报续约/补注册/内容变化覆盖） | [adr-012](../decisions/adr-012-explicit-registration-ops.md) |
 | D13 | 分组退出数据模型（以实例 metadata 元素表达） | [adr-013](../decisions/adr-013-group-as-instance-metadata.md) |
 | D14 | cluster 不进 ServiceKey（来源标识在投影边界注入） | [adr-014](../decisions/adr-014-cluster-out-of-service-key.md) |
+| D15 | DDD 四层（接入层 server 承载 / application / domain / infrastructure，领域为核心）+ 层间模型转换 | [adr-015](../decisions/adr-015-layered-model-inside-core.md) |
 
 ## 8. 与原产品的对照（资产继承与局限修复）
 
@@ -208,7 +223,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 | 资产 | 处置 |
 |---|---|
-| #1 心跳即注册幂等对账 | 继承实质（本地集唯一事实源 + 全量幂等上报），形态演化为显式四操作 + 心跳逐实例续约/缺席补注册——不做集合 diff，缺席等 TTL（D12） |
+| #1 心跳即注册幂等对账 | 继承实质（本地集唯一事实源 + 全量幂等上报），形态演化为显式四操作 + 心跳逐实例续约/缺席补注册/内容变化覆盖——不做集合 diff，缺席等 TTL（D12） |
 | #2 三级地址容灾 | 继承 + TTL 轮换承担分布式对账新职责 |
 | #3 错误码驱动容错 | 继承（gRPC status 映射） |
 | #4 四级摘除级联 + 操作记录即状态 | 继承（期 3 持久化） |
@@ -236,6 +251,11 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.16 | 2026-10-13 | code-review 修复：§3.1 去弃用「adapter」命名、收敛为架构摘要 + 指针（定义归 ADR-015、执行归规范、组件归技术选型，消除多副本）；§7 D12 与 §8 资产 #1 补「内容变化覆盖」；gRPC starter 坐标更正 |
+| 1.15 | 2026-10-13 | §3.1 修订为 DDD 四层：接入层独立（server 承载，dto/vo 收发）、dto↔domain 转换归应用层（mapper 在 application）、基础设施层纯化为领域端口实现；登记集群内部通信端口先例（ADR-015 v1.3） |
+| 1.14 | 2026-10-13 | §4.1 心跳语义补「命中且内容变化 → 覆盖并发 UPDATE」（update 丢失自愈路径）；扇出表述同步含内容变化覆盖 |
+| 1.13 | 2026-10-12 | §3.1 修订为「领域为核心」三层（domain/application/infrastructure）：依赖单向指向领域、依赖倒置 + 控制反转、请求/响应模型归领域层 |
+| 1.12 | 2026-10-12 | v0.1 phase-2 设计 review 定案：新增 §3.1 模块内分层与模型边界（adapter/application/domain + 层间 mapper），§7 决策表登记 D15（ADR-015） |
 | 1.11 | 2026-10-12 | code-review 修复：全局清除「心跳 diff/对账」残留（§4.1 扇出、§7 D12、§8 资产 #1/#16-18）；§5.2 资源清单去 group；§2.2 生成矩阵内联副本改指针；错误码消息名 Error→ErrorInfo；新增 D13/D14（adr-013/adr-014） |
 | 1.10 | 2026-10-12 | §4.2 投影组织改 (cluster, namespace, service)、订阅选择器去 group、§5.2 分组路由标注 metadata 表达 |
 | 1.9 | 2026-10-12 | §4.1 心跳语义精化：逐实例续约 + 缺席自动注册（upsert），不做集合 diff、缺席等 TTL 最终一致 |

@@ -18,3 +18,4 @@
 | [adr-012-explicit-registration-ops.md](adr-012-explicit-registration-ops.md) | Accepted | D12：注册模型显式四操作化（显式操作 + 心跳全量上报续约/补注册） |
 | [adr-013-group-as-instance-metadata.md](adr-013-group-as-instance-metadata.md) | Accepted | D13：分组退出数据模型（以实例 metadata 元素表达） |
 | [adr-014-cluster-out-of-service-key.md](adr-014-cluster-out-of-service-key.md) | Accepted | D14：cluster 不进 ServiceKey（来源标识在投影边界注入） |
+| [adr-015-layered-model-inside-core.md](adr-015-layered-model-inside-core.md) | Accepted | D15：DDD 四层（接入层 server 承载 / application / domain / infrastructure）与层间模型转换 |

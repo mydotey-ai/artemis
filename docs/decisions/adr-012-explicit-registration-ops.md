@@ -1,6 +1,6 @@
 # ADR-012：注册模型显式四操作化
 
-版本: 1.2    更新时间: 2026-10-12
+版本: 1.3    更新时间: 2026-10-13
 
 ## 状态
 
@@ -12,7 +12,7 @@ Accepted（2026-10-11，v0.1 phase-1 契约设计 review 定案；变更架构 v
 
 ## 决策
 
-注册模型 = **显式四操作 + 心跳全量上报**：SDK 本地实例集保持唯一事实源，register / deregister / update 先更新本地集再上报、服务端按语义处理——register 无条件覆盖发 NEW；deregister 意图幂等（目标缺席即达成）、不受自我保护拦截、发 DELETE；update 幂等 upsert（命中覆盖发 UPDATE，缺席按 NEW 事件建租约）。心跳保持进程级全量实例集幂等上报（gRPC bidi-stream，逐条即时 ack）与复制：逐实例续约 + 缺席自动注册（upsert）；不做集合 diff，上报中缺席的实例由租约 TTL 过期清理最终一致。
+注册模型 = **显式四操作 + 心跳全量上报**：SDK 本地实例集保持唯一事实源，register / deregister / update 先更新本地集再上报、服务端按语义处理——register 无条件覆盖发 NEW；deregister 意图幂等（目标缺席即达成）、不受自我保护拦截、发 DELETE；update 幂等 upsert（命中覆盖发 UPDATE，缺席按 NEW 事件建租约）。心跳保持进程级全量实例集幂等上报（gRPC bidi-stream，逐条即时 ack）与复制：逐实例续约 + 缺席自动注册（upsert），命中且内容变化即覆盖并发 UPDATE（内容相同纯续约零事件）；不做集合 diff，上报中缺席的实例由租约 TTL 过期清理最终一致。
 
 ## 理由
 
@@ -29,12 +29,13 @@ Accepted（2026-10-11，v0.1 phase-1 契约设计 review 定案；变更架构 v
 
 - registry.v1 契约四 rpc（Heartbeat/Register/Deregister/Update），响应统一 status + data 规范（proto 契约规范 §2）。
 - deregister 不受自我保护拦截是显式重申的原产品边界（registry-lease-logic.md:205），自我保护实现须遵守。
-- v0.1 phase-2 内涵为四操作语义 + 心跳续约/缺席补注册（无集合 diff）+ 租约过期清理。
+- v0.1 phase-2 内涵为四操作语义 + 心跳续约/缺席补注册/内容变化覆盖（无集合 diff）+ 租约过期清理。
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.3 | 2026-10-13 | 心跳命中语义精化：内容变化即覆盖并发 UPDATE（update 丢失自愈路径），内容相同纯续约零事件 |
 | 1.2 | 2026-10-12 | 心跳语义精化：不做集合 diff，缺席自动注册 + TTL 最终一致 |
 | 1.1 | 2026-10-12 | 心跳 rpc 形态更正为 gRPC bidi-stream（逐条 ack） |
 | 1.0 | 2026-10-11 | v0.1 phase-1 设计 review 定案成文 |

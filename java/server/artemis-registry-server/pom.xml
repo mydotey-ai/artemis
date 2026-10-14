@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.mydotey.ai.artemis</groupId>
+    <artifactId>artemis-server-parent</artifactId>
+    <version>${revision}</version>
+  </parent>
+
+  <artifactId>artemis-registry-server</artifactId>
+  <description>registry 服务端 Spring Boot 装配：gRPC 接入层 + 端口注入（phase-4 递补 HTTP/认证/指标）</description>
+
+  <dependencyManagement>
+    <dependencies>
+      <!-- server 测试线随 SB 4.1 原生 JUnit 6（SpringExtension 依赖 6 的 Store API）；
+           全局默认 JUnit 5（Java 8 兼容线，client/starter/core） -->
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>${junit-server.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.mydotey.ai.artemis</groupId>
+      <artifactId>artemis-registry-core</artifactId>
+    </dependency>
+    <dependency>
+      <!-- 测试设施复用（MutableClock 等）-->
+      <groupId>org.mydotey.ai.artemis</groupId>
+      <artifactId>artemis-registry-core</artifactId>
+      <version>${revision}</version>
+      <type>test-jar</type>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter</artifactId>
+    </dependency>
+    <!-- Spring Boot 4.1 官方 gRPC 服务端（tech-stack #33）：@GrpcService 自动装配，
+         端口/传输/生命周期由 starter 管理，不自写 Server；版本随 SB BOM -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-grpc-server</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- IT 支持：随机端口注解与 in-process 传输（spring.grpc.server.port=0 + @LocalGrpcServerPort） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-grpc-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!-- failsafe 正式绑定（phase-2 起）：*IT 服务级集成测试进 verify 生命周期，
+           dev-test.sh integration|all 模式经此覆盖 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>integration-test</goal>
+              <goal>verify</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

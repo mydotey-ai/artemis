@@ -84,7 +84,7 @@
 
 测试经自动化测试入口 `java/scripts/dev-test.sh` 执行——作用：统一测试执行入口，三模式 unit（surefire `*Test` 单测）/ integration（failsafe `*IT` 集群语义测试）/ all（全量 verify：spotless + enforcer + 测试一体）。⑤/⑧ 以 **all** 模式执行（≡ `mvn -f java/pom.xml verify`）；⑤ 为实现后首跑，⑧ 为 review 修复后的回归，轮次与模式记入测试文档「回归记录」节。失败即修，全绿才进下一步。
 
-**脚本同步义务**：测试方案引入既有形态↔模式映射之外的新形态，或测试基础设施变化（插件、toolchains 等影响脚本命令）时，dev-test.sh 须同步更新——③ 设计在测试方案中明确扩展，④⑤ 实现随代码落地，脚本与测试制品不得漂移（如 phase-4 集群语义测试接入：failsafe 入 parent pom，integration 模式随之生效）。
+**脚本同步义务**：测试方案引入既有形态↔模式映射之外的新形态，或测试基础设施变化（插件、toolchains 等影响脚本命令）时，dev-test.sh 须同步更新——③ 设计在测试方案中明确扩展，④⑤ 实现随代码落地，脚本与测试制品不得漂移（如 phase-2 服务级集成测试接入：failsafe 入 parent pom，integration 模式随之生效）。
 
 **产出**：dev-test.sh all 全绿；测试文档用例清单「结果」列更新。
 

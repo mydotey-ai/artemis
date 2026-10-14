@@ -1,6 +1,6 @@
 # Java 开发规范
 
-版本: 1.8    更新时间: 2026-10-12
+版本: 1.14    更新时间: 2026-10-13
 
 > 本文是新一代 Artemis Java 实现的开发规范：包结构、代码风格、并发与线程、错误处理、日志、测试、proto 兼容、SDK 特殊约束与配置管理。技术选型（组件与版本）见[Java 技术选型](tech-stack-java.md)；Git 分支与 commit 规范见 `.claude/rules/git.md`，不在此重复。
 
@@ -11,25 +11,32 @@
 - **跨模块传递 proto 生成类以同源 artifact 为界**——服务端 common.v1 与 projection.v1 统一生成于 artemis-common，服务端模块间可直接共用；其余多模块各自生成的组（同 FQCN 异 artifact，如 registry.v1 在 registry-core 与 management-core 各一份）与一切跨进程边界，只走 wire 序列化、不传递生成类。
 - **client（artemis-client）不得依赖任何服务端模块**（core/server/common），仅从仓库顶层 `proto/` 目录引用 .proto 文件自行生成。
 - **core 模块禁 Spring**（enforcer 强制）：内核不感知 Spring 类型、不读 Spring 配置抽象；配置经普通 Java 配置类注入。
-- 服务实现类放 server 模块（实现 core 定义的接口/ proto `ImplBase`），core 只含内核逻辑与契约。
-- **内部 RPC 通信领域层定义接口、infra 层提供实现**（双向）：
-  - **入站**：server 模块持有 gRPC/HTTP 端点（proto `ImplBase` 等），协议解析后委托 core 定义的领域接口。
-  - **出站**（peer 复制、registry→discovery 分发、discovery↔management 规则流等内部通道）：core 定义端口接口，gRPC client 实现（channel、stub、`StreamObserver`、重试/退避策略）放 server 模块。
-  - core 源码不 import `io.grpc.*`——传输技术与 Spring 同属装配层关注点，内核纯 Java（proto 消息类为 `com.google.protobuf` 系，不受此限）；接口方法签名可用 proto 消息类型，是否引入独立领域模型由各 phase 设计时定。proto 消息与 stub 仍在 core 单源生成（避免同 FQCN 异 artifact），core 只需不消费 stub 类型。
+- 服务实现类放 server 模块（实现 core 定义的接口/ proto `ImplBase`），core 只含内核逻辑与契约；**gRPC 服务端用 Spring Boot 官方 starter**（`org.springframework.boot:spring-boot-starter-grpc-server` + `@GrpcService`）自动装配，**禁自写 `Server`/生命周期类**（见[技术选型](tech-stack-java.md) §4.7）。
+- **模块内 DDD 四层，领域为核心**（[ADR-015](../../decisions/adr-015-layered-model-inside-core.md)）：接入层（server 承载：协议接入，dto/vo 收发）→ 应用层（core `application`：用例编排 + dto↔domain 转换）→ 领域层（core `domain`）；基础设施层（core `infrastructure`）实现领域端口；`application`/`infrastructure` 依赖 `domain`，**domain 不依赖任何其它层**；领域定义端口、基础设施实现、装配层注入（依赖倒置 + 控制反转）。
+- **dto（proto 生成消息）只出现在 server 接入层与 application 的转换边界**（mapper/proto 门面）；**domain 出现 proto 类型即违规**。
+- **内部 RPC 通信领域层定义端口、基础设施层/装配层（server）提供实现**（双向）：
+  - **入站**：server 模块持有 gRPC/HTTP 端点（proto `ImplBase` 等，即接入层），一行委派 core application 的 proto 门面。
+  - **出站**（peer 复制、registry→discovery 分发、discovery↔management 规则流等内部通道）：domain 定义端口接口，具体实现在基础设施层——协议无关编排（扇出、重试/退避策略）可落 core `infrastructure`，gRPC client 传输（channel、stub、`StreamObserver`）放 server 模块。
+  - core 源码不 import `io.grpc.*`——传输技术与 Spring 同属装配层关注点，内核纯 Java；proto 消息与 stub 仍在 core 单源生成（避免同 FQCN 异 artifact），core 只需不消费 stub 类型（proto 消息类本身按上条纪律只进 application 转换边界与 server 接入层）。
 
 ## 2. 包结构
 
 - 包前缀与 groupId 一致：`org.mydotey.ai.artemis`。
-- core 模块内部分层：
+- core 模块内部分三层包，对应 DDD 四层中的应用/领域/基础设施三层（接入层由 server 模块承载），**领域层为核心**（[ADR-015](../../decisions/adr-015-layered-model-inside-core.md)）：
 
 ```text
 org.mydotey.ai.artemis.registry
-├── api/          # 对外契约：接口、数据模型、错误码（client/server 均可依赖的部分）
-└── internal/     # 内核实现：租约、复制、快照、自我保护等
+├── application/      # 应用层：应用服务（用例编排、契约级校验/归一）+ dto↔domain mapper + proto 门面；复用领域请求/响应模型
+├── domain/           # 领域层（核心）：领域模型 + 请求/响应模型 + 聚合与领域语义 + 端口接口；不依赖其它层
+└── infrastructure/   # 基础设施层：领域端口实现、调度/配置等技术实现、集群内部通信实现（协议无关部分）
 ```
 
-- server 模块按装配职责组织：`config/`、`grpc/`、`http/`、`bootstrap/`。
-- api 包内的类型是稳定面，变更需过兼容规则（§8）；internal 包不对外承诺。
+- **依赖方向**：`application → domain`、`infrastructure → domain`、接入层（server）→ application；**domain 不依赖 proto、Spring、配置源，也不依赖 application/infrastructure**；application 与 infrastructure 互不依赖。
+- **依赖倒置 + 控制反转**：领域定义所需能力的端口接口（TTL 来源、变更事件出口等；时间源用 JDK `Clock`），基础设施实现，装配层（server 的 Spring）注入。
+- **命名**：用例入参/出参用 `XxxRequest`/`XxxResponse`（与契约同名同构，**不用 Command/Result**），**定义在领域层、应用层直接使用**（不重复建模型）。
+- **层间模型转换**：proto ↔ domain 一个 mapper（在 application），做**同名类按包转换**（`proto.…` 与 `domain.…` 同名类）；主映射由 MapStruct 编译期生成（组件总表），语义性转换（缺省值语义、未知枚举哨兵、结构展开）以显式手写方法补齐；映射规则集中于此，不散落业务代码。
+- server 模块承载接入层与装配：`config/`（装配、端口注入）、`grpc/`、`http/`（接入层：协议端点绑定，一行委派 application 的 proto 门面）、`bootstrap/`。
+- `domain` 的请求/响应模型是稳定面（变更需过兼容规则 §8）；`application`/`infrastructure` 不对外承诺。
 
 ## 3. 代码风格
 
@@ -83,6 +90,7 @@ org.mydotey.ai.artemis.registry
 
 - 命名：`XxxTest`（单测）、`XxxIT`（集成）；测试方法 `should_<期望>_when_<条件>`。
 - 单测覆盖核心机制：租约状态机、心跳续约/缺席补注册（upsert）与变更扇出、自我保护窗口、快照回放、投影合并、过滤器链——这些是 10 万实例正确性的根，必须测；不为覆盖率数字写空转测试。
+- **服务级集成测试**（`*IT`，failsafe，经 `dev-test.sh integration`）：进程内起真实服务（随机端口）+ 真实协议客户端驱动端到端用例；不依赖外部容器与外部进程。
 - 集群语义测试用**进程内多实例**（随机端口组集群），不起容器；Testcontainers 只用于期 3 DB 与 v1.0 K8s 验收。
 - 每个版本的验收要点（路线图各版本末条）须有对应可执行测试，随版本一起交付。
 - 测试代码同样过 Spotless/Checkstyle；测试里允许 `@Data` 等 Lombok 简化。
@@ -137,6 +145,12 @@ proto 的 wire 兼容规则与变更流程是**跨语言不变量**，单一来�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.14 | 2026-10-13 | ④ 实现期坐标定案：§1 gRPC starter 坐标更正为 `org.springframework.boot:spring-boot-starter-grpc-server`（Spring Boot 4.1 官方模块） |
+| 1.13 | 2026-10-13 | code-review 修复：§1 gRPC starter 坐标更正为 `org.springframework.grpc:spring-grpc-server-spring-boot-starter`；更新历史 1.8 行还原 45aebcd 原始记录、phase-2 review 轮次重排、去除重复「合并 main」行 |
+| 1.12 | 2026-10-13 | 四次 review 修订：对齐 DDD 四层（ADR-015 v1.3）——接入层由 server 承载（协议接入、dto/vo 收发）、dto↔domain mapper 与 proto 门面移 application、infrastructure 纯化为领域端口实现；内部 RPC 出站实现拆「协议无关编排（core infrastructure）+ gRPC 传输（server）」 |
+| 1.11 | 2026-10-12 | v0.1 phase-2 三次 review 定案：§1/§2 改为「领域为核心」三层（domain/application/infrastructure），依赖倒置 + 控制反转，请求/响应模型归领域层由应用层复用，proto↔domain 单一 mapper 在 infrastructure |
+| 1.10 | 2026-10-12 | v0.1 phase-2 二次 review 定案：§1 补 gRPC 服务端用官方组件（禁自写 Server）、§2 命名改 `XxxRequest`/`XxxResponse` 与三层同名类按包转换、mapper 归属明确到上游层 |
+| 1.9 | 2026-10-12 | v0.1 phase-2 设计 review 定案：§1 补接入层模型纪律、§2 包结构改模块内三层（adapter/application/domain + 层间 mapper，ADR-015）、§7 补服务级集成测试形态（*IT 进程内起真实服务） |
 | 1.8 | 2026-10-12 | §1 新增内部 RPC 分层纪律：领域层（core）定义端口接口、infra（server）提供 gRPC 实现，core 源码禁 import `io.grpc.*`（入站/出站双向） |
 | 1.7 | 2026-10-12 | code-review 修复：§4/§7 清除「心跳 diff」残留（upsert 变更语义）；§1 projection.v1 入 artemis-common 共享；§5 错误码 wire 消息名 Error→ErrorInfo |
 | 1.6 | 2026-10-12 | §5 错误码模型对齐契约定案（string code 注册表 + api 包封装 + gRPC status 分工） |

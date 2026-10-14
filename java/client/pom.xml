@@ -1,0 +1,249 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>org.mydotey.ai.artemis</groupId>
+  <artifactId>artemis-client-parent</artifactId>
+  <!-- SDK 独立版本线（与服务端 ${revision} 解耦），bump 时随 SDK 发布节奏走 -->
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>pom</packaging>
+
+  <description>Artemis SDK 线 parent：JDK 8 目标，依赖管理独立于服务端 parent（artemis）——SB BOM、guava jre/gson 统一等服务端干预不进 SDK 依赖树；聚合构建入口仍是 java/pom.xml（modules 聚合与 parent 继承解耦）。工具链插件版本（spotless/checkstyle 等）与服务端各持一份、允许独立节奏，漂移成本已在 tech-stack §2.3 权衡。</description>
+
+  <modules>
+    <module>artemis-client</module>
+    <module>spring-boot-starter-artemis-client</module>
+  </modules>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.release>8</maven.compiler.release>
+
+    <!-- SDK 依赖线（独立决策，服务端版本变更不自动传导；见 tech-stack #8/#10/#30/#31 与 §2.3） -->
+    <grpc.version>1.84.2</grpc.version>
+    <protobuf-client.version>3.25.9</protobuf-client.version>
+    <scf.version>1.6.3</scf.version>
+    <slf4j.version>2.0.20</slf4j.version>
+    <junit.version>5.14.4</junit.version>
+    <assertj.version>3.27.7</assertj.version>
+
+    <!-- 工具链（与服务端 parent 同值起步，独立演进） -->
+    <palantir-java-format.version>2.102.0</palantir-java-format.version>
+    <checkstyle-tool.version>14.3.0</checkstyle-tool.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <!-- SDK 依赖封闭清单的版本单一来源：grpc（netty-shaded/stub/protobuf）、scf、slf4j、protobuf 3.25 线。
+           不 import SB BOM（SDK 非 Spring 组件，slf4j 版本自主钉 2.0 线——Java 8 宿主兼容窗口）；
+           不做 guava flavor/gson 干预（SDK 交付宿主，保留 grpc 原生传递树） -->
+      <dependency>
+        <groupId>io.grpc</groupId>
+        <artifactId>grpc-bom</artifactId>
+        <version>${grpc.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.mydotey.scf</groupId>
+        <artifactId>scf-bom</artifactId>
+        <version>${scf.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>com.google.protobuf</groupId>
+        <artifactId>protobuf-java</artifactId>
+        <version>${protobuf-client.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-api</artifactId>
+        <version>${slf4j.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>${junit.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.assertj</groupId>
+        <artifactId>assertj-bom</artifactId>
+        <version>${assertj.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <!-- SDK 线内部模块（starter 引 client，版本随本线） -->
+      <dependency>
+        <groupId>org.mydotey.ai.artemis</groupId>
+        <artifactId>artemis-client</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <!-- SDK 模块通用测试栈（Java 8 字节码，toolchains fork JDK 8 可加载）；SDK 源码零 Lombok 依赖 -->
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.assertj</groupId>
+      <artifactId>assertj-core</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>3.16.0</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>3.6.0</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-failsafe-plugin</artifactId>
+          <version>3.6.0</version>
+          <!-- 仅锁版本：SDK 线暂无 *IT；dev-test.sh integration 模式对全 reactor 直调 goal，
+               无锁则本线模块的 failsafe 版本退化为远端最新元数据（与服务端分叉） -->
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-enforcer-plugin</artifactId>
+          <version>3.6.3</version>
+        </plugin>
+        <plugin>
+          <groupId>io.github.ascopes</groupId>
+          <artifactId>protobuf-maven-plugin</artifactId>
+          <version>5.1.11</version>
+          <configuration>
+            <sourceDirectories>
+              <sourceDirectory>${project.basedir}/../../../proto</sourceDirectory>
+            </sourceDirectories>
+          </configuration>
+        </plugin>
+        <plugin>
+          <groupId>org.jacoco</groupId>
+          <artifactId>jacoco-maven-plugin</artifactId>
+          <version>0.8.15</version>
+        </plugin>
+        <plugin>
+          <groupId>com.diffplug.spotless</groupId>
+          <artifactId>spotless-maven-plugin</artifactId>
+          <version>3.10.4</version>
+          <configuration>
+            <java>
+              <palantirJavaFormat>
+                <version>${palantir-java-format.version}</version>
+              </palantirJavaFormat>
+              <removeUnusedImports />
+            </java>
+          </configuration>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-checkstyle-plugin</artifactId>
+          <version>3.6.0</version>
+          <configuration>
+            <configLocation>${maven.multiModuleProjectDirectory}/config/checkstyle.xml</configLocation>
+            <sourceDirectories>
+              <sourceDirectory>${project.build.sourceDirectory}</sourceDirectory>
+            </sourceDirectories>
+            <includeTestSourceDirectory>true</includeTestSourceDirectory>
+          </configuration>
+          <dependencies>
+            <dependency>
+              <groupId>com.puppycrawl.tools</groupId>
+              <artifactId>checkstyle</artifactId>
+              <version>${checkstyle-tool.version}</version>
+            </dependency>
+          </dependencies>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+
+    <plugins>
+      <!-- 构建/工具进程仍是 JDK 25（toolchains fork JDK 8 只用于 client 测试 JVM） -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>enforce-sdk-basics</id>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
+            <configuration>
+              <rules>
+                <requireJavaVersion>
+                  <version>[25,)</version>
+                </requireJavaVersion>
+                <requireMavenVersion>
+                  <version>[3.9,)</version>
+                </requireMavenVersion>
+                <requireUpperBoundDeps />
+              </rules>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>com.diffplug.spotless</groupId>
+        <artifactId>spotless-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>spotless-check</id>
+            <goals>
+              <goal>check</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-checkstyle-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>checkstyle-check</id>
+            <goals>
+              <goal>check</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- 覆盖率（main 时期全模块生效，reactor 重组时曾随根 pom 拆分丢失，恢复） -->
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>jacoco-prepare-agent</id>
+            <goals>
+              <goal>prepare-agent</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>jacoco-report</id>
+            <phase>verify</phase>
+            <goals>
+              <goal>report</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

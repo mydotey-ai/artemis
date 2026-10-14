@@ -1,6 +1,6 @@
 # Java 技术选型
 
-版本: 1.8    更新时间: 2026-10-12
+版本: 1.17    更新时间: 2026-10-13
 
 > 本文是新一代 Artemis Java 实现的技术选型基线：语言与运行时、工程结构、全量技术组件清单与依赖冲突策略。设计依据为[架构设计](../arch/artemis-next-architecture.md)（§3 技术栈策略、§7 关键决策 D8），开发规范见[Java 开发规范](coding-guidelines-java.md)。Rust 实现（v1.x 混合集群）直接消费仓库顶层 `proto/` 契约目录（见[proto 契约规范](proto-contract.md)），不受本文 Java 组件约束。
 
@@ -29,26 +29,30 @@ artemis/
 └── rust/         Rust 实现（v1.x 才创建）：Cargo workspace，从 ../proto 生成
 ```
 
-Java reactor 居 `java/`（构建入口 `mvn -f java/pom.xml`；根目录不放聚合构建文件，各语言构建入口在各自目录）。groupId 统一 `org.mydotey.ai.artemis`，artifactId 前缀 `artemis-`（两个例外：parent 为 `artemis`；starter 为 `spring-boot-starter-artemis-client`，遵循 Spring starter 命名惯例）：
+Java reactor 居 `java/`（构建入口 `mvn -f java/pom.xml`；根目录不放聚合构建文件，各语言构建入口在各自目录）。groupId 统一 `org.mydotey.ai.artemis`，artifactId 前缀 `artemis-`（例外：三个 parent `artemis-parent`（java/ 纯聚合器）/`artemis-server-parent`/`artemis-client-parent`；starter 为 `spring-boot-starter-artemis-client`，遵循 Spring starter 命名惯例）：
 
 ```text
-java/
-├── pom.xml                      org.mydotey.ai.artemis:artemis (parent)
-├── artemis-common               服务端公共规范/工具 (Java 25)
-├── artemis-registry-core        registry 内核，纯 Java 零 Spring (Java 25)
-├── artemis-registry-server      Spring Boot 装配 (Java 25)
-├── artemis-discovery-core       discovery 投影内核 (Java 25)
-├── artemis-discovery-server     Spring Boot 装配 (Java 25)
-├── artemis-management-core      治理面内核 (Java 25)
-├── artemis-management-server    Spring Boot 装配 (Java 25)
-├── artemis-client               注册 + 发现统一 SDK，零 Spring (Java 8)
-├── spring-boot-starter-artemis-client   Spring 集成 (Java 8)
+java/                            单 reactor 单构建入口（mvn -f java/pom.xml）
+├── pom.xml                      artemis-parent：纯聚合器（不发布），目录分界 = server/ 服务端线 vs client/ SDK 线
+├── server/                      服务端线（parent = artemis：${revision} 统一版本 + dm + 全局依赖）
+│   ├── pom.xml
+│   ├── artemis-common               服务端公共规范/工具 (Java 25)
+│   ├── artemis-registry-core        registry 内核，纯 Java 零 Spring (Java 25)
+│   ├── artemis-registry-server      Spring Boot 装配 (Java 25)
+│   ├── artemis-discovery-core       discovery 投影内核 (Java 25)
+│   ├── artemis-discovery-server     Spring Boot 装配 (Java 25)
+│   ├── artemis-management-core      治理面内核 (Java 25)
+│   └── artemis-management-server    Spring Boot 装配 (Java 25)
+└── client/                      SDK 线（parent = artemis-client-parent：独立版本线 + 独立依赖管理，见 §2.3）
+    ├── pom.xml
+    ├── artemis-client               注册 + 发现统一 SDK，零 Spring (Java 8)
+    └── spring-boot-starter-artemis-client   Spring 集成 (Java 8)
 └── (artemis-dist 打包模块 v0.3 起引入，不影响边界)
 ```
 
 ### 2.2 proto 契约模型
 
-Java 各消费模块从仓库顶层 `proto/`（组织与治理见[proto 契约规范](proto-contract.md)）引用需要的 .proto 文件（`sourceDirectories` 指向 `../../proto` 单 root，模块以 includes 按下表矩阵圈定生成组），生成代码到自己的包：
+Java 各消费模块从仓库顶层 `proto/`（组织与治理见[proto 契约规范](proto-contract.md)）引用需要的 .proto 文件（`sourceDirectories` 指向 `../../../proto` 单 root——模块在 `java/{server,client}/` 目录下，模块 basedir 三层回到仓库根；includes 按下表矩阵圈定生成组），生成代码到自己的包：
 
 | 模块 | 生成的 proto 组 | protoc 基线 | 编译版本 |
 |---|---|---|---|
@@ -74,7 +78,8 @@ Java 各消费模块从仓库顶层 `proto/`（组织与治理见[proto 契约�
 |---|---|
 | core 模块零 Spring（延续原产品实践，能力基线 §1–§2 组件事实） | maven-enforcer `bannedDependencies` 禁 `org.springframework:*`，CI 强制 |
 | client 不依赖任何服务端模块 | 同样用 enforcer `bannedDependencies` 硬约束：禁 `org.mydotey.ai.artemis` 下 `artemis-common` 与各 `*-core`/`*-server` artifact；proto 契约经文件级引用（`proto/` 为纯目录非 Maven 模块，本就无 jar 可依赖） |
-| 全 reactor 统一版本 | parent `${revision}` 占位符 + **flatten-maven-plugin**（Maven 3.x CI Friendly Versions 必须：无 flatten 时 install/deploy 产物 pom 残留字面量 `${revision}`，外部不可消费） |
+| 服务端模块统一版本（parent、common、各 core、各 server） | parent `${revision}` 占位符 + **flatten-maven-plugin**（Maven 3.x CI Friendly Versions 必须：无 flatten 时 install/deploy 产物 pom 残留字面量 `${revision}`，外部不可消费） |
+| **client SDK 独立版本线 + 独立依赖管理**（artemis-client-parent：client、starter） | 字面版本号（非 parent 属性——属性随服务端线演进会把版本耦合回来），随 SDK 语义化版本独立演进；**parent 继承树独立于 artemis**（聚合仍在 java/ reactor——Maven modules 聚合与 parent 继承解耦）：dm 自建（grpc/protobuf 3.25/scf/slf4j 2.0 线自钉），不 import SB BOM、不受服务端 guava flavor/gson 干预（保留 grpc 原生传递树）、全局零 Lombok；工具链插件版本（spotless/checkstyle 等）与服务端各持一份、允许独立节奏 |
 
 ## 3. 技术组件总表
 
@@ -86,15 +91,17 @@ Java 各消费模块从仓库顶层 `proto/`（组织与治理见[proto 契约�
 | 2 | 语言运行时 | SDK 编译目标 | Java 8（`release=8`） | artemis-client、starter | 同 reactor 混合编译 |
 | 3 | 语言运行时 | GC | 默认 G1 | 服务端 | ZGC 大堆选项留 v1.0 压测后定 |
 | 4 | 构建 | 构建系统 | Maven 3.9.x | java/ 单 reactor | Maven 4 成熟后评估 |
-| 5 | 构建 | 依赖治理 | maven-enforcer-plugin + flatten-maven-plugin | java/ reactor | enforcer：Java/Maven 版本、依赖上界（requireUpperBoundDeps）、core 禁 Spring 与 client 禁服务端模块（§2.3）；flatten：`${revision}` 落库（§2.3） |
+| 5 | 构建 | 依赖治理 | maven-enforcer-plugin + flatten-maven-plugin | java/ reactor | enforcer：Java/Maven 版本、依赖上界（requireUpperBoundDeps）、core 禁 Spring 与 client 禁服务端模块（§2.3）；flatten：服务端 `${revision}` 落库（§2.3；client 线为字面版本不经 flatten 处理） |
 | 6 | 构建 | proto 生成 | protobuf-maven-plugin（**ascopes**）+ protoc + grpc-java 插件 | 各消费模块 | xolstice 已于 2025-04 archived，其 README 推荐 ascopes 为后继；`sourceDirectories` 相对路径，按 §2.2 生成矩阵 |
 | 7 | 框架 | 应用框架 | Spring Boot 4.1.x | 仅各 server 模块 | DI、配置绑定、MVC、actuator；不出现在 core/client classpath |
-| 8 | 通信 | RPC 框架 | grpc-java 1.7x | 服务端 grpc-netty；client grpc-netty-shaded | 五通道全 gRPC；client shaded 隔离宿主 netty |
+| 8 | 通信 | RPC 框架 | grpc-java 1.84.x（reactor 窄版本线锁 1.84.2，parent dm 先声明优先） | 服务端 grpc-netty；client grpc-netty-shaded | 五通道全 gRPC；client shaded 隔离宿主 netty；grpc 线内 guava flavor 混排由 parent dm 统一 jre（33.6.0-jre），grpc 升级时同步 |
 | 9 | 通信 | 序列化（服务端） | protobuf-java 4.x | 服务端 proto 消息 + 服务端快照文件格式 | 快照 = proto 二进制 + 版本头，不自研格式 |
 | 10 | 通信 | 序列化（client） | protobuf-java **3.25.x**（protoc 3.25 生成） | artemis-client | 宿主 runtime 窗口 3.25.x–4.x，见 §5 |
 | 11 | HTTP | HTTP 辅助通道 | Spring MVC（SB 内置） | server 模块 | 外部 HTTP 辅助端点 + console REST；不引 WebFlux |
 | 12 | 代码简化 | Lombok | 1.18.x | java/ reactor | `provided` scope，不传递给 SDK 使用方 |
 | 31 | 配置管理 | SCF（Spark Configuration Framework） | `org.mydotey.scf:scf-bom` 1.6.x（scf-core + scf-simple） | java/ reactor（含 client） | manager / sources / property 三层抽象，与具体配置源解耦；原产品同栈（Maven Central 在库）；Java 8 目标两端通用，传递闭包仅 scf-core + lang-extension + slf4j-api；动静分型与合规校验规范见[开发规范](coding-guidelines-java.md) §10 |
+| 32 | 模型转换 | MapStruct | 1.6.x（`mapstruct` + `mapstruct-processor`） | 各 core（[ADR-015](../decisions/adr-015-layered-model-inside-core.md) 层间 mapper） | 编译期生成 mapper 实现，**零运行时依赖**（mapstruct 仅注解，processor 为 annotation processor）；与 Lombok 协同需 `lombok-mapstruct-binding`（processor path 顺序）；Java 25 支持在实施期验证（见 §4.6） |
+| 33 | 通信 | gRPC（Spring Boot 官方装配） | `org.springframework.boot:spring-boot-starter-grpc-server`（SB 4.1 官方，版本随 SB BOM；底层 spring-grpc-core 1.1.x） | 各 server 模块 | 官方 gRPC 自动装配（`@GrpcService` + `spring.grpc.server.*` 配置），**不自写 Server/生命周期**；集成测试支持 `org.springframework.boot:spring-boot-grpc-test`（随机端口/进程内）；grpc-java 版本线：SB BOM 管理 1.83.1，本 reactor 窄版本线先声明锁 1.84.2（`requireUpperBoundDeps` 兜底），phase-2 实测兼容（见 §4.7） |
 | 13 | 数据（期 3） | ORM | MyBatis-Plus 3.5.x + SB starter | 仅 management | 版本锁 SB 4.1 适配线，期 3 实施时锁定 |
 | 14 | 数据（期 3） | Schema migration | Flyway（SB 管版本） | 仅 management | MySQL/PG 双方言脚本 |
 | 15 | 数据（期 3） | 连接池 | HikariCP（SB 自带） | 仅 management | — |
@@ -143,6 +150,21 @@ shaded 版将 netty 重打包进 `io.grpc.netty.shaded.*` 命名空间，与宿�
 - **合规校验用 SCF 自带能力**：`RangeValueFilter`（值域）+ `TypeConverter`（类型），配置错误在启动期暴露。
 - **不用 Spring `@ConfigurationProperties`**：core/client 零 Spring，它进不了内核与 SDK；且其为启动期静态绑定，动态配置支持弱。SCF 为原产品同栈（`org.mydotey.scf` 已发布 Maven Central），Java 8 目标，服务端（Java 25）与 client（Java 8）两端通用。
 
+### 4.6 层间 mapper：MapStruct
+
+- **编译期生成、零运行时**：`mapstruct-processor` 在编译期按接口生成实现类，产物是普通 Java（无反射、无运行期依赖），符合内核零 Spring/低依赖纪律；`mapstruct` 注解 artifact 为 compile，processor 走 `annotationProcessorPaths`。
+- **与 Lombok 协同**：processor path 需同时含 `mapstruct-processor`、`lombok`、`lombok-mapstruct-binding`，否则 MapStruct 看不到 Lombok 生成的访问器。
+- **语义转换不交给生成器**：**枚举整表手写**（proto 常量带前缀 `INSTANCE_STATUS_UP` 与领域名 `UP` 不对应，无法按名映射；`UNRECOGNIZED` 哨兵一并处理）、缺省值语义（weight ≤ 0 归一、`UNSPECIFIED` 处理）、repeated/map 结构展开用显式手写方法，MapStruct 只承载字段级主映射（开发规范 §2）。
+- 否决手写全部 mapper：层间字段映射样板多、易漏字段；否决运行期映射框架（反射开销与运行期依赖）。
+- **实施期验证点**（phase-2）：MapStruct 1.6.x 对 `release=25` + Lombok 1.18 的组合支持；不支持则回落手写 mapper（分层与模型边界决策不受影响）。
+
+### 4.7 gRPC 服务端：Spring Boot 官方组件
+
+- **不自写 Server/生命周期类**：`org.springframework.boot:spring-boot-starter-grpc-server`（Spring Boot 4.1 官方模块）提供 gRPC 服务端自动装配——服务实现以 `@GrpcService` 注册、端口与传输经 `spring.grpc.server.*` 配置，生命周期由 starter 管理（含优雅停机接入 Spring 生命周期）。
+- **坐标沿革（phase-2 实施期定案）**：spring-grpc 项目自身的 starter 线止于 1.0.3（SB 3.x 适配）；SB 4.0 起 starter 收编为 Spring Boot 官方模块（`spring-boot-starter-grpc-server` / `spring-boot-grpc-test`），spring-grpc 1.1.x 只发布 core 库（`@GrpcService` 注解即出自其 `org.springframework.grpc.server.service` 包）。SB 4.1 reactor 的正确坐标是 Boot 官方 starter，版本随 SB BOM。
+- **测试支持**：`org.springframework.boot:spring-boot-grpc-test` 提供随机端口（`spring.grpc.server.port=0` + `@LocalGrpcServerPort`）与进程内传输支持，集成测试（`*IT`）据此起服务，不起外部进程（guidelines §7）。
+- 与 #8 grpc-java 的关系：SB 4.1.1 starter 传递 grpc-java 1.83.1（SB BOM 管理），本 reactor 的窄版本线在前声明锁 1.84.2（parent `dependencyManagement` 先声明者优先）；phase-2 实测（enforcer + 编译 + 装配 + 进程内起服务）兼容。grpc 线内 guava flavor 混排（stub/protobuf/netty → android、services → jre）由 parent dm 统一 jre flavor。
+
 ## 5. 依赖冲突策略（SDK 对宿主的影响）
 
 | 组件 | 对宿主影响 | 结论 |
@@ -165,6 +187,15 @@ shaded 版将 netty 重打包进 `io.grpc.netty.shaded.*` 命名空间，与宿�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.17 | 2026-10-13 | parent 命名统一：artemis-parent（java/ 聚合器，原 artemis-java）/artemis-server-parent（服务端线，原 artemis）/artemis-client-parent（SDK 线）——三 pom 角色由名字表达，前缀例外条款更新 |
+| 1.16 | 2026-10-13 | 目录按线分组：java/ 拆 server/（服务端线）与 client/（SDK 线），java/pom.xml 改纯聚合器 artemis-java（单构建入口不变）；proto sourceDirectories 路径随深度更新（§2.1/§2.2） |
+| 1.15 | 2026-10-13 | SDK 依赖管理独立：新增 artemis-client-parent（§2.1 结构 + §2.3）——client/starter 脱离 artemis 继承树（聚合不变），dm 自建（slf4j 2.0.20 自钉、无 SB BOM、无服务端 guava/gson 干预、零 Lombok） |
+| 1.14 | 2026-10-13 | 版本线拆分：client SDK（artemis-client + starter）独立字面版本，与服务端 ${revision} 解耦（§2.3 拆两行、#5 备注）；parent dm 移除 artemis-client 条目 |
+| 1.13 | 2026-10-13 | code-review 修复：#8 版本字段更正为 1.84.x（窄版本线锁 1.84.2）并补 guava flavor 统一说明（parent dm jre，grpc 升级同步） |
+| 1.12 | 2026-10-13 | phase-2 实施期坐标定案：#33/§4.7 更正为 Spring Boot 4.1 官方模块（`spring-boot-starter-grpc-server` / `spring-boot-grpc-test`）——spring-grpc 自身 starter 止于 1.0.3（SB 3.x 线），SB 4.0 起收编官方；grpc 1.84.2 窄版本线与 guava jre 统一实测记录 |
+| 1.11 | 2026-10-13 | code-review 修复：#33/§4.7 Spring gRPC starter Maven 坐标更正为 `org.springframework.grpc:spring-grpc-server-spring-boot-starter`、测试支持为 `org.springframework.grpc:spring-grpc-test`；§4.6 补「枚举整表手写」（proto 常量前缀与领域名不对应） |
+| 1.10 | 2026-10-12 | v0.1 phase-2 二次 review 定案：组件总表新增 #33 Spring gRPC（服务端用官方组件不自写 Server）、新增 §4.7 与 grpc-java 版本线关系 |
+| 1.9 | 2026-10-12 | v0.1 phase-2 设计 review 定案：组件总表新增 #32 MapStruct（层间 mapper，ADR-015）、新增 §4.6 选型理由与实施期验证点 |
 | 1.8 | 2026-10-12 | 脚手架实测修正：§2.2 与 #6 的 `protoSourceRoot`（xolstice 旧参数）改为 ascopes 实际参数 `sourceDirectories`（误用会被静默忽略致生成失败） |
 | 1.7 | 2026-10-12 | code-review 修复：生成矩阵 projection.v1 归 artemis-common（v0.3 all-in-one classpath 去重）；protobuf 宿主窗口改双侧 3.25.x–4.x（gencode V 仅保证 runtime V/V+1）；§2.2 重复规则句去重 |
 | 1.6 | 2026-10-12 | review 修复：§2.2 引言与要点对齐生成矩阵（protoSourceRoot 单 root + includes；同源 artifact 边界） |

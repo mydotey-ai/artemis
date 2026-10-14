@@ -1,6 +1,6 @@
 # dev-java-test：Java 测试执行入口（会话侧）
 
-调用 `java/scripts/dev-test.sh` 执行测试并汇总结果。参数可选 `unit` | `integration` | `all`（默认 `all`，全量 verify）——模式定义与形态↔模式映射的单一来源：当前 phase 设计文档 §7（见 `docs/milestones/dev-state.md`）。
+调用 `java/scripts/dev-test.sh` 执行测试并汇总结果。参数可选 `unit` | `integration` | `all`（默认 `all`，全量 verify）——模式定义与形态↔模式映射的单一来源：当前 phase 设计文档「自动化测试入口」节（见 `docs/milestones/dev-state.md`）。
 
 ## 执行
 

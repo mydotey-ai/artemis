@@ -1,6 +1,6 @@
 # Phase 1：Maven 脚手架 + proto 契约骨架
 
-版本: 1.23    更新时间: 2026-10-12
+版本: 1.24    更新时间: 2026-10-13
 
 ## 目标
 
@@ -282,7 +282,7 @@ review 定案（2026-10-11）：
 | Error Prone | **延至 phase-7（CI）前接入**：JDK 25 + Lombok + 多 release 混合编译组合下 annotationProcessorPaths 冲突风险高，脚手架阶段不引入，属有意延后非裁剪 |
 | 测试栈 | JUnit 5 + Mockito + AssertJ，parent dependencyManagement；server 模块另加 spring-boot-starter-test |
 | toolchains | client 模块 surefire 经 Maven toolchains fork JDK 8 JVM 跑测试（#27 口径）；环境前提：本机 JDK 8 + `~/.m2/toolchains.xml`（模板 `java/toolchains.xml.example`，复制后改 jdkHome），实现时验证，缺失则与用户商定（⑨ 验证含此项） |
-| failsafe | parent pluginManagement 仅锁插件版本（不绑生命周期）；phase-4 集群语义测试接入时正式绑定（dev-test.sh integration 模式直调 goal 依赖此版本锁定，避免解析最新版不可复现） |
+| failsafe | parent pluginManagement 仅锁插件版本（不绑生命周期）；phase-2 服务级集成测试（`*IT`）接入时正式绑定（dev-test.sh integration 模式直调 goal 依赖此版本锁定，避免解析最新版不可复现） |
 
 ### 5. proto 生成配置
 
@@ -309,7 +309,7 @@ dev-test.sh [unit|integration|all]   # 默认 all
 | 模式 | 命令 | 覆盖 |
 |---|---|---|
 | unit | `mvn test` | surefire `*Test` 单测，快速迭代 |
-| integration | `mvn test-compile failsafe:integration-test failsafe:verify` | failsafe `*IT` 约定；**phase-1 无集成测试**，phase-4 集群语义测试接入时 failsafe 正式入 parent pom。前置 `test-compile`：直调 goal 不走 lifecycle 不编译，clean 树 0 测试静默假绿（code-review 定案 2026-10-12）；插件版本经 parent pluginManagement 锁定（§4） |
+| integration | `mvn test-compile failsafe:integration-test failsafe:verify` | failsafe `*IT` 约定；**phase-1 无集成测试**，phase-2 服务级集成测试接入时 failsafe 正式入 parent pom（phase-2 设计定案）。前置 `test-compile`：直调 goal 不走 lifecycle 不编译，clean 树 0 测试静默假绿（code-review 定案 2026-10-12）；插件版本经 parent pluginManagement 锁定（§4） |
 | all | `mvn verify` | 全量：spotless + enforcer + 单测 ≡ `mvn -f java/pom.xml verify`——**工作流 ⑤/⑧ 验收入口**（dev-java 工作流已修订为经本脚本 all 模式执行）；**默认模式**（无参数即全量，漏校验不放过） |
 
 参数边界：默认值 `${1:-all}`；未知模式打印 usage 到 stderr 退出码 2；拒绝第二个及以后位置参数。
@@ -360,6 +360,7 @@ dev-test.sh [unit|integration|all]   # 默认 all
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.24 | 2026-10-13 | code-review 修复：§4/§7 failsafe 绑定相位的前向引用由 phase-4 更正为 phase-2（phase-2 设计定案服务级集成测试本 phase 接入） |
 | 1.23 | 2026-10-12 | ⑩ 文档同步：产品文档 `docs/product/artemis.md` 新建，索引与 CLAUDE.md 更新，变更清单登记 |
 | 1.22 | 2026-10-12 | ⑦ fix（5 findings）：断链修复（adr-013/014 三层 up）；`protoSourceRoot`→`sourceDirectories`；补 toolchains 模板；实现结果节登记脚手架实测决策（gson 上界、server JUnit 6 分治、checkstyle 测试豁免与生成代码排除） |
 | 1.21 | 2026-10-12 | code-review 修复：Error→ErrorInfo（java.lang.Error 通配 import 歧义）；Heartbeat 加 seq 关联字段（bidi 不保证 1:1 ack）；projection.v1 归 artemis-common（all-in-one classpath 去重，adr 关联）；integration 模式前置 test-compile 修假绿 + failsafe pluginManagement 锁版本 + 参数边界；update 行派生事件补缺席 NEW；定案节按架构同步纪律指针化压缩；断链修复 |
