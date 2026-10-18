@@ -1,6 +1,6 @@
 # Java 技术选型
 
-版本: 1.17    更新时间: 2026-10-13
+版本: 1.18    更新时间: 2026-10-18
 
 > 本文是新一代 Artemis Java 实现的技术选型基线：语言与运行时、工程结构、全量技术组件清单与依赖冲突策略。设计依据为[架构设计](../arch/artemis-next-architecture.md)（§3 技术栈策略、§7 关键决策 D8），开发规范见[Java 开发规范](coding-guidelines-java.md)。Rust 实现（v1.x 混合集群）直接消费仓库顶层 `proto/` 契约目录（见[proto 契约规范](proto-contract.md)），不受本文 Java 组件约束。
 
@@ -108,7 +108,7 @@ Java 各消费模块从仓库顶层 `proto/`（组织与治理见[proto 契约�
 | 16 | 数据（期 3） | 数据库 | MySQL 8.x / PostgreSQL 16+ | 运维侧二选一 | 双方言为产品承诺 |
 | 17 | 可观测 | Metrics | Micrometer + Prometheus registry | 全服务端 | actuator 端点，v0.1 第一天 |
 | 18 | 可观测 | Trace | OpenTelemetry（SB 4.1 官方集成） | 全服务端 | v0.1 传播 + 基础 span |
-| 19 | 可观测 | 日志 | SLF4J + Logback + logstash-logback-encoder | 服务端；client 仅依赖 SLF4J API | 结构化 JSON 第一天；SDK 不打日志实现进宿主（避免 multiple SLF4J providers 冲突） |
+| 19 | 可观测 | 日志 | SLF4J + Logback + logstash-logback-encoder **9.0** | 服务端；client 仅依赖 SLF4J API | 结构化 JSON 第一天（logstash 默认字段 schema：`@timestamp/logger_name`）；SDK 不打日志实现进宿主（避免 multiple SLF4J providers 冲突） |
 | 20 | 测试 | 单元测试 | JUnit 5 + Mockito + AssertJ | java/ reactor | — |
 | 21 | 测试 | 集成测试 | Testcontainers | DB（期 3）、K8s 验收（v1.0） | 集群语义测试用进程内多实例（随机端口），不起容器 |
 | 22 | 测试 | 压测工具 | 待定（v1.0 容量验证时选型） | — | v0.x 不引入 |
@@ -187,6 +187,7 @@ shaded 版将 netty 重打包进 `io.grpc.netty.shaded.*` 命名空间，与宿�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.18 | 2026-10-18 | #19 日志补精确版本 logstash-logback-encoder 9.0 与 logstash 默认字段 schema（phase-4 实施） |
 | 1.17 | 2026-10-13 | parent 命名统一：artemis-parent（java/ 聚合器，原 artemis-java）/artemis-server-parent（服务端线，原 artemis）/artemis-client-parent（SDK 线）——三 pom 角色由名字表达，前缀例外条款更新 |
 | 1.16 | 2026-10-13 | 目录按线分组：java/ 拆 server/（服务端线）与 client/（SDK 线），java/pom.xml 改纯聚合器 artemis-java（单构建入口不变）；proto sourceDirectories 路径随深度更新（§2.1/§2.2） |
 | 1.15 | 2026-10-13 | SDK 依赖管理独立：新增 artemis-client-parent（§2.1 结构 + §2.3）——client/starter 脱离 artemis 继承树（聚合不变），dm 自建（slf4j 2.0.20 自钉、无 SB BOM、无服务端 guava/gson 干预、零 Lombok） |

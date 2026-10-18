@@ -32,6 +32,7 @@
     <spring-boot.version>4.1.1</spring-boot.version>
     <lombok.version>1.18.48</lombok.version>
     <scf.version>1.6.3</scf.version>
+    <logstash-logback-encoder.version>9.0</logstash-logback-encoder.version>
     <junit.version>5.14.4</junit.version>
     <!-- SB 4.1 starter-test 的 SpringExtension 编译于 JUnit 6 API：server 模块测试线随 SB 原生 -->
     <junit-server.version>6.0.3</junit-server.version>
@@ -113,6 +114,11 @@
         <groupId>org.projectlombok</groupId>
         <artifactId>lombok</artifactId>
         <version>${lombok.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>net.logstash.logback</groupId>
+        <artifactId>logstash-logback-encoder</artifactId>
+        <version>${logstash-logback-encoder.version}</version>
       </dependency>
       <dependency>
         <groupId>org.mapstruct</groupId>

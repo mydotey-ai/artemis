@@ -1,5 +1,8 @@
 package org.mydotey.ai.artemis.registry.application;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -8,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
+import org.mydotey.ai.artemis.common.config.ScfProperties;
 import org.mydotey.ai.artemis.registry.domain.Ack;
 import org.mydotey.ai.artemis.registry.domain.ChangeListener;
 import org.mydotey.ai.artemis.registry.domain.DeregisterRequest;
@@ -21,7 +25,6 @@ import org.mydotey.ai.artemis.registry.domain.Instance;
 import org.mydotey.ai.artemis.registry.domain.InstanceError;
 import org.mydotey.ai.artemis.registry.domain.InstanceKey;
 import org.mydotey.ai.artemis.registry.domain.InstanceRegistry;
-import org.mydotey.ai.artemis.registry.domain.LeaseTtlSource;
 import org.mydotey.ai.artemis.registry.domain.MonotonicClock;
 import org.mydotey.ai.artemis.registry.domain.RegisterRequest;
 import org.mydotey.ai.artemis.registry.domain.RegisterResponse;
@@ -35,6 +38,9 @@ import org.mydotey.ai.artemis.registry.domain.ServiceKey;
 import org.mydotey.ai.artemis.registry.domain.UpdateRequest;
 import org.mydotey.ai.artemis.registry.domain.UpdateResponse;
 import org.mydotey.ai.artemis.registry.domain.UpdateResponseData;
+import org.mydotey.scf.Property;
+import org.mydotey.scf.facade.StringProperties;
+import org.mydotey.scf.filter.RangeValueConfig;
 
 /**
  * 应用服务实现：编排 = 契约级校验/归一（一次完成，领域不重复防御）→ 聚合 → 组装领域响应。
@@ -49,29 +55,64 @@ public final class RegistryServiceImpl implements RegistryService {
     /** 契约明示：weight ≤ 0 等同未设置，入口归一为 100。 */
     private static final int DEFAULT_WEIGHT = 100;
 
-    /** 时间戳超前 now 的宽容上限（D10 墙钟回拨）：超出视为损坏/异常时钟写入，按超期处置。 */
-    private static final long MAX_CLOCK_SKEW_MS = Duration.ofMinutes(1).toMillis();
+    static final String KEY_LEASE_TTL_MS = "artemis.registry.lease.ttlMs";
+    static final String KEY_SNAPSHOT_MAX_AGE_MS = "artemis.registry.snapshot.maxAgeMs";
+    static final String KEY_SNAPSHOT_CLOCK_SKEW_TOLERANCE_MS = "artemis.registry.snapshot.clockSkewToleranceMs";
+
+    private static final long DEFAULT_LEASE_TTL_MS = 30_000;
+    private static final long DEFAULT_SNAPSHOT_MAX_AGE_MS = 3_600_000;
+    private static final long DEFAULT_CLOCK_SKEW_TOLERANCE_MS = 60_000;
 
     private final InstanceRegistry registry;
     private final Clock clock;
     private final SelfProtection protection;
     private final RegistrySnapshotStore snapshotStore;
-    private final Duration snapshotMaxAge;
+    private final Property<String, Long> leaseTtlMs;
+    private final Property<String, Long> snapshotMaxAgeMs;
+    private final Property<String, Long> clockSkewToleranceMs;
     private final RegistrySnapshotCodec snapshotCodec = new RegistrySnapshotCodec();
+    private final Counter evictions;
+    private final Counter heartbeatInstances;
 
+    /** 租约 TTL 为动态 property（每轮续约/清理读取最新值）；回放时效为静态项（启动取值一次）。 */
     public RegistryServiceImpl(
-            LeaseTtlSource leaseTtl,
+            StringProperties properties,
             Clock clock,
             MonotonicClock monotonicClock,
             ChangeListener listener,
             SelfProtection protection,
             RegistrySnapshotStore snapshotStore,
-            Duration snapshotMaxAge) {
-        this.registry = new InstanceRegistry(leaseTtl, monotonicClock, listener);
+            MeterRegistry meterRegistry) {
+        this.leaseTtlMs = properties.getLongProperty(
+                KEY_LEASE_TTL_MS, new RangeValueConfig<>(DEFAULT_LEASE_TTL_MS, 1_000L, 600_000L));
+        this.registry = new InstanceRegistry(() -> Duration.ofMillis(leaseTtlMs.getValue()), monotonicClock, listener);
         this.clock = clock;
         this.protection = protection;
         this.snapshotStore = snapshotStore;
-        this.snapshotMaxAge = snapshotMaxAge;
+        this.snapshotMaxAgeMs = ScfProperties.staticLong(
+                properties,
+                KEY_SNAPSHOT_MAX_AGE_MS,
+                DEFAULT_SNAPSHOT_MAX_AGE_MS,
+                60_000L,
+                86_400_000L,
+                "maximum snapshot age accepted at restore in milliseconds (static)");
+        this.clockSkewToleranceMs = ScfProperties.staticLong(
+                properties,
+                KEY_SNAPSHOT_CLOCK_SKEW_TOLERANCE_MS,
+                DEFAULT_CLOCK_SKEW_TOLERANCE_MS,
+                0L,
+                300_000L,
+                "allowed wall-clock forward skew for snapshot timestamps in milliseconds (static)");
+        // 指标就地定义：本类负责的心跳/清理计数器 + 注册表实例数 gauge
+        this.evictions = Counter.builder("artemis.registry.evictions")
+                .description("total instances evicted by lease expiry")
+                .register(meterRegistry);
+        this.heartbeatInstances = Counter.builder("artemis.registry.heartbeat.instances")
+                .description("total instance renewals reported by heartbeats")
+                .register(meterRegistry);
+        Gauge.builder("artemis.registry.instances", registry, InstanceRegistry::instanceCount)
+                .description("current registered instance count")
+                .register(meterRegistry);
     }
 
     @Override
@@ -115,6 +156,7 @@ public final class RegistryServiceImpl implements RegistryService {
                 .mapToInt(group -> group.instances().size())
                 .sum();
         protection.recordRenewals(renewals); // 有效心跳实例数聚合后单次累加（D1：仅心跳计入续约统计）
+        heartbeatInstances.increment(renewals);
         validated.groups().forEach(group -> registry.heartbeatUpsert(group.key(), group.instances()));
         return new HeartbeatResponse(validated.status(), new HeartbeatResponseData(clock.millis(), request.seq()));
     }
@@ -129,7 +171,9 @@ public final class RegistryServiceImpl implements RegistryService {
         if (protection.isProtected()) {
             return 0; // 保护态整轮跳过（与原产品一致）；显式 deregister 不经此路径、天然不受保护
         }
-        return registry.evictExpired();
+        int evicted = registry.evictExpired();
+        evictions.increment(evicted);
+        return evicted;
     }
 
     @Override
@@ -151,15 +195,17 @@ public final class RegistryServiceImpl implements RegistryService {
             log.warn("corrupt registry snapshot discarded, starting with empty registry: {}", e.getMessage());
             return 0;
         }
+        long maxAgeMs = snapshotMaxAgeMs.getValue(); // 静态 Property：SCF 保证启动后不变
+        long maxClockSkewMs = clockSkewToleranceMs.getValue();
         long ageMs = clock.millis() - snapshot.timestampMs();
         // 双向时效：超龄或时间戳超前超过墙钟回拨宽容（损坏/快进时钟）均视为无效
-        if (ageMs > snapshotMaxAge.toMillis() || ageMs < -MAX_CLOCK_SKEW_MS) {
+        if (ageMs > maxAgeMs || ageMs < -maxClockSkewMs) {
             log.warn(
                     "registry snapshot timestamp outside validity (age {}ms, max {}ms, future tolerance {}ms),"
                             + " starting with empty registry",
                     ageMs,
-                    snapshotMaxAge.toMillis(),
-                    MAX_CLOCK_SKEW_MS);
+                    maxAgeMs,
+                    maxClockSkewMs);
             return 0;
         }
         // 回放走与 register 相同的校验/归一门：可解析但语义损坏的条目不得直入注册表

@@ -1,6 +1,6 @@
 package org.mydotey.ai.artemis.registry.server;
 
-import io.grpc.ManagedChannel;
+import io.grpc.Channel;
 import io.grpc.stub.StreamObserver;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -17,11 +17,11 @@ final class Heartbeats {
 
     private Heartbeats() {}
 
-    static List<HeartbeatResponse> collect(ManagedChannel channel, HeartbeatRequest... requests)
-            throws InterruptedException {
+    static List<HeartbeatResponse> collect(Channel channel, HeartbeatRequest... requests) throws InterruptedException {
         CountDownLatch acked = new CountDownLatch(requests.length);
         List<HeartbeatResponse> responses = new CopyOnWriteArrayList<>();
         StreamObserver<HeartbeatRequest> stream = RegistryServiceGrpc.newStub(channel)
+                .withInterceptors(AuthClients.authenticated())
                 .heartbeat(new StreamObserver<>() {
                     @Override
                     public void onNext(HeartbeatResponse response) {

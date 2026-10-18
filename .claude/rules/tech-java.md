@@ -24,7 +24,7 @@
 
 ## 代码约束
 
-- 格式化 Spotless + Palantir java-format：提交前 `mvn -f java/pom.xml spotless:apply`，CI `spotless:check` 强制，不手工讨论格式。
+- 格式化 Spotless + Palantir java-format：提交前 `mvn -f java/server/pom.xml spotless:apply`（服务端线）与 `mvn -f java/client/pom.xml spotless:apply`（SDK 线），CI `spotless:check` 强制，不手工讨论格式。
 - Lombok：`@Value`/`@Builder`/`@RequiredArgsConstructor` 优先，日志用 `@Slf4j`；禁 `@Synchronized`。
 - 配置一律走 SCF（manager / sources / property 三层抽象）：禁 `System.getProperty` 直读、禁裸 String 配置值进内核；动态/静态分型纪律见开发规范 §10。
 - 注册表数据结构用不可变快照 + volatile 发布，读路径无锁；所有 executor 有界 + 命名，禁无界队列、禁 `Thread.sleep` 轮询。

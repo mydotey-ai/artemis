@@ -18,6 +18,15 @@
       <groupId>com.google.protobuf</groupId>
       <artifactId>protobuf-java</artifactId>
     </dependency>
+    <!-- 静态配置项通用工具（各使用类传入自己的键/默认值/范围） -->
+    <dependency>
+      <groupId>org.mydotey.scf</groupId>
+      <artifactId>scf-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.mydotey.scf</groupId>
+      <artifactId>scf-simple</artifactId>
+    </dependency>
   </dependencies>
 
   <build>

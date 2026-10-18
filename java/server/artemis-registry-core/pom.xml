@@ -18,6 +18,20 @@
       <groupId>org.mydotey.ai.artemis</groupId>
       <artifactId>artemis-common</artifactId>
     </dependency>
+    <!-- 配置抽象：domain/application 依赖 Property，infrastructure 配置门面用 scf-simple 转换器/值域过滤 -->
+    <dependency>
+      <groupId>org.mydotey.scf</groupId>
+      <artifactId>scf-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.mydotey.scf</groupId>
+      <artifactId>scf-simple</artifactId>
+    </dependency>
+    <!-- 监控就地定义：实现类自行注册 meters（不入服务接口，不集中 binder） -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-core</artifactId>
+    </dependency>
     <!-- grpc stub 生成代码的编译依赖（RegistryService），运行时传输由 server 装配 -->
     <dependency>
       <groupId>io.grpc</groupId>

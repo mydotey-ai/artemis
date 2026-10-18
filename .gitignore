@@ -39,6 +39,10 @@ replay_pid*
 # 临时开发计划与调研工作笔记（doc 规则：plans/ 不入库）
 docs/plans/
 
+# 服务端快照运行时数据（只忽略快照文件，避免误伤 docs/data/ 等文档目录）
+**/registry-snapshot.bin
+**/registry-snapshot.bin.*.tmp
+
 # Maven 构建产物
 target/
 # flatten-maven-plugin 生成的解析后 pom（每次 verify 重写，不入库）

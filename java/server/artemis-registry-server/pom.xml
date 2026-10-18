@@ -44,6 +44,38 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter</artifactId>
     </dependency>
+    <!-- HTTP 辅助通道（外部端口）+ 内部管理端口 actuator -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+    </dependency>
+    <!-- trace：Spring Boot 4.1 官方 OpenTelemetry 集成 -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-opentelemetry</artifactId>
+    </dependency>
+    <!-- 结构化 JSON 日志 -->
+    <dependency>
+      <groupId>net.logstash.logback</groupId>
+      <artifactId>logstash-logback-encoder</artifactId>
+    </dependency>
+    <!-- SCF source/manager 装配（properties 定义在 registry-core infrastructure） -->
+    <dependency>
+      <groupId>org.mydotey.scf</groupId>
+      <artifactId>scf-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.mydotey.scf</groupId>
+      <artifactId>scf-simple</artifactId>
+    </dependency>
     <!-- Spring Boot 4.1 官方 gRPC 服务端（tech-stack #33）：@GrpcService 自动装配，
          端口/传输/生命周期由 starter 管理，不自写 Server；版本随 SB BOM -->
     <dependency>
@@ -65,6 +97,23 @@
 
   <build>
     <plugins>
+      <!-- 可执行 fat jar（单节点起停/容器化基础）。classifier=exec：原 jar 保持普通布局，
+           failsafe/测试 classpath 不受 BOOT-INF 重排影响 -->
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <version>${spring-boot.version}</version>
+        <configuration>
+          <classifier>exec</classifier>
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
       <!-- failsafe 正式绑定（phase-2 起）：*IT 服务级集成测试进 verify 生命周期，
            dev-test.sh integration|all 模式经此覆盖 -->
       <plugin>

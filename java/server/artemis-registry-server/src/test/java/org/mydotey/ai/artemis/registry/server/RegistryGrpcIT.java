@@ -6,6 +6,7 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,13 +25,14 @@ import org.mydotey.ai.artemis.proto.registry.v1.RegistryServiceGrpc;
 import org.mydotey.ai.artemis.registry.InMemorySnapshotStore;
 import org.mydotey.ai.artemis.registry.MutableClock;
 import org.mydotey.ai.artemis.registry.TestAwait;
+import org.mydotey.ai.artemis.registry.TestProperties;
 import org.mydotey.ai.artemis.registry.application.RegistryService;
 import org.mydotey.ai.artemis.registry.domain.ChangeListener;
 import org.mydotey.ai.artemis.registry.domain.ChangeType;
 import org.mydotey.ai.artemis.registry.domain.InstanceChange;
-import org.mydotey.ai.artemis.registry.domain.LeaseTtlSource;
 import org.mydotey.ai.artemis.registry.domain.RegistrySnapshotStore;
 import org.mydotey.ai.artemis.registry.domain.SelfProtection;
+import org.mydotey.scf.facade.StringProperties;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.grpc.test.autoconfigure.LocalGrpcServerPort;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -43,7 +45,7 @@ import org.springframework.context.annotation.Primary;
  * 经真实调用链路（wire 序列化 + mapper + gRPC 绑定 + 租约调度）驱动端到端用例。
  * 测试持有注入的 MutableClock 与事件收集器做确定性断言；调度触发的过期以测试侧有界轮询观察。
  */
-@SpringBootTest(properties = "spring.grpc.server.port=0")
+@SpringBootTest(properties = {"spring.grpc.server.port=0", "server.port=0", "management.server.port=0"})
 class RegistryGrpcIT {
 
     private static final String NAMESPACE = "default";
@@ -74,7 +76,7 @@ class RegistryGrpcIT {
         channel = ManagedChannelBuilder.forAddress("localhost", port)
                 .usePlaintext()
                 .build();
-        blocking = RegistryServiceGrpc.newBlockingStub(channel);
+        blocking = RegistryServiceGrpc.newBlockingStub(channel).withInterceptors(AuthClients.authenticated());
         // context 跨用例缓存：清理共享单例（时钟归零、摘除残留实例、清空事件、清空续约统计）保证用例独立
         clock.reset();
         selfProtection.reset();
@@ -121,15 +123,15 @@ class RegistryGrpcIT {
         // 缺席补注册生效
         TestAwait.await("absent instance registered by heartbeat", () -> instanceCount() == 2);
 
-        // 续约推后过期时刻（TTL 100ms）：t=60 再心跳（续约点推后到 60），
-        // t=110 距续约 50 < 100 仍在（若续约未生效，距注册 110 >= 100 即摘——有区分度）；
-        // t=161 距续约 101 >= 100 被摘
-        clock.advance(Duration.ofMillis(60));
+        // 续约推后过期时刻（TTL 1000ms）：t=600 再心跳（续约点推后到 600），
+        // t=1100 距续约 500 < 1000 仍在（若续约未生效，距注册 1100 >= 1000 即摘——有区分度）；
+        // t=1610 距续约 1010 >= 1000 被摘
+        clock.advance(Duration.ofMillis(600));
         assertThat(Heartbeats.collect(channel, heartbeatRequest(3L, "i1", "i2")))
                 .hasSize(1);
-        clock.advance(Duration.ofMillis(50));
+        clock.advance(Duration.ofMillis(500));
         assertThat(instanceCount()).isEqualTo(2);
-        clock.advance(Duration.ofMillis(51));
+        clock.advance(Duration.ofMillis(510));
         TestAwait.await("instances evicted after ttl from renewal", () -> instanceCount() == 0);
     }
 
@@ -175,7 +177,7 @@ class RegistryGrpcIT {
         blocking.register(registerRequest("i1"));
         TestAwait.await("registered", () -> instanceCount() == 1);
 
-        clock.advance(Duration.ofMillis(150)); // 超过 TTL 100ms
+        clock.advance(Duration.ofMillis(1500)); // 超过 TTL 1000ms
 
         TestAwait.await("expired instance evicted", () -> instanceCount() == 0);
         assertThat(events).anySatisfy(change -> {
@@ -211,8 +213,9 @@ class RegistryGrpcIT {
 
         @Bean
         @Primary
-        LeaseTtlSource shortLeaseTtl() {
-            return () -> Duration.ofMillis(100);
+        StringProperties testProperties() {
+            return TestProperties.of(Map.of("artemis.registry.lease.ttlMs", "1000"))
+                    .properties();
         }
 
         @Bean

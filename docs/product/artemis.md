@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.2    更新时间: 2026-10-18
+版本: 1.3    更新时间: 2026-10-18
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -33,7 +33,8 @@
 ```bash
 mvn -f java/pom.xml verify                 # 全量构建 + 测试（spotless + enforcer + 单测）
 java/scripts/dev-test.sh [unit|integration|all]   # 统一测试入口，默认 all
-mvn -f java/pom.xml spotless:apply         # 提交前格式化
+mvn -f java/server/pom.xml spotless:apply  # 提交前格式化（服务端线）
+mvn -f java/client/pom.xml spotless:apply  # 提交前格式化（SDK 线）
 ```
 
 环境前提：JDK 25（编译/工具进程）与 JDK 8（client 测试 JVM，经 Maven toolchains；模板 `java/toolchains.xml.example`，复制到 `~/.m2/toolchains.xml` 并改 `jdkHome`）。
@@ -42,7 +43,7 @@ mvn -f java/pom.xml spotless:apply         # 提交前格式化
 
 | 模块 | 目标 | 职责 |
 |---|---|---|
-| `artemis-common` | 25 | 服务端公共规范/工具；proto 生成 `common.v1` + `projection.v1`（服务端共享） |
+| `artemis-common` | 25 | 服务端公共规范/工具（SCF 配置工具/通用 source）；proto 生成 `common.v1` + `projection.v1`（服务端共享） |
 | `artemis-registry-core` / `-server` | 25 | registry 内核 / Spring Boot 装配 |
 | `artemis-discovery-core` / `-server` | 25 | discovery 投影内核 / Spring Boot 装配 |
 | `artemis-management-core` / `-server` | 25 | 治理面内核 / Spring Boot 装配 |
@@ -69,12 +70,22 @@ mvn -f java/pom.xml spotless:apply         # 提交前格式化
 - **readiness 门控**：启动数据源就绪（v0.1 = 回放完成或确认无有效快照）前不接客户端流量，gRPC 返回 `UNAVAILABLE`；无快照时空表直接就绪（心跳即注册，客户端自愈），不做跨节点等待。
 - **工程形态**：56 内核单测 + 5 服务端单测 + 7 服务级集成测试（含重启回放端到端、readiness 正常路径）。
 
-HTTP/认证/指标（phase-4）、管理 API（phase-5）、SDK 与 starter（phase-6）后续递补。
+**phase-4（配置规范化 + registry-server 装配）已交付**：
+
+- **配置（SCF）**：每服务统一装配 `ConfigurationManager` + `StringProperties`，业务配置项由使用它的类就地定义。source 优先级：Spring Environment（命令行 `--artemis.registry.*=` / Spring 属性）> 系统属性 > 环境变量（`ARTEMIS_REGISTRY_*` 映射）> 工作目录 `artemis.properties`（运行中变更自动重载）。动态项：租约 TTL、保护阈值；静态项：保护窗口、清理/快照周期、快照路径/时效、成员列表、认证（重启生效）。越界数值回落默认并记日志；配置文件不可读/格式错误启动失败。
+- **端口**：外部 gRPC **9090**、外部 HTTP **8080**、管理 HTTP **9091**（默认仅绑本机）。管理端口承载 actuator。
+- **认证**：默认开启单账户 HTTP Basic（默认 `artemis`/`artemis`，生产须修改；`artemis.registry.auth.enabled=false` 可关闭）。gRPC 与外部 HTTP 生效；外部 `/readyz` 与 gRPC 健康探针放行。
+- **可观测**：管理端口 `/actuator/prometheus`（实例数、心跳、清理、保护态指标）与 `/actuator/health/readiness`；外部 `/readyz`；结构化 JSON 日志；OpenTelemetry trace 接线（默认不导出 OTLP，配置 endpoint 后开启）。
+- **成员抽象**：`ClusterMembers` 静态实现（逗号分隔 `host:port`，支持括号 IPv6），v0.2 接入复制与 readiness。
+- **工程形态**：common 8 + core 77 + server 22 单测、13 服务级集成测试。
+
+管理 API（phase-5）、SDK 与 starter（phase-6）、starter/CI/Dockerfile（phase-7）后续递补。
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.3 | 2026-10-18 | phase-4 交付：SCF 配置（分层 source/热加载/动态与静态项）、默认 Basic 认证、三端口分离、Prometheus/JSON 日志/OTel、HTTP readiness、成员抽象 |
 | 1.2 | 2026-10-18 | phase-3 交付：自我保护基础版（10s 窗口/85%/下限 50）、快照落盘回放（5min / maxAge 1h / 路径默认）、readiness 门控与 UNAVAILABLE 语义 |
 | 1.1 | 2026-10-14 | phase-2 交付：注册四操作 + 心跳对账 + 租约 TTL/清理默认值（30s/1s，单调钟判定）+ gRPC 接入 |
 | 1.0 | 2026-10-12 | 初版（首个收尾 phase 建立）：产品定位、核心概念、开发者入口、交付状态 |

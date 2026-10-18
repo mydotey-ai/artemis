@@ -9,6 +9,7 @@ import java.net.ServerSocket;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
@@ -23,14 +24,12 @@ import org.mydotey.ai.artemis.proto.registry.v1.RegisterRequest;
 import org.mydotey.ai.artemis.proto.registry.v1.RegistryServiceGrpc;
 import org.mydotey.ai.artemis.registry.MutableClock;
 import org.mydotey.ai.artemis.registry.TestAwait;
+import org.mydotey.ai.artemis.registry.TestProperties;
 import org.mydotey.ai.artemis.registry.application.RegistryService;
 import org.mydotey.ai.artemis.registry.domain.ChangeListener;
 import org.mydotey.ai.artemis.registry.domain.ChangeType;
 import org.mydotey.ai.artemis.registry.domain.InstanceChange;
-import org.mydotey.ai.artemis.registry.domain.LeaseTtlSource;
-import org.mydotey.ai.artemis.registry.domain.RegistrySnapshotStore;
-import org.mydotey.ai.artemis.registry.infrastructure.FileRegistrySnapshotStore;
-import org.springframework.beans.factory.annotation.Value;
+import org.mydotey.scf.facade.StringProperties;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
@@ -63,6 +62,7 @@ class SnapshotRestoreIT {
             ManagedChannel channelA = channel(portA);
             RegistryService serviceA = contextA.getBean(RegistryService.class);
             assertThat(RegistryServiceGrpc.newBlockingStub(channelA)
+                            .withInterceptors(AuthClients.authenticated())
                             .register(registerRequest("i1"))
                             .getStatus()
                             .getAck())
@@ -93,6 +93,7 @@ class SnapshotRestoreIT {
                 assertThat(Heartbeats.collect(channelB, heartbeatRequest(1L, "i1")))
                         .hasSize(1);
                 assertThat(RegistryServiceGrpc.newBlockingStub(channelB)
+                                .withInterceptors(AuthClients.authenticated())
                                 .update(updateRequest("i1"))
                                 .getStatus()
                                 .getAck())
@@ -105,10 +106,10 @@ class SnapshotRestoreIT {
                     .hasValueSatisfying(
                             s -> assertThat(s.instances().get(0).weight()).isEqualTo(200));
 
-            // TTL 从回放起算（TTL 100ms）：距回放 50ms 在、再 +51ms 后被清理调度摘除
-            clockB.advance(Duration.ofMillis(50));
+            // TTL 从回放起算（TTL 1000ms）：距回放 500ms 在、再 +510ms 后被清理调度摘除
+            clockB.advance(Duration.ofMillis(500));
             assertThat(instanceCount(serviceB)).isEqualTo(1);
-            clockB.advance(Duration.ofMillis(51));
+            clockB.advance(Duration.ofMillis(510));
             TestAwait.await("evicted after ttl counted from restore", () -> instanceCount(serviceB) == 0);
         } finally {
             contextB.close();
@@ -120,6 +121,9 @@ class SnapshotRestoreIT {
     @Configuration(proxyBeanMethods = false)
     static class RestoreTestConfig {
 
+        /** 每个 context 启动前由测试设置，供测试 StringProperties 指向 @TempDir 隔离路径。 */
+        static Path snapshotFilePath;
+
         @Bean
         @Primary
         MutableClock testClock() {
@@ -129,15 +133,13 @@ class SnapshotRestoreIT {
 
         @Bean
         @Primary
-        RegistrySnapshotStore testSnapshotStore(@Value("${artemis.registry.snapshot.path}") String path) {
-            // 生产装配只走常量默认（配置纪律）；测试侧经属性指向 @TempDir 隔离路径
-            return new FileRegistrySnapshotStore(Path.of(path));
-        }
-
-        @Bean
-        @Primary
-        LeaseTtlSource shortLeaseTtl() {
-            return () -> Duration.ofMillis(100);
+        StringProperties testProperties() {
+            return TestProperties.of(Map.of(
+                            "artemis.registry.lease.ttlMs",
+                            "1000",
+                            "artemis.registry.snapshot.path",
+                            snapshotFilePath.toString()))
+                    .properties();
         }
 
         @Bean
@@ -155,13 +157,11 @@ class SnapshotRestoreIT {
     // ---- 设施 ----
 
     private ConfigurableApplicationContext startContext(int grpcPort, Path snapshotFile) {
+        RestoreTestConfig.snapshotFilePath = snapshotFile;
+        // 命令行参数优先级高于 application.properties（本用例需覆盖默认端口/关闭 web）
         return new SpringApplicationBuilder(ArtemisRegistryServer.class)
                 .sources(RestoreTestConfig.class)
-                .properties(
-                        "spring.grpc.server.port=" + grpcPort,
-                        "spring.main.web-application-type=none",
-                        "artemis.registry.snapshot.path=" + snapshotFile)
-                .run();
+                .run("--spring.grpc.server.port=" + grpcPort, "--spring.main.web-application-type=none");
     }
 
     @SuppressWarnings("unchecked")

@@ -166,6 +166,15 @@ public final class InstanceRegistry {
         return holder == null ? Optional.empty() : Optional.of(holder.snapshot);
     }
 
+    /** 当前实例总数（指标 gauge；弱一致聚合读，不加锁）。 */
+    public int instanceCount() {
+        int count = 0;
+        for (ServiceHolder holder : services.values()) {
+            count += holder.leases.size();
+        }
+        return count;
+    }
+
     /** 全量快照读：全部 service 的共享快照聚合（供快照落盘），零克隆。 */
     public List<ServiceInstances> snapshots() {
         List<ServiceInstances> result = new ArrayList<>(services.size());

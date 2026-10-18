@@ -26,7 +26,8 @@ monorepo 顶层按语言分目录：`proto/`（语言无关契约，六组）、
 ```bash
 mvn -f java/pom.xml verify                        # 全量构建 + 测试（spotless + enforcer + 单测）
 java/scripts/dev-test.sh [unit|integration|all]   # 统一测试入口，默认 all（工作流 ⑤/⑧ 验收经此）
-mvn -f java/pom.xml spotless:apply                # 提交前格式化
+mvn -f java/server/pom.xml spotless:apply         # 提交前格式化（服务端线）
+mvn -f java/client/pom.xml spotless:apply         # 提交前格式化（SDK 线）
 ```
 
 - 服务端模块（common、各 core/server）编译目标 `release=25`；client 与 starter `release=8`，同一 reactor 混合编译。

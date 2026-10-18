@@ -9,6 +9,7 @@ import java.util.Optional;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mydotey.ai.artemis.registry.TestProperty;
 
 /** 文件快照 store：原子写（tmp + move）后读回一致、临时文件不残留、缺失文件返回 empty。 */
 class FileRegistrySnapshotStoreTest {
@@ -19,7 +20,7 @@ class FileRegistrySnapshotStoreTest {
     @Test
     void should_write_atomically_and_read_back() throws IOException {
         Path file = tempDir.resolve("nested/registry-snapshot.bin"); // 父目录不存在：write 侧自建
-        FileRegistrySnapshotStore store = new FileRegistrySnapshotStore(file);
+        FileRegistrySnapshotStore store = store(file);
 
         store.write(new byte[] {1, 2, 3, 4, 5});
         store.write(new byte[] {9}); // 覆盖写：单快照文件语义
@@ -36,7 +37,7 @@ class FileRegistrySnapshotStoreTest {
 
     @Test
     void should_return_empty_when_file_missing() {
-        FileRegistrySnapshotStore store = new FileRegistrySnapshotStore(tempDir.resolve("absent.bin"));
+        FileRegistrySnapshotStore store = store(tempDir.resolve("absent.bin"));
 
         assertThat(store.read()).isEmpty();
     }
@@ -46,7 +47,7 @@ class FileRegistrySnapshotStoreTest {
         // 裸文件名（无父目录）：目标路径先绝对化，否则 getParent() 为 null → NPE → 快照永不落盘
         Path bare = Path.of("registry-snapshot-" + java.util.UUID.randomUUID() + ".bin");
         try {
-            FileRegistrySnapshotStore store = new FileRegistrySnapshotStore(bare);
+            FileRegistrySnapshotStore store = store(bare);
 
             store.write(new byte[] {7, 8, 9});
 
@@ -59,7 +60,7 @@ class FileRegistrySnapshotStoreTest {
     @Test
     void should_not_publish_torn_snapshot_under_concurrent_writes() {
         Path file = tempDir.resolve("concurrent.bin");
-        FileRegistrySnapshotStore store = new FileRegistrySnapshotStore(file);
+        FileRegistrySnapshotStore store = store(file);
         byte[] first = payload((byte) 1);
         byte[] second = payload((byte) 2);
 
@@ -75,5 +76,9 @@ class FileRegistrySnapshotStoreTest {
         byte[] bytes = new byte[1024];
         java.util.Arrays.fill(bytes, value);
         return bytes;
+    }
+
+    private static FileRegistrySnapshotStore store(Path file) {
+        return new FileRegistrySnapshotStore(TestProperty.fixed(file.toString()));
     }
 }

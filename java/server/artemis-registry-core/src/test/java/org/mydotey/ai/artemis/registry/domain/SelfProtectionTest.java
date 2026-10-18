@@ -2,24 +2,32 @@ package org.mydotey.ai.artemis.registry.domain;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mydotey.ai.artemis.registry.MutableClock;
+import org.mydotey.ai.artemis.registry.TestProperties;
 
 /** 自我保护：窗口统计（分桶滑动、maxCount 只增不减）与阈值判定（minCount 下限、factor 阈值）。 */
 class SelfProtectionTest {
 
-    /** 小参数：10 桶窗口、0.85 因子、minCount 5——测试无需生产规模心跳量。 */
-    private static final SelfProtectionConfig CONFIG = new SelfProtectionConfig(Duration.ofSeconds(10), 0.85, 5);
-
     private MutableClock clock;
+    private SimpleMeterRegistry meters;
+    private TestProperties properties;
     private SelfProtection protection;
 
     @BeforeEach
     void setUp() {
         clock = new MutableClock();
-        protection = new SelfProtection(CONFIG, clock);
+        meters = new SimpleMeterRegistry();
+        // 小参数：10 桶窗口、0.85 因子、minCount 5——测试无需生产规模心跳量
+        properties = TestProperties.of(Map.of(
+                SelfProtection.KEY_WINDOW_SECONDS, "10",
+                SelfProtection.KEY_MIN_COUNT, "5",
+                SelfProtection.KEY_FACTOR, "0.85"));
+        protection = new SelfProtection(properties.properties(), meters, clock);
     }
 
     @Test
@@ -80,7 +88,7 @@ class SelfProtectionTest {
     void should_not_catch_up_from_epoch_when_clock_origin_is_large() {
         // 生产单调钟以主机开机为原点：构造即对齐，首调不得逐秒追赶 O(uptime)（30 天原实现实测 ~0.4s）
         clock.advance(Duration.ofDays(30));
-        SelfProtection longUptime = new SelfProtection(CONFIG, clock);
+        SelfProtection longUptime = new SelfProtection(properties.properties(), meters, clock);
 
         long started = System.nanoTime();
         longUptime.recordRenewals(100);
@@ -93,11 +101,59 @@ class SelfProtectionTest {
     void should_handle_negative_monotonic_seconds() {
         // 单调钟原点任意（System.nanoTime() 规范允许负值）：环形索引须用 floorMod
         clock.advance(Duration.ofSeconds(-100));
-        SelfProtection negativeOrigin = new SelfProtection(CONFIG, clock);
+        SelfProtection negativeOrigin = new SelfProtection(properties.properties(), meters, clock);
 
         negativeOrigin.recordRenewals(100);
 
         assertThat(negativeOrigin.stats().windowRenewals()).isEqualTo(100);
+    }
+
+    @Test
+    void should_use_defaults_when_properties_empty() {
+        SelfProtection defaults = new SelfProtection(TestProperties.empty(), meters, clock);
+        defaults.recordRenewals(100);
+        clock.advance(Duration.ofSeconds(11));
+
+        // 默认 10s 窗口 / minCount 50 / factor 0.85：峰值 100 ≥ 50，窗口 0 < 85 → 保护
+        assertThat(defaults.isProtected()).isTrue();
+    }
+
+    @Test
+    void should_fall_back_to_default_factor_when_out_of_range() {
+        SelfProtection invalid = new SelfProtection(
+                TestProperties.of(Map.of(SelfProtection.KEY_FACTOR, "2.0")).properties(), meters, clock);
+        invalid.recordRenewals(100);
+        clock.advance(Duration.ofSeconds(11));
+        invalid.recordRenewals(90);
+
+        // 越界 factor 2.0 回落默认 0.85：90 < 100×0.85 为假 → 不保护（若误用 2.0 则保护）
+        assertThat(invalid.isProtected()).isFalse();
+    }
+
+    @Test
+    void should_use_latest_thresholds_when_changed() {
+        protection.recordRenewals(100);
+        clock.advance(Duration.ofSeconds(11));
+        assertThat(protection.isProtected()).isTrue();
+
+        // factor 动态下调：当前量 0 < peak × 0.5 仍保护
+        properties.set(SelfProtection.KEY_FACTOR, "0.5");
+        assertThat(protection.isProtected()).isTrue();
+
+        // minCount 动态上调到峰值之上：不再启用判定
+        properties.set(SelfProtection.KEY_MIN_COUNT, "101");
+        assertThat(protection.isProtected()).isFalse();
+    }
+
+    @Test
+    void should_register_protection_gauges_when_constructed() {
+        protection.recordRenewals(100);
+        clock.advance(Duration.ofSeconds(11));
+
+        assertThat(meters.get("artemis.registry.self.protection").gauge().value())
+                .isEqualTo(1.0);
+        assertThat(meters.get("artemis.registry.self.renewals").gauge().value()).isZero();
+        assertThat(meters.get("artemis.registry.self.max").gauge().value()).isEqualTo(100.0);
     }
 
     @Test

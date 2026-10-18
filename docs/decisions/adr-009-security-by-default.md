@@ -1,6 +1,6 @@
 # ADR-009：安全内建（v0.1 默认认证）
 
-版本: 1.0    更新时间: 2026-10-10
+版本: 1.1    更新时间: 2026-10-18
 
 ## 状态
 
@@ -27,8 +27,18 @@ v1.0 一次性补安全——存量 eval 部署升级时面临行为突变与裸
 - v0.1 起 eval 需处理认证（文档给出显式关闭配置）。
 - 全部治理操作进审计表（期 3）。
 
+## v0.1 实现语义（2026-10-18 补充）
+
+- **默认账户**：`artemis`/`artemis`；使用默认密码启动时记 WARN，生产部署必须修改（`artemis.registry.auth.username/password`）。
+- **关闭开关**：`artemis.registry.auth.enabled=false`；布尔项使用 SCF 内置 `StringToBooleanConverter`（`Boolean.parseBoolean` 语义：仅 `true` 开启）。
+- **传输**：gRPC metadata `authorization: Basic <base64>` 与外部 HTTP 同名头；`MessageDigest.isEqual` 常量时间比较，不记录凭证。
+- **放行面**：外部 HTTP `/readyz`、gRPC `grpc.health.v1.Health`（K8s/Envoy 探针无凭证）；管理端口（actuator）默认仅绑 `127.0.0.1` 且不施加认证。
+- **空白凭证**：SCF 将空白值视为未设置，回落默认账户（文档明示；不在启动期 fail-fast）。
+- 统一账户体系随 v0.4 management 接管。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-18 | 补 v0.1 实现语义：默认账户/关闭开关/传输与放行面/空白凭证处理 |
 | 1.0 | 2026-10-10 | 自架构文档 §7 决策表 D9 迁移成文 |

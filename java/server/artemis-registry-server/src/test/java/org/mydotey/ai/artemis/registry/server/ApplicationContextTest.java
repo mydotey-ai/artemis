@@ -8,7 +8,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 
-@SpringBootTest(properties = "spring.grpc.server.port=0")
+@SpringBootTest(properties = {"spring.grpc.server.port=0", "server.port=0", "management.server.port=0"})
 class ApplicationContextTest {
 
     @Test

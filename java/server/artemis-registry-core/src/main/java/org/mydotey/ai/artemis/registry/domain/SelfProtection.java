@@ -1,7 +1,14 @@
 package org.mydotey.ai.artemis.registry.domain;
 
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
+import org.mydotey.ai.artemis.common.config.ScfProperties;
+import org.mydotey.scf.Property;
+import org.mydotey.scf.facade.StringProperties;
+import org.mydotey.scf.filter.RangeValueConfig;
 
 /**
  * 续约滑动窗口统计与保护态判定（资产 #10 继承；按服务粒度归 v0.2 自我保护 2.0）。
@@ -19,26 +26,83 @@ import java.util.concurrent.atomic.LongAdder;
  */
 public final class SelfProtection {
 
-    private final SelfProtectionConfig config;
+    public static final String KEY_WINDOW_SECONDS = "artemis.registry.selfProtection.windowSeconds";
+    public static final String KEY_MIN_COUNT = "artemis.registry.selfProtection.minCount";
+    public static final String KEY_FACTOR = "artemis.registry.selfProtection.factor";
+
+    private static final int DEFAULT_WINDOW_SECONDS = 10;
+    private static final int DEFAULT_MIN_COUNT = 50;
+    private static final double DEFAULT_FACTOR = 0.85;
+    private static final long METRICS_CACHE_NANOS = TimeUnit.SECONDS.toNanos(1);
+
+    private final Property<String, Integer> windowSeconds;
+    private final Property<String, Integer> minCount;
+    private final Property<String, Double> factor;
     private final MonotonicClock clock;
     private final LongAdder[] buckets;
     private final AtomicLong lastSecond;
     private final AtomicLong maxCount = new AtomicLong();
+    private volatile SelfProtectionStats metricsStats;
+    private volatile long metricsStatsAtNanos;
 
-    public SelfProtection(SelfProtectionConfig config, MonotonicClock clock) {
-        long bucketSeconds = config.window().toSeconds();
-        if (bucketSeconds < 1) {
-            throw new IllegalArgumentException("self-protection window must be >= 1s: " + config.window());
-        }
-        this.config = config;
+    /**
+     * 自我保护参数在类内定义：窗口为静态结构参数（分桶数组容量启动固定），
+     * 启用下限与阈值因子为动态 property。
+     */
+    public SelfProtection(StringProperties properties, MeterRegistry meterRegistry, MonotonicClock clock) {
+        this.windowSeconds = ScfProperties.staticInt(
+                properties,
+                KEY_WINDOW_SECONDS,
+                DEFAULT_WINDOW_SECONDS,
+                1,
+                300,
+                "self-protection sliding window in seconds (static, bucket array fixed at startup)");
+        this.minCount =
+                properties.getIntProperty(KEY_MIN_COUNT, new RangeValueConfig<>(DEFAULT_MIN_COUNT, 0, 1_000_000));
+        this.factor = properties.getDoubleProperty(KEY_FACTOR, new RangeValueConfig<>(DEFAULT_FACTOR, 0.1, 1.0));
         this.clock = clock;
-        this.buckets = new LongAdder[(int) bucketSeconds];
+        this.buckets = new LongAdder[windowSeconds.getValue()];
         for (int i = 0; i < buckets.length; i++) {
             buckets[i] = new LongAdder();
         }
         // 构造即对齐当前秒：游标从 0 起会在首个调用时逐秒追赶 O(主机 uptime)（单调钟原点任意），
         // 长 uptime 主机上阻塞首个心跳/清理线程达秒级
         this.lastSecond = new AtomicLong(clock.monoMillis() / 1000);
+        registerMetrics(meterRegistry);
+    }
+
+    /** 保护态指标就地定义（监控属实现关注点，不入领域接口）。 */
+    private void registerMetrics(MeterRegistry meterRegistry) {
+        Gauge.builder(
+                        "artemis.registry.self.protection",
+                        this,
+                        p -> p.statsForMetrics().protecting() ? 1 : 0)
+                .description("self-protection state (1 = protecting)")
+                .register(meterRegistry);
+        Gauge.builder(
+                        "artemis.registry.self.renewals",
+                        this,
+                        p -> p.statsForMetrics().windowRenewals())
+                .description("renewals in current self-protection window")
+                .register(meterRegistry);
+        Gauge.builder(
+                        "artemis.registry.self.max",
+                        this,
+                        p -> p.statsForMetrics().maxCount())
+                .description("historical max renewals in self-protection window")
+                .register(meterRegistry);
+    }
+
+    // ponytail: 1s 共享快照缓存——三个 gauge 读同一次 stats，避免抓取线程重复聚合并减少窗口推进副作用
+    private SelfProtectionStats statsForMetrics() {
+        SelfProtectionStats current = metricsStats;
+        long now = System.nanoTime();
+        if (current == null || now - metricsStatsAtNanos >= METRICS_CACHE_NANOS) {
+            current = stats();
+            metricsStats = current;
+            metricsStatsAtNanos = now;
+        }
+        return current;
     }
 
     /**
@@ -77,7 +141,7 @@ public final class SelfProtection {
         advanceBuckets(second); // 读取侧同样惰性推进：无写入的静默期过后，残留旧计数须先出桶再聚合
         long windowRenewals = sumWindow(second);
         long peak = maxCount.accumulateAndGet(windowRenewals, Math::max);
-        boolean protecting = peak >= config.minCount() && windowRenewals < peak * config.factor();
+        boolean protecting = peak >= minCount.getValue() && windowRenewals < peak * factor.getValue();
         return new SelfProtectionStats(windowRenewals, peak, protecting);
     }
 

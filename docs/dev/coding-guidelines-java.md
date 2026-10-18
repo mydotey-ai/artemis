@@ -1,6 +1,6 @@
 # Java 开发规范
 
-版本: 1.14    更新时间: 2026-10-13
+版本: 1.21    更新时间: 2026-10-18
 
 > 本文是新一代 Artemis Java 实现的开发规范：包结构、代码风格、并发与线程、错误处理、日志、测试、proto 兼容、SDK 特殊约束与配置管理。技术选型（组件与版本）见[Java 技术选型](tech-stack-java.md)；Git 分支与 commit 规范见 `.claude/rules/git.md`，不在此重复。
 
@@ -14,6 +14,7 @@
 - 服务实现类放 server 模块（实现 core 定义的接口/ proto `ImplBase`），core 只含内核逻辑与契约；**gRPC 服务端用 Spring Boot 官方 starter**（`org.springframework.boot:spring-boot-starter-grpc-server` + `@GrpcService`）自动装配，**禁自写 `Server`/生命周期类**（见[技术选型](tech-stack-java.md) §4.7）。
 - **模块内 DDD 四层，领域为核心**（[ADR-015](../../decisions/adr-015-layered-model-inside-core.md)）：接入层（server 承载：协议接入，dto/vo 收发）→ 应用层（core `application`：用例编排 + dto↔domain 转换）→ 领域层（core `domain`）；基础设施层（core `infrastructure`）实现领域端口；`application`/`infrastructure` 依赖 `domain`，**domain 不依赖任何其它层**；领域定义端口、基础设施实现、装配层注入（依赖倒置 + 控制反转）。
 - **dto（proto 生成消息）只出现在 server 接入层与 application 的转换边界**（mapper/proto 门面）；**domain 出现 proto 类型即违规**。
+- **监控就地定义、不侵入服务接口**：metrics/log/trace 是实现与装配层关注点，**在产生/持有该数据的实现类内就地定义**（如自我保护窗口指标定义在 `SelfProtection`、心跳/清理计数定义在 `RegistryServiceImpl`），不建集中 metrics binder/统计 DTO；领域/应用服务接口只表达业务用例，不暴露监控数据。
 - **内部 RPC 通信领域层定义端口、基础设施层/装配层（server）提供实现**（双向）：
   - **入站**：server 模块持有 gRPC/HTTP 端点（proto `ImplBase` 等，即接入层），一行委派 core application 的 proto 门面。
   - **出站**（peer 复制、registry→discovery 分发、discovery↔management 规则流等内部通道）：domain 定义端口接口，具体实现在基础设施层——协议无关编排（扇出、重试/退避策略）可落 core `infrastructure`，gRPC client 传输（channel、stub、`StreamObserver`）放 server 模块。
@@ -31,7 +32,7 @@ org.mydotey.ai.artemis.registry
 └── infrastructure/   # 基础设施层：领域端口实现、调度/配置等技术实现、集群内部通信实现（协议无关部分）
 ```
 
-- **依赖方向**：`application → domain`、`infrastructure → domain`、接入层（server）→ application；**domain 不依赖 proto、Spring、配置源，也不依赖 application/infrastructure**；application 与 infrastructure 互不依赖。
+- **依赖方向**：`application → domain`、`infrastructure → domain`、接入层（server）→ application；**domain 不依赖 proto、Spring、`ConfigurationSource`，也不依赖 application/infrastructure**；按 D2/D3 定案，domain 可依赖 SCF `StringProperties`/`Property` 并在类内定义配置（配置定义分散到使用方）；application 与 infrastructure 互不依赖。
 - **依赖倒置 + 控制反转**：领域定义所需能力的端口接口（TTL 来源、变更事件出口等；时间源用 JDK `Clock`），基础设施实现，装配层（server 的 Spring）注入。
 - **命名**：用例入参/出参用 `XxxRequest`/`XxxResponse`（与契约同名同构，**不用 Command/Result**），**定义在领域层、应用层直接使用**（不重复建模型）。
 - **层间模型转换**：proto ↔ domain 一个 mapper（在 application），做**同名类按包转换**（`proto.…` 与 `domain.…` 同名类）；主映射由 MapStruct 编译期生成（组件总表），语义性转换（缺省值语义、未知枚举哨兵、结构展开）以显式手写方法补齐；映射规则集中于此，不散落业务代码。
@@ -40,7 +41,7 @@ org.mydotey.ai.artemis.registry
 
 ## 3. 代码风格
 
-- 格式化：Spotless + Palantir java-format，提交前 `mvn -f java/pom.xml spotless:apply`，CI `spotless:check` 强制。不做手工格式讨论，formatter 输出即终态。
+- 格式化：Spotless + Palantir java-format，提交前分别执行 `mvn -f java/server/pom.xml spotless:apply`（服务端线）与 `mvn -f java/client/pom.xml spotless:apply`（SDK 线），CI `spotless:check` 强制。不做手工格式讨论，formatter 输出即终态。
 - 命名：类名 UpperCamelCase、方法/变量 lowerCamelCase、常量 UPPER_SNAKE_CASE；布尔方法 `isXxx`/`hasXxx`；避免缩写（除 `id`、`url` 等公认项）。
 - **Lombok 使用纪律**（全项目启用，`provided` scope）：
   - 值对象/配置类：`@Value`、`@Builder`、`@RequiredArgsConstructor` 优先；
@@ -117,7 +118,8 @@ proto 的 wire 兼容规则与变更流程是**跨语言不变量**，单一来�
 ### 10.1 分层与解耦
 
 - `ConfigurationManager` 管理配置源集合，`ConfigurationSource` 按优先级叠加（默认序：系统属性 > 环境变量 > 配置文件；远端源后置版本按需追加）；业务代码只依赖 `Property` 抽象，**禁止**绕过 manager 直接读源、直接 `System.getProperty`。
-- 配置项定义集中：每服务一个（或按域少数几个）配置门面类（原产品 `facade.StringProperties` 同模式），配置键全部常量化；禁止配置键字符串散落业务代码。
+- **配置所有权边界**：框架与三方组件自有配置（Spring Boot、gRPC starter、actuator、OTLP 等）继续由组件自身配置体系管理；SCF 只管理本产品自定义业务配置，不复制/代理框架键（防双源漂移）。
+- **集中与分散边界**：`ConfigurationManager` 与 `StringProperties` 每服务统一装配一份；具体 Property 由**使用它的类**在类内定义（键常量化、默认值、动静类型、校验与消费逻辑同处）。需要配置的类注入 `StringProperties` 后自行取得/定义 property，**不传递单个 `Property`**，不建集中配置门面类。同一 key 全局只允许一个 `PropertyConfig`（SCF manager 按 key 缓存），共享配置以配置值对象统一定义一次。
 - 配置键命名 `artemis.<server>.<module>.<item>`，kebab/camel 统一 camel；client 侧前缀 `artemis.client.*`（与 starter 配置项前缀一致）。
 
 ### 10.2 动态与静态分型
@@ -127,13 +129,15 @@ proto 的 wire 兼容规则与变更流程是**跨语言不变量**，单一来�
 | 型 | 定义 | 典型项 | 纪律 |
 |---|---|---|---|
 | 动态配置 | 运行时可变 | 心跳间隔、租约 TTL、自我保护阈值、复制重试参数、兜底轮询周期 | 用 SCF `Property` 动态语义：`getValue` 每次取最新；变更消费走监听器（listener），**禁止轮询 diff** |
-| 静态配置 | 启动后不可变 | 监听端口、集群成员列表、数据目录、快照路径、DB 连接（期 3） | 启动时取值一次、固化为 `final`；变更需重启生效（文档明示）；**禁止**用动态 `Property` 读取静态项（防隐式可变） |
+| 静态配置 | 启动后不可变 | 监听端口、集群成员列表、数据目录、快照路径、DB 连接（期 3） | 以 `Property` 字段保存（`setStatic(true)`），使用处 `getValue()`；变更需重启生效（文档明示）；**禁止**临时构造 property 仅取一次值后丢弃 |
 
 ### 10.3 合规校验
 
 - 全部配置项必须带校验后才能进入内核：数值项用 `RangeValueFilter` 值域过滤，类型转换用 `TypeConverter`，枚举项校验取值集合；**禁止裸 String 配置值直接进内核逻辑**。
 - 校验失败策略分级：启动必需项（端口、成员列表等）**fail-fast**——拒绝启动并给出配置键 + 原因；可降级项回落默认值 + WARN 日志 + 指标计数。
-- 配置项默认值必须显式定义在门面类，禁止散落在调用点。
+- 配置项默认值必须显式定义在使用该配置的类（键常量旁），禁止散落在调用点。
+- **全仓统一审计**：自定义配置（含历史代码）一律走 SCF；`System.getProperty/getenv` 直读、Spring `@Value`/`@ConfigurationProperties`、裸配置常量均须迁移（框架/三方组件自有配置除外，见 §10.1 所有权边界）。
+- 静态项创建用 `ScfProperties.staticProperty`（泛型：目标类型 + `TypeConverter` + 值域过滤），long/int/string/boolean 有便捷方法；返回值一律作为 `Property` 字段保存，禁止临时取值后丢弃。
 
 ## 11. 版本规范
 
@@ -145,6 +149,13 @@ proto 的 wire 兼容规则与变更流程是**跨语言不变量**，单一来�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.21 | 2026-10-18 | §2 依赖方向明确：domain 不依赖 ConfigurationSource，但可按定案使用 SCF StringProperties/Property |
+| 1.20 | 2026-10-18 | §1 修订：监控就地定义（不建集中 binder/统计 DTO），且不侵入服务接口 |
+| 1.19 | 2026-10-18 | §1 新增「监控不侵入服务接口」：metrics/log/trace 归实现/装配层，服务接口只表达业务用例 |
+| 1.18 | 2026-10-18 | §10.3 补充：静态项用泛型 `ScfProperties.staticProperty` 创建，返回值保存为 Property 字段 |
+| 1.17 | 2026-10-18 | §10.2/§10.3 修订（D3）：静态项也以 Property 字段保存、使用处 getValue；新增全仓配置审计纪律 |
+| 1.16 | 2026-10-18 | §10.1/§10.3 配置定义边界修订（phase-4 验证期定案）：集中 manager + StringProperties，Property 由使用类在类内定义，不集中定义、不传单个 Property |
+| 1.15 | 2026-10-18 | §10.1 新增配置所有权边界（phase-4 设计 review 定案）：框架/三方组件配置仍由组件自身管理，SCF 只管自定义业务配置 |
 | 1.14 | 2026-10-13 | ④ 实现期坐标定案：§1 gRPC starter 坐标更正为 `org.springframework.boot:spring-boot-starter-grpc-server`（Spring Boot 4.1 官方模块） |
 | 1.13 | 2026-10-13 | code-review 修复：§1 gRPC starter 坐标更正为 `org.springframework.grpc:spring-grpc-server-spring-boot-starter`；更新历史 1.8 行还原 45aebcd 原始记录、phase-2 review 轮次重排、去除重复「合并 main」行 |
 | 1.12 | 2026-10-13 | 四次 review 修订：对齐 DDD 四层（ADR-015 v1.3）——接入层由 server 承载（协议接入、dto/vo 收发）、dto↔domain mapper 与 proto 门面移 application、infrastructure 纯化为领域端口实现；内部 RPC 出站实现拆「协议无关编排（core infrastructure）+ gRPC 传输（server）」 |

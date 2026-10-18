@@ -2,6 +2,7 @@ package org.mydotey.ai.artemis.registry.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mydotey.ai.artemis.registry.InMemorySnapshotStore;
 import org.mydotey.ai.artemis.registry.MutableClock;
+import org.mydotey.ai.artemis.registry.TestProperties;
 import org.mydotey.ai.artemis.registry.domain.Ack;
 import org.mydotey.ai.artemis.registry.domain.ChangeListener;
 import org.mydotey.ai.artemis.registry.domain.ChangeType;
@@ -19,11 +21,9 @@ import org.mydotey.ai.artemis.registry.domain.HeartbeatResponse;
 import org.mydotey.ai.artemis.registry.domain.Instance;
 import org.mydotey.ai.artemis.registry.domain.InstanceChange;
 import org.mydotey.ai.artemis.registry.domain.InstanceStatus;
-import org.mydotey.ai.artemis.registry.domain.LeaseTtlSource;
 import org.mydotey.ai.artemis.registry.domain.RegisterRequest;
 import org.mydotey.ai.artemis.registry.domain.RegisterResponse;
 import org.mydotey.ai.artemis.registry.domain.SelfProtection;
-import org.mydotey.ai.artemis.registry.domain.SelfProtectionConfig;
 import org.mydotey.ai.artemis.registry.domain.ServiceInstances;
 import org.mydotey.ai.artemis.registry.domain.ServiceKey;
 
@@ -32,13 +32,8 @@ class RegistryServiceImplTest {
 
     private static final ServiceKey KEY = new ServiceKey("default", "order-service");
 
-    /** 测试保护参数：低门槛（minCount 5）便于构造保护态；10s 窗口与生产默认一致。 */
-    private static final SelfProtectionConfig PROTECTION_CONFIG =
-            new SelfProtectionConfig(Duration.ofSeconds(10), 0.85, 5);
-
-    private static final Duration MAX_AGE = Duration.ofHours(1);
-
     private MutableClock clock;
+    private SimpleMeterRegistry meters;
     private List<InstanceChange> events;
     private SelfProtection protection;
     private InMemorySnapshotStore store;
@@ -47,12 +42,12 @@ class RegistryServiceImplTest {
     @BeforeEach
     void setUp() {
         clock = new MutableClock();
+        meters = new SimpleMeterRegistry();
         events = new ArrayList<>();
-        LeaseTtlSource ttl = () -> Duration.ofSeconds(30);
         ChangeListener listener = events::add;
-        protection = new SelfProtection(PROTECTION_CONFIG, clock);
+        protection = selfProtection(clock, meters);
         store = new InMemorySnapshotStore();
-        service = new RegistryServiceImpl(ttl, clock, clock, listener, protection, store, MAX_AGE);
+        service = new RegistryServiceImpl(TestProperties.empty(), clock, clock, listener, protection, store, meters);
     }
 
     @Test
@@ -232,7 +227,36 @@ class RegistryServiceImplTest {
         });
     }
 
+    @Test
+    void should_record_metrics_when_operations_occur() {
+        service.register(new RegisterRequest(List.of(new ServiceInstances(KEY, List.of(instance("i1"))))));
+        service.heartbeat(new HeartbeatRequest(List.of(new ServiceInstances(KEY, List.of(instance("i1")))), 1L));
+
+        clock.advance(Duration.ofSeconds(31));
+        assertThat(service.evictExpired()).isEqualTo(1);
+
+        assertThat(meters.get("artemis.registry.heartbeat.instances").counter().count())
+                .isEqualTo(1.0);
+        assertThat(meters.get("artemis.registry.evictions").counter().count()).isEqualTo(1.0);
+        assertThat(meters.get("artemis.registry.instances").gauge().value()).isZero();
+    }
+
     // ---- 设施 ----
+
+    /** 测试保护参数：低门槛（minCount 5）便于构造保护态；10s 窗口与生产默认一致。 */
+    private static SelfProtection selfProtection(MutableClock clock, SimpleMeterRegistry meters) {
+        return new SelfProtection(
+                TestProperties.of(Map.of(
+                                SelfProtection.KEY_WINDOW_SECONDS,
+                                "10",
+                                SelfProtection.KEY_MIN_COUNT,
+                                "5",
+                                SelfProtection.KEY_FACTOR,
+                                "0.85"))
+                        .properties(),
+                meters,
+                clock);
+    }
 
     private static Instance instance(String instanceId) {
         return instanceWithWeight(instanceId, 100);
@@ -247,14 +271,15 @@ class RegistryServiceImplTest {
         MutableClock wall = new MutableClock();
         MutableClock mono = new MutableClock();
         wall.advance(Duration.ofMillis(1_700_000_000_000L)); // 两域取完全不同的值域，混用即断言失败
+        SimpleMeterRegistry splitMeters = new SimpleMeterRegistry();
         RegistryServiceImpl split = new RegistryServiceImpl(
-                () -> Duration.ofSeconds(30),
+                TestProperties.empty(),
                 wall,
                 mono,
                 events::add,
-                new SelfProtection(PROTECTION_CONFIG, mono),
+                selfProtection(mono, splitMeters),
                 new InMemorySnapshotStore(),
-                MAX_AGE);
+                splitMeters);
 
         split.register(new RegisterRequest(List.of(new ServiceInstances(KEY, List.of(instance("i1"))))));
 

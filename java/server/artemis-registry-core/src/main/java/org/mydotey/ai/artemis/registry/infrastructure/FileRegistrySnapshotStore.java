@@ -12,7 +12,10 @@ import java.nio.file.StandardOpenOption;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
+import org.mydotey.ai.artemis.common.config.ScfProperties;
 import org.mydotey.ai.artemis.registry.domain.RegistrySnapshotStore;
+import org.mydotey.scf.Property;
+import org.mydotey.scf.facade.StringProperties;
 
 /**
  * 领域端口 {@link RegistrySnapshotStore} 文件实现：单快照文件（最近一次成功落盘）。
@@ -24,10 +27,23 @@ import org.mydotey.ai.artemis.registry.domain.RegistrySnapshotStore;
 @Slf4j
 public final class FileRegistrySnapshotStore implements RegistrySnapshotStore {
 
+    static final String KEY_PATH = "artemis.registry.snapshot.path";
+    private static final String DEFAULT_PATH = "data/registry-snapshot.bin";
+
+    private final Property<String, String> snapshotPath;
     private final Path file;
 
-    public FileRegistrySnapshotStore(Path file) {
-        this.file = file;
+    /** 生产装配：类内定义快照路径（静态 Property 字段，启动后值固化）。 */
+    public FileRegistrySnapshotStore(StringProperties properties) {
+        this.snapshotPath = ScfProperties.staticString(
+                properties, KEY_PATH, DEFAULT_PATH, "snapshot file path (static, restart to apply)");
+        this.file = Path.of(snapshotPath.getValue());
+    }
+
+    /** 直接 Property 构造（测试）。 */
+    FileRegistrySnapshotStore(Property<String, String> snapshotPath) {
+        this.snapshotPath = snapshotPath;
+        this.file = Path.of(snapshotPath.getValue());
     }
 
     @Override
