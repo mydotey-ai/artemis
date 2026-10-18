@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.3    更新时间: 2026-10-18
+版本: 1.5    更新时间: 2026-10-19
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -43,7 +43,7 @@ mvn -f java/client/pom.xml spotless:apply  # 提交前格式化（SDK 线）
 
 | 模块 | 目标 | 职责 |
 |---|---|---|
-| `artemis-common` | 25 | 服务端公共规范/工具（SCF 配置工具/通用 source）；proto 生成 `common.v1` + `projection.v1`（服务端共享） |
+| `artemis-common` | 25 | 服务端公共规范/工具（SCF 配置工具/通用 source）；proto 生成 `common.v1` + `projection.v1` + `management.v1`（服务端共享） |
 | `artemis-registry-core` / `-server` | 25 | registry 内核 / Spring Boot 装配 |
 | `artemis-discovery-core` / `-server` | 25 | discovery 投影内核 / Spring Boot 装配 |
 | `artemis-management-core` / `-server` | 25 | 治理面内核 / Spring Boot 装配 |
@@ -79,12 +79,21 @@ mvn -f java/client/pom.xml spotless:apply  # 提交前格式化（SDK 线）
 - **成员抽象**：`ClusterMembers` 静态实现（逗号分隔 `host:port`，支持括号 IPv6），v0.2 接入复制与 readiness。
 - **工程形态**：common 8 + core 77 + server 22 单测、13 服务级集成测试。
 
-管理 API（phase-5）、SDK 与 starter（phase-6）、starter/CI/Dockerfile（phase-7）后续递补。
+**phase-5（registry 内部只读查询 RPC）已交付**：
+
+- **契约归属**：查询 service 定义在 `management.v1`（管理面契约组，不随数据面冻结、client SDK 不生成）；服务端由 artemis-common 单源生成，registry 实现、management 消费。
+- **查询能力**：服务列表（可按 namespace 过滤）、实例快照、租约明细（age/剩余 TTL；可按 namespace/service 过滤，单次上限 10000 条并标记 truncated）、自我保护统计、配置状态（key/value/source/静态标记/默认值/doc，按 key 升序）。
+- **安全**：敏感配置（password/passwd/pwd/secret/token/credential/apikey/accesskey/privatekey）的 value 与默认值均输出 `******`，registry 永不返回明文凭证；查询复用外部 gRPC 端口与默认认证；v0.1 与 SDK 共用单账户凭证（RBAC 随 v1.0、内部端口分离随 v0.2）为已知限制。
+- **工程形态**：common 8 + core 89 + server 22 单测、20 服务级集成测试。
+
+管理面 management-service（phase-6）、SDK（phase-7）、starter/CI/Dockerfile（phase-8）后续递补。
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.5 | 2026-10-19 | phase-5 交付节：内部只读查询能力/脱敏/上限/契约归属（management.v1，client 不生成）；common 生成组同步 |
+| 1.4 | 2026-10-18 | phase-5 交付：registry 内部只读查询 RPC（服务/实例/租约/配置状态，敏感值脱敏）；phase 编号按 ADR-016 重排（管理面 phase-6） |
 | 1.3 | 2026-10-18 | phase-4 交付：SCF 配置（分层 source/热加载/动态与静态项）、默认 Basic 认证、三端口分离、Prometheus/JSON 日志/OTel、HTTP readiness、成员抽象 |
 | 1.2 | 2026-10-18 | phase-3 交付：自我保护基础版（10s 窗口/85%/下限 50）、快照落盘回放（5min / maxAge 1h / 路径默认）、readiness 门控与 UNAVAILABLE 语义 |
 | 1.1 | 2026-10-14 | phase-2 交付：注册四操作 + 心跳对账 + 租约 TTL/清理默认值（30s/1s，单调钟判定）+ gRPC 接入 |

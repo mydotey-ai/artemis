@@ -1,6 +1,106 @@
 syntax = "proto3";
 package artemis.management.v1;
+import "common/v1/model.proto";
 option java_package = "org.mydotey.ai.artemis.proto.management.v1";
 option java_multiple_files = true;
 
-// v0.1 占位：治理面契约随期 2（v0.5）演进，不受数据面冻结约束（proto-contract.md §2）。
+// 管理面契约（治理期演进，不随数据面冻结；client SDK 不生成本组）。
+//
+// 当前内容：registry 只读事实查询（ADR-016）——由 management-service 消费、registry 实现。
+// 后续治理规则 / 规则版本 + ack / 账户等契约随管理面版本在本组演进。
+
+// ---- registry 只读事实查询（v0.1）----
+// registry 只返回事实、不感知摘除；敏感配置值在本侧脱敏后返回。
+
+message ListServicesRequest {
+  // 空 = 全部 namespace
+  string namespace = 1;
+}
+
+message ServiceSummary {
+  artemis.common.v1.ServiceKey key = 1;
+  int32 instance_count = 2;
+}
+
+message ListServicesResponse {
+  artemis.common.v1.ResponseStatus status = 1;
+  ListServicesResponseData data = 2;
+}
+
+message ListServicesResponseData {
+  repeated ServiceSummary services = 1;
+}
+
+message GetServiceInstancesRequest {
+  artemis.common.v1.ServiceKey key = 1;
+}
+
+message GetServiceInstancesResponse {
+  artemis.common.v1.ResponseStatus status = 1;
+  GetServiceInstancesResponseData data = 2;
+}
+
+message GetServiceInstancesResponseData {
+  // 未注册 service → 空数组 + SUCCESS（查询语义，不是错误）
+  repeated artemis.common.v1.Instance instances = 1;
+}
+
+message GetLeaseStatusRequest {
+  // 可选过滤：空 = 全部；大集群按 service 查询避免单次响应超限
+  string namespace = 1;
+  string service = 2;
+}
+
+message SelfProtectionStats {
+  int64 window_renewals = 1;
+  int64 max_count = 2;
+  bool protecting = 3;
+}
+
+message LeaseDetail {
+  artemis.common.v1.ServiceKey service = 1;
+  string instance_id = 2;
+  int64 age_ms = 3;
+  int64 remaining_ttl_ms = 4;   // 可为负：已到期待清理
+}
+
+message GetLeaseStatusResponse {
+  artemis.common.v1.ResponseStatus status = 1;
+  GetLeaseStatusResponseData data = 2;
+}
+
+message GetLeaseStatusResponseData {
+  SelfProtectionStats protection = 1;
+  repeated LeaseDetail leases = 2;
+  // 租约数超过服务端单次返回上限（10000）时为 true，调用方应按 service 分别查询
+  bool truncated = 3;
+}
+
+message GetConfigStatusRequest {}
+
+message ConfigProperty {
+  string key = 1;
+  string value = 2;             // 敏感项固定 "******"（default_value 同样脱敏）
+  string source = 3;            // 配置来源名；未命中任何 source 时为空
+  bool is_static = 4;
+  string default_value = 5;     // 敏感项固定 "******"
+  string doc = 6;
+}
+
+message GetConfigStatusResponse {
+  artemis.common.v1.ResponseStatus status = 1;
+  GetConfigStatusResponseData data = 2;
+}
+
+message GetConfigStatusResponseData {
+  // 按 key 升序
+  repeated ConfigProperty properties = 1;
+}
+
+// registry 实现的只读查询：management-service 经此组合有效视图与状态面。
+service RegistryQueryService {
+  rpc ListServices(ListServicesRequest) returns (ListServicesResponse);
+  rpc GetServiceInstances(GetServiceInstancesRequest) returns (GetServiceInstancesResponse);
+  rpc GetLeaseStatus(GetLeaseStatusRequest) returns (GetLeaseStatusResponse);
+  rpc GetConfigStatus(GetConfigStatusRequest) returns (GetConfigStatusResponse);
+}

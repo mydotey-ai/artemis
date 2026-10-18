@@ -17,6 +17,7 @@ import org.mydotey.ai.artemis.registry.application.RegistryService;
 import org.mydotey.ai.artemis.registry.application.RegistryServiceImpl;
 import org.mydotey.ai.artemis.registry.application.RegistrySnapshotCodec;
 import org.mydotey.ai.artemis.registry.domain.Instance;
+import org.mydotey.ai.artemis.registry.domain.InstanceRegistry;
 import org.mydotey.ai.artemis.registry.domain.InstanceStatus;
 import org.mydotey.ai.artemis.registry.domain.MonotonicClock;
 import org.mydotey.ai.artemis.registry.domain.RegistrySnapshotStore;
@@ -75,10 +76,13 @@ class RegistryBootstrapTest {
                 TestProperties.of(Map.of("artemis.registry.snapshot.path", snapshotFile.toString()))
                         .properties());
         RegistryService service = new RegistryServiceImpl(
+                new InstanceRegistry(
+                        TestProperties.of(Map.of(InstanceRegistry.KEY_LEASE_TTL_MS, "30000"))
+                                .properties(),
+                        monotonicClock,
+                        change -> {}),
                 TestProperties.empty(),
                 Clock.systemUTC(),
-                monotonicClock,
-                change -> {},
                 new SelfProtection(
                         TestProperties.of(Map.of(
                                         SelfProtection.KEY_WINDOW_SECONDS,

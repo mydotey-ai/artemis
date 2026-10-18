@@ -1,6 +1,7 @@
 package org.mydotey.ai.artemis.registry.domain;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -12,6 +13,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mydotey.ai.artemis.registry.MutableClock;
+import org.mydotey.ai.artemis.registry.TestProperties;
 
 /** 聚合内核语义：四操作事件派生、心跳对账（无集合 diff）、租约续约与过期清理、快照共享。 */
 class InstanceRegistryTest {
@@ -20,15 +22,15 @@ class InstanceRegistryTest {
 
     private MutableClock clock;
     private List<InstanceChange> events;
-    private MutableTtl ttl;
+    private TestProperties properties;
     private InstanceRegistry registry;
 
     @BeforeEach
     void setUp() {
         clock = new MutableClock();
         events = new ArrayList<>();
-        ttl = new MutableTtl(Duration.ofSeconds(30));
-        registry = new InstanceRegistry(ttl, clock, events::add);
+        properties = TestProperties.of(Map.of(InstanceRegistry.KEY_LEASE_TTL_MS, "30000"));
+        registry = new InstanceRegistry(properties.properties(), clock, events::add);
     }
 
     // ---- register ----
@@ -205,7 +207,7 @@ class InstanceRegistryTest {
     @Test
     void should_use_latest_ttl_when_config_changes() {
         registry.register(KEY, List.of(instance("i1")));
-        ttl.set(Duration.ofSeconds(5)); // 动态缩短
+        properties.set(InstanceRegistry.KEY_LEASE_TTL_MS, "5000"); // 动态缩短
         clock.advance(Duration.ofSeconds(5));
 
         assertThat(registry.evictExpired()).isEqualTo(1);
@@ -217,7 +219,7 @@ class InstanceRegistryTest {
         clock.advance(Duration.ofSeconds(29));
         assertThat(registry.evictExpired()).isZero();
 
-        ttl.set(Duration.ofSeconds(1));
+        properties.set(InstanceRegistry.KEY_LEASE_TTL_MS, "1000");
         clock.advance(Duration.ofSeconds(1));
         assertThat(registry.evictExpired()).isEqualTo(1);
     }
@@ -308,6 +310,37 @@ class InstanceRegistryTest {
         assertThat(registry.snapshot(KEY)).isEmpty();
     }
 
+    // ---- 租约明细与 TTL 配置（内部只读查询）----
+
+    @Test
+    void should_report_lease_details_when_registered() {
+        registry.register(KEY, List.of(instance("i1"), instance("i2")));
+
+        clock.advance(Duration.ofSeconds(10));
+
+        assertThat(registry.leaseDetails())
+                .extracting(
+                        LeaseDetail::service, LeaseDetail::instanceId, LeaseDetail::ageMs, LeaseDetail::remainingTtlMs)
+                .containsExactlyInAnyOrder(tuple(KEY, "i1", 10_000L, 20_000L), tuple(KEY, "i2", 10_000L, 20_000L));
+    }
+
+    @Test
+    void should_apply_dynamic_ttl_when_configured() {
+        TestProperties configuredProperties = TestProperties.of(Map.of(InstanceRegistry.KEY_LEASE_TTL_MS, "5000"));
+        InstanceRegistry configured = new InstanceRegistry(configuredProperties.properties(), clock, events::add);
+
+        configured.register(KEY, List.of(instance("i1")));
+        clock.advance(Duration.ofMillis(4_999));
+        assertThat(configured.evictExpired()).isZero();
+        assertThat(configured.leaseDetails())
+                .singleElement()
+                .satisfies(detail -> assertThat(detail.remainingTtlMs()).isEqualTo(1L));
+
+        configuredProperties.set(InstanceRegistry.KEY_LEASE_TTL_MS, "1000");
+        clock.advance(Duration.ofMillis(2));
+        assertThat(configured.evictExpired()).isEqualTo(1);
+    }
+
     // ---- 设施 ----
 
     private static Instance instance(String instanceId) {
@@ -318,30 +351,14 @@ class InstanceRegistryTest {
         return new Instance(instanceId, "10.0.0.1", 8080, InstanceStatus.UP, weight, Map.of("zone", "a"));
     }
 
-    private static final class MutableTtl implements LeaseTtlSource {
-        private volatile Duration ttl;
-
-        private MutableTtl(Duration ttl) {
-            this.ttl = ttl;
-        }
-
-        private void set(Duration ttl) {
-            this.ttl = ttl;
-        }
-
-        @Override
-        public Duration leaseTtl() {
-            return ttl;
-        }
-    }
-
     // ---- 事件定序（D13）----
 
     @Test
     void should_keep_last_event_consistent_with_final_state_when_concurrent_ops_on_same_key()
             throws InterruptedException {
         List<InstanceChange> concurrentEvents = new CopyOnWriteArrayList<>();
-        InstanceRegistry concurrentRegistry = new InstanceRegistry(ttl, clock, concurrentEvents::add);
+        InstanceRegistry concurrentRegistry =
+                new InstanceRegistry(properties.properties(), clock, concurrentEvents::add);
         int rounds = 200;
         // 内容交替：register 每轮必有 NEW 事件（无条件覆盖）；deregister 命中才有 DELETE
         Thread registrar = new Thread(
@@ -375,7 +392,7 @@ class InstanceRegistryTest {
     void should_keep_storage_invariants_when_listener_throws() {
         List<InstanceChange> delivered = new ArrayList<>();
         AtomicInteger calls = new AtomicInteger();
-        InstanceRegistry guarded = new InstanceRegistry(ttl, clock, change -> {
+        InstanceRegistry guarded = new InstanceRegistry(properties.properties(), clock, change -> {
             if (calls.incrementAndGet() == 1) {
                 throw new IllegalStateException("listener boom"); // 首个事件抛出
             }
@@ -398,7 +415,7 @@ class InstanceRegistryTest {
     void should_expose_consistent_snapshot_in_listener_when_last_instance_removed() {
         InstanceRegistry[] box = new InstanceRegistry[1];
         List<Optional<ServiceInstances>> observed = new ArrayList<>();
-        box[0] = new InstanceRegistry(ttl, clock, change -> observed.add(box[0].snapshot(KEY)));
+        box[0] = new InstanceRegistry(properties.properties(), clock, change -> observed.add(box[0].snapshot(KEY)));
 
         box[0].register(KEY, List.of(instance("i1")));
         observed.clear();

@@ -1,6 +1,6 @@
 # 新一代 Artemis 产品规划与版本路线图
 
-版本: 1.8    更新时间: 2026-10-12
+版本: 1.9    更新时间: 2026-10-18
 
 > 本文是新一代 Artemis 的产品规划与版本路线图：定位与成功标准、迭代式版本切分（每版可发布可 eval）、各版本范围与验收要点。架构设计详见 [架构设计](../arch/artemis-next-architecture.md)；设计输入见 [原产品能力基线](../legacy/legacy-product-analysis.md) 与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -21,7 +21,7 @@
 
 | 版本 | 主题 | 治理期 | 可发布物 |
 |---|---|---|---|
-| v0.1 | registry 单服务 | 期 1 前半 | 单节点 registry + Java 8 SDK（注册侧） |
+| v0.1 | registry 单服务 | 期 1 前半 | 单节点 registry + management（内存态管理面）+ Java 8 SDK（注册侧） |
 | v0.2 | registry 集群 | 期 1 后半 | 多节点集群可部署 |
 | v0.3 | discovery | 期 2 | 完整发现闭环 + 消费方 SDK + 多集群聚合 |
 | v0.4 | 治理面 I | 期 3 | management + DB + console 只读 |
@@ -35,7 +35,7 @@
 
 - **内核**：注册模型显式四操作（register/deregister/update + 心跳全量上报续约/补注册，心跳走 gRPC 双向流，D12）、租约/过期清理、自我保护基础版（窗口阈值 + 指标暴露）、服务端快照落盘 + 重启回放、readiness 门控、成员抽象接口（静态实现，单成员起步）。
 - **接入**：gRPC + HTTP 双协议；内部/外部端口分离。
-- **治理期 1 前半**：实例管理 Admin API（列表/详情/摘除/恢复，内存态）+ 状态 API 排障面（leases/config 类）。
+- **治理期 1 前半**：management-service 起步（内存态）——实例管理 Admin API（列表/详情/摘除/恢复）+ 状态 API 排障面（leases/config 类）；registry 提供只读事实查询 RPC，摘除记录归 management（ADR-016）。
 - **安全**：默认开启的单账户认证。
 - **可观测**：metrics（Micrometer/Prometheus）+ 结构化 log + OpenTelemetry trace，第一天内建。
 - **客户端**：Java 8 SDK 注册侧——心跳客户端、实例管理、生命周期 API（close/优雅下线）、磁盘快照、三级地址容灾骨架；随附 Spring Boot starter（注册侧自动装配）。
@@ -44,9 +44,10 @@
 
 ### v0.2 registry 集群
 
+> 管理面说明：v0.1 起管理的摘除记录由 management-service 持有，registry 集群不感知摘除；v0.2 不引入摘除记录集群扇出。management 保持单节点，v0.4 接 DB。
+
 - 静态成员集群（配置驱动）、变更事件扇出（增量小报文 + 批量 + 指数退避重试）、peer bootstrap 全量、丢失自愈链（变更再扇出 + 客户端 TTL 轮换 + bootstrap）。
 - 自我保护 2.0：按服务粒度阈值、保护态显式可观测（指标/API）；`stale` 数据标记的出口在 discovery 查询/推送，随 v0.3 交付。
-- 治理期 1 后半：内存态摘除记录随变更事件集群扇出。
 - SDK：三级地址容灾完整（熔断换址）+ 连接 TTL 轮换（默认 10min ± 抖动）。
 - 节点状态 API、优雅停机（先标记自身下线再停止，客户端凭容灾换址，无需连接迁移）。
 - **验收要点**：3 节点集群、节点故障客户端无感换址、杀节点数据最终一致、保护态可观测。
@@ -55,6 +56,7 @@
 
 - discovery-service：bootstrap 全量 + 变更流投影（`(cluster, namespace, service)` 模型，分组以实例 metadata 表达）、订阅推送（service 实例集快照、一流多目标）、三层兜底轮询、查询 API、新鲜度标记（含上游自我保护态 `stale` 出口——v0.2 已产出的保护态自此可被消费方感知）。
 - **多集群聚合**：单节点订阅多个 registry 集群，本地合并（union + 选择器过滤）。
+- **治理依赖（0..1）**：订阅 management 的摘除规则并应用过滤；完整治理规则链随 v0.4。
 - 治理期 2：发现管理 API（订阅关系查看、服务视图、上游状态/新鲜度）。
 - registry + discovery **all-in-one 打包**（同进程双 server 双端口）。
 - 客户端：消费方 SDK——订阅、本地缓存、磁盘快照、兜底轮询、地址容灾（配置地址列表 + 历史成功连接缓存 + 熔断换址；discovery 无服务端存活列表，见架构 §2.1）、Spring Boot starter（发现侧自动装配补全）。
@@ -62,11 +64,11 @@
 
 ### v0.4 治理面 I（management + DB）
 
-- management-service：DB 接入（MySQL/PG 双方言 + Flyway migration）、账户体系（单管理员，统一认证）。
+- management-service（v0.1 起已有内存态管理面）：DB 接入（MySQL/PG 双方言 + Flyway migration）、账户体系（单管理员，统一认证）。
 - **四级摘除持久化**（instance → server → zone → group）+ 操作记录即状态 + 审计。
 - **逻辑实例**（静态实例纳入统一发现视图）。
 - 规则下发闭环：规则版本 + 订阅流 + discovery ack + 生效水位（替换盲下发）。
-- discovery 过滤器链接入（治理启用时依赖 management，0..1 配置）。
+- discovery 过滤器链扩展（治理启用时依赖 management，0..1 配置；v0.3 已接摘除规则）。
 - console 只读版：服务列表/详情/搜索（分页 + 模糊）、实例视图。
 - 三服务 **all-in-one 完整形态**。
 - **验收要点**：摘除跨重启恢复（management 重下发）、规则生效水位可见、逻辑实例可发现、console 可用。
@@ -110,6 +112,7 @@
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.9 | 2026-10-18 | ADR-016：management-service 从 v0.1 独立交付（内存态管理面，摘除记录归 management）；v0.2 删摘除扇出；v0.3 接 management 摘除规则；v0.4 补 DB/账户 |
 | 1.8 | 2026-10-12 | 分组退出数据模型同步：v0.3 投影模型与 v0.5 分组路由表述 |
 | 1.7 | 2026-10-12 | v0.1 内核心跳表述精化（全量上报续约/补注册） |
 | 1.6 | 2026-10-12 | 心跳 rpc 形态表述统一为 gRPC 双向流 |

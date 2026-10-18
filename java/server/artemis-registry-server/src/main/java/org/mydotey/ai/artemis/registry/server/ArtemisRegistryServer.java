@@ -4,7 +4,8 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 /**
- * registry 服务端入口。gRPC 传输已随 phase-2 装配；HTTP 辅助通道/认证/健康检查/指标随 phase-4 递补。
+ * registry 服务端入口：外部 gRPC（SDK 四操作 + 内部只读查询）、外部 HTTP、管理 HTTP，
+ * 默认认证/健康检查/指标/结构化日志/trace 均已在装配层接入。
  */
 @SpringBootApplication
 public class ArtemisRegistryServer {

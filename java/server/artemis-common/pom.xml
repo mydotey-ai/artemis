@@ -11,12 +11,21 @@
   </parent>
 
   <artifactId>artemis-common</artifactId>
-  <description>服务端公共规范/工具；proto 生成 common.v1 与 projection.v1（服务端共享，各 core 经 Maven 依赖引用）</description>
+  <description>服务端公共规范/工具；proto 生成 common.v1、projection.v1 与 management.v1（服务端共享，各 core 经 Maven 依赖引用）</description>
 
   <dependencies>
     <dependency>
       <groupId>com.google.protobuf</groupId>
       <artifactId>protobuf-java</artifactId>
+    </dependency>
+    <!-- management.v1 含 registry 只读查询 service（registry 实现 / management 调用），stub 生成编译依赖 -->
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-stub</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-protobuf</artifactId>
     </dependency>
     <!-- 静态配置项通用工具（各使用类传入自己的键/默认值/范围） -->
     <dependency>
@@ -39,7 +48,15 @@
           <includes>
             <include>common/v1/*.proto</include>
             <include>projection/v1/*.proto</include>
+            <include>management/v1/*.proto</include>
           </includes>
+          <plugins>
+            <plugin kind="binary-maven">
+              <groupId>io.grpc</groupId>
+              <artifactId>protoc-gen-grpc-java</artifactId>
+              <version>${grpc.version}</version>
+            </plugin>
+          </plugins>
         </configuration>
         <executions>
           <execution>

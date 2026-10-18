@@ -11,7 +11,7 @@
   </parent>
 
   <artifactId>artemis-registry-core</artifactId>
-  <description>registry 内核：心跳/租约/自我保护（phase-2 起递补）；proto 生成 registry.v1 + replication.v1</description>
+  <description>registry 内核：心跳/租约/自我保护；proto 生成 registry.v1 + replication.v1（management.v1 查询服务经 artemis-common 共享）</description>
 
   <dependencies>
     <dependency>

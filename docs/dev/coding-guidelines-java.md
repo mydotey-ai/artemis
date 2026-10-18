@@ -1,6 +1,6 @@
 # Java 开发规范
 
-版本: 1.21    更新时间: 2026-10-18
+版本: 1.22    更新时间: 2026-10-19
 
 > 本文是新一代 Artemis Java 实现的开发规范：包结构、代码风格、并发与线程、错误处理、日志、测试、proto 兼容、SDK 特殊约束与配置管理。技术选型（组件与版本）见[Java 技术选型](tech-stack-java.md)；Git 分支与 commit 规范见 `.claude/rules/git.md`，不在此重复。
 
@@ -8,7 +8,7 @@
 
 模块划分与 proto 生成矩阵以[技术选型](tech-stack-java.md) §2 为准，此处固化执行纪律：
 
-- **跨模块传递 proto 生成类以同源 artifact 为界**——服务端 common.v1 与 projection.v1 统一生成于 artemis-common，服务端模块间可直接共用；其余多模块各自生成的组（同 FQCN 异 artifact，如 registry.v1 在 registry-core 与 management-core 各一份）与一切跨进程边界，只走 wire 序列化、不传递生成类。
+- **跨模块传递 proto 生成类以同源 artifact 为界**——服务端 common.v1、projection.v1 与 management.v1 统一生成于 artemis-common，服务端模块间可直接共用；其余多模块各自生成的组（同 FQCN 异 artifact，如 registry.v1 在服务端与 client 各一份）与一切跨进程边界，只走 wire 序列化、不传递生成类。
 - **client（artemis-client）不得依赖任何服务端模块**（core/server/common），仅从仓库顶层 `proto/` 目录引用 .proto 文件自行生成。
 - **core 模块禁 Spring**（enforcer 强制）：内核不感知 Spring 类型、不读 Spring 配置抽象；配置经普通 Java 配置类注入。
 - 服务实现类放 server 模块（实现 core 定义的接口/ proto `ImplBase`），core 只含内核逻辑与契约；**gRPC 服务端用 Spring Boot 官方 starter**（`org.springframework.boot:spring-boot-starter-grpc-server` + `@GrpcService`）自动装配，**禁自写 `Server`/生命周期类**（见[技术选型](tech-stack-java.md) §4.7）。
@@ -149,6 +149,7 @@ proto 的 wire 兼容规则与变更流程是**跨语言不变量**，单一来�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.22 | 2026-10-19 | management.v1 统一生成于 artemis-common（registry 实现 / management 消费，避免 all-in-one 同 JVM 双份生成类） |
 | 1.21 | 2026-10-18 | §2 依赖方向明确：domain 不依赖 ConfigurationSource，但可按定案使用 SCF StringProperties/Property |
 | 1.20 | 2026-10-18 | §1 修订：监控就地定义（不建集中 binder/统计 DTO），且不侵入服务接口 |
 | 1.19 | 2026-10-18 | §1 新增「监控不侵入服务接口」：metrics/log/trace 归实现/装配层，服务接口只表达业务用例 |

@@ -1,6 +1,6 @@
 # 新一代 Artemis 架构设计
 
-版本: 1.21    更新时间: 2026-10-18
+版本: 1.23    更新时间: 2026-10-19
 
 > 本文是新一代 Artemis（重设计产品）的架构设计基线：总体架构、核心机制、技术栈策略与关键决策记录。产品定位与版本切分见 [产品规划与路线图](../product/artemis-next-roadmap.md)；设计输入来自 [原产品能力基线](../legacy/legacy-product-analysis.md)（§5 可继承资产 / §6 局限清单）与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -46,9 +46,9 @@
 
 | 服务 | 持有数据 | 上游依赖（配置化） |
 |---|---|---|
-| registry-service | 租约事实、注册表、实例级摘除记录（期 1 内存态 → 期 3 持久化） | **无**（零外部依赖） |
+| registry-service | 租约事实、注册表 | **无**（零外部依赖；不持有摘除记录，ADR-016） |
 | discovery-service | 只读投影 | registry 集群 **1..N**（实例数据）；management **0..1**（启用治理时订阅规则） |
-| management-service | 治理规则、账户、审计（DB） | 外部 DB；registry 集群 **0..N**；discovery **0..N** |
+| management-service | 摘除记录（v0.1 内存态 → v0.4 DB）、治理规则、账户、审计 | registry 集群 **0..N**（**只读事实查询**）；discovery **0..N**；外部 DB（v0.4） |
 
 要点：
 
@@ -64,12 +64,13 @@
 | SDK → discovery（查询/订阅） | gRPC（主）+ HTTP（辅） | 外部端口；gRPC server-stream 承载推送 |
 | registry ↔ registry（复制/成员） | gRPC | 内部 peer 端口，与外部端口分离 |
 | registry → discovery（数据分发） | gRPC | 内部端口；订阅流 + 快照 bootstrap |
+| management → registry（只读事实查询） | gRPC | v0.1 复用 registry 外部 gRPC 端口（受认证）；内部端口分离随 v0.2 peer 端口统一规划 |
 | discovery ↔ management（规则流/状态上行） | gRPC | 内部端口 |
-| console / Admin API | HTTP | management 外部端口 |
+| console / Admin API | HTTP | management 外部端口（v0.1 起；实例管理 + 状态 API） |
 
-v0.1 端口落点：外部 gRPC + 外部 HTTP（辅助通道）+ 管理 HTTP（actuator：health/readiness/metrics，默认仅绑本机）；peer 内部端口随 v0.2 集群复制引入。
+v0.1 端口落点：registry 外部 gRPC + 外部 HTTP（辅助通道）+ 管理 HTTP（actuator：health/readiness/metrics，默认仅绑本机）；management 外部 HTTP（Admin/状态 API）+ 管理 HTTP。v0.1 management → registry 的只读事实查询复用 registry 外部 gRPC 端口（受默认认证保护，ADR-016）；peer 内部端口与内部查询端口分离随 v0.2 集群复制引入。
 
-所有 proto 按服务与版本组织（`artemis.common.v1`（公共数据模型）/ `artemis.registry.v1` / `artemis.replication.v1` / `artemis.projection.v1` / `artemis.discovery.v1` / `artemis.management.v1`），作为语言中立的稳定契约，居多语言 monorepo 顶层 `proto/` 目录（组织与治理见[proto 契约规范](../dev/proto-contract.md)；Java 侧生成矩阵见[Java 技术选型](../dev/tech-stack-java.md) §2.2）。
+所有 proto 按服务与版本组织（`artemis.common.v1`（公共数据模型）/ `artemis.registry.v1` / `artemis.replication.v1` / `artemis.projection.v1` / `artemis.discovery.v1` / `artemis.management.v1`（管理面契约；含 registry 提供给管理面的只读查询 service，client 不生成）），作为语言中立的稳定契约，居多语言 monorepo 顶层 `proto/` 目录（组织与治理见[proto 契约规范](../dev/proto-contract.md)；Java 侧生成矩阵见[Java 技术选型](../dev/tech-stack-java.md) §2.2）。
 
 ### 2.3 部署形态
 
@@ -133,7 +134,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 **集群成员（第一天约束）**：成员抽象接口 v0.1 进架构，静态配置实现先行；动态成员（K8s 成员源）后置版本。
 
-**实例管理（治理期 1，内存态）**：Admin API 提供实例列表/详情、手动摘除/恢复——摘除是内存态记录（发现视图过滤，租约与心跳不受影响），随变更事件集群扇出保持一致；重启丢失，期 3 由 management/DB 持久化接管。摘除的可见出口：v0.1–v0.2 为 registry 管理查询 API 返回的**有效视图**（已应用摘除过滤的实例列表），v0.3 起为 discovery 查询/推送。状态 API 排障面（leases/config 类，继承资产）。
+**实例管理（治理期 1 前半，management-service，ADR-016）**：management-service 从 v0.1 起独立交付实例列表/详情、手动摘除/恢复与状态 API（leases/config 排障面）。摘除是 management 的内存态记录（重启丢失），不改变 registry 租约与心跳；**registry 不感知摘除**，只提供只读事实查询（服务列表、实例快照、租约明细与保护统计、配置状态，敏感值在 registry 侧脱敏）。**有效视图 = registry 事实 + management 摘除记录**，由 management 查询时组合；v0.3 起 discovery 经 management 规则流获取摘除规则后自行过滤（治理启用时）。v0.4 由 DB 持久化接管（四级摘除、审计、重下发）。
 
 ### 4.2 discovery-service
 
@@ -157,11 +158,11 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 | 期 | 载体 | 内容 | 持久化 |
 |---|---|---|---|
-| 期 1 | registry（v0.1–v0.2） | 实例管理 Admin API：列表/详情、摘除/恢复、状态 API | 内存态，重启丢失 |
+| 期 1 | management-service（v0.1 起） | 实例管理 Admin API：列表/详情、摘除/恢复、状态 API | 内存态，重启丢失；v0.4 接 DB |
 | 期 2 | discovery（v0.3） | 发现管理：订阅关系查看、服务视图查询、新鲜度/上游状态 | 无状态（投影数据） |
 | 期 3 | management + DB（v0.4–v0.5） | 四级摘除持久化、逻辑实例、分组路由、两段式发布、审计、账户 | MySQL/PG + Flyway |
 
-期 3 接管后，期 1 的内存摘除升级为持久化：management 下发规则，执行点仍在 registry/discovery filter 链，重启后 management 重下发恢复摘除态。
+期 3 接管后，v0.1 起的 management 内存摘除升级为 DB 持久化；discovery 规则（含摘除）经规则流下发，执行点在 discovery filter 链，重启后 management 重下发恢复摘除态。
 
 ### 5.2 API 与规则下发
 
@@ -216,6 +217,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 | D13 | 分组退出数据模型（以实例 metadata 元素表达） | [adr-013](../decisions/adr-013-group-as-instance-metadata.md) |
 | D14 | cluster 不进 ServiceKey（来源标识在投影边界注入） | [adr-014](../decisions/adr-014-cluster-out-of-service-key.md) |
 | D15 | DDD 四层（接入层 server 承载 / application / domain / infrastructure，领域为核心）+ 层间模型转换 | [adr-015](../decisions/adr-015-layered-model-inside-core.md) |
+| D16 | 管理面从 v0.1 独立交付（management-service 持有摘除记录；registry 只提供只读事实查询） | [adr-016](../decisions/adr-016-management-service-day-one.md) |
 
 ## 8. 与原产品的对照（资产继承与局限修复）
 
@@ -253,6 +255,8 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.23 | 2026-10-19 | §2.2 补 management.v1 承载 registry 只读查询 service（client 不生成）；phase-5 实现同步 |
+| 1.22 | 2026-10-18 | ADR-016：管理面从 v0.1 独立交付——摘除记录归 management，registry 只提供只读事实查询；§2.1/§2.2/§4.1/§5.1/§7 同步 |
 | 1.21 | 2026-10-18 | §2.2 补 v0.1 端口落点（外部 gRPC/HTTP + 管理 HTTP，peer 端口 v0.2）；§4.1 readiness 补 HTTP 出口 |
 | 1.20 | 2026-10-18 | §4.1 持久化节：快照时效补「超前 now >1min 视为无效」（v0.1 phase-3 review 修复，时钟回拨宽容有界） |
 | 1.19 | 2026-10-15 | §4.1 启动语义改三分支优先级（v0.1 phase-3 设计 review 修订）：有已就绪 peer 直接全量同步（失败定期重试不降级快照）、无 peer 回放**时效内**快照（超期无效，默认 1h）、均无空表 ready；服务端快照条目补落盘时间戳 |

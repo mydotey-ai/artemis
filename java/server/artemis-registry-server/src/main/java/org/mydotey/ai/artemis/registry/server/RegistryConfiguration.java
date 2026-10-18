@@ -4,10 +4,14 @@ import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import org.mydotey.ai.artemis.registry.application.ReadinessGate;
 import org.mydotey.ai.artemis.registry.application.RegistryProtoFacade;
+import org.mydotey.ai.artemis.registry.application.RegistryQueryProtoFacade;
+import org.mydotey.ai.artemis.registry.application.RegistryQueryService;
+import org.mydotey.ai.artemis.registry.application.RegistryQueryServiceImpl;
 import org.mydotey.ai.artemis.registry.application.RegistryService;
 import org.mydotey.ai.artemis.registry.application.RegistryServiceImpl;
 import org.mydotey.ai.artemis.registry.domain.ChangeListener;
 import org.mydotey.ai.artemis.registry.domain.ClusterMembers;
+import org.mydotey.ai.artemis.registry.domain.InstanceRegistry;
 import org.mydotey.ai.artemis.registry.domain.LeaseEvictionScheduler;
 import org.mydotey.ai.artemis.registry.domain.MonotonicClock;
 import org.mydotey.ai.artemis.registry.domain.RegistrySnapshotStore;
@@ -84,17 +88,33 @@ public class RegistryConfiguration {
         return new StaticClusterMembers(properties);
     }
 
+    /** 注册表聚合共享 bean：数据面应用服务与内部只读查询共用同一实例。 */
+    @Bean
+    InstanceRegistry instanceRegistry(
+            StringProperties properties, MonotonicClock monotonicClock, ChangeListener changeListener) {
+        return new InstanceRegistry(properties, monotonicClock, changeListener);
+    }
+
     @Bean
     RegistryService registryService(
+            InstanceRegistry registry,
             StringProperties properties,
             Clock clock,
-            MonotonicClock monotonicClock,
-            ChangeListener changeListener,
             SelfProtection selfProtection,
             RegistrySnapshotStore snapshotStore,
             MeterRegistry meterRegistry) {
-        return new RegistryServiceImpl(
-                properties, clock, monotonicClock, changeListener, selfProtection, snapshotStore, meterRegistry);
+        return new RegistryServiceImpl(registry, properties, clock, selfProtection, snapshotStore, meterRegistry);
+    }
+
+    @Bean
+    RegistryQueryService registryQueryService(
+            InstanceRegistry registry, SelfProtection selfProtection, StringProperties properties) {
+        return new RegistryQueryServiceImpl(registry, selfProtection, properties);
+    }
+
+    @Bean
+    RegistryQueryProtoFacade registryQueryProtoFacade(RegistryQueryService registryQueryService) {
+        return new RegistryQueryProtoFacade(registryQueryService);
     }
 
     @Bean(initMethod = "start", destroyMethod = "close")

@@ -20,6 +20,7 @@ import org.mydotey.ai.artemis.registry.domain.HeartbeatRequest;
 import org.mydotey.ai.artemis.registry.domain.HeartbeatResponse;
 import org.mydotey.ai.artemis.registry.domain.Instance;
 import org.mydotey.ai.artemis.registry.domain.InstanceChange;
+import org.mydotey.ai.artemis.registry.domain.InstanceRegistry;
 import org.mydotey.ai.artemis.registry.domain.InstanceStatus;
 import org.mydotey.ai.artemis.registry.domain.RegisterRequest;
 import org.mydotey.ai.artemis.registry.domain.RegisterResponse;
@@ -47,7 +48,17 @@ class RegistryServiceImplTest {
         ChangeListener listener = events::add;
         protection = selfProtection(clock, meters);
         store = new InMemorySnapshotStore();
-        service = new RegistryServiceImpl(TestProperties.empty(), clock, clock, listener, protection, store, meters);
+        service = new RegistryServiceImpl(
+                new InstanceRegistry(
+                        TestProperties.of(Map.of(InstanceRegistry.KEY_LEASE_TTL_MS, "30000"))
+                                .properties(),
+                        clock,
+                        listener),
+                TestProperties.empty(),
+                clock,
+                protection,
+                store,
+                meters);
     }
 
     @Test
@@ -273,10 +284,13 @@ class RegistryServiceImplTest {
         wall.advance(Duration.ofMillis(1_700_000_000_000L)); // 两域取完全不同的值域，混用即断言失败
         SimpleMeterRegistry splitMeters = new SimpleMeterRegistry();
         RegistryServiceImpl split = new RegistryServiceImpl(
+                new InstanceRegistry(
+                        TestProperties.of(Map.of(InstanceRegistry.KEY_LEASE_TTL_MS, "30000"))
+                                .properties(),
+                        mono,
+                        events::add),
                 TestProperties.empty(),
                 wall,
-                mono,
-                events::add,
                 selfProtection(mono, splitMeters),
                 new InMemorySnapshotStore(),
                 splitMeters);

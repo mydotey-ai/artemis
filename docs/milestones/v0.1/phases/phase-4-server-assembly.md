@@ -1,6 +1,6 @@
 # Phase 4：配置规范化（SCF）+ registry-server 装配
 
-版本: 1.11    更新时间: 2026-10-18
+版本: 1.12    更新时间: 2026-10-18
 
 ## 目标
 
@@ -78,7 +78,7 @@ StringProperties properties = new StringProperties(manager);
 
 | 键 | 类型 | 默认 | 型 | 校验 / 说明 | 定义/使用处 |
 |---|---|---|---|---|---|
-| `artemis.registry.lease.ttlMs` | Long | 30000 | 动态 | 1000..600000 | `RegistryServiceImpl`（应用层） |
+| `artemis.registry.lease.ttlMs` | Long | 30000 | 动态 | 1000..600000 | `InstanceRegistry`（phase-5 迁入；phase-4 时在 `RegistryServiceImpl`） |
 | `artemis.registry.lease.evictionIntervalMs` | Long | 1000 | 静态 | 100..60000 | `ScheduledLeaseEvictionScheduler` |
 | `artemis.registry.selfProtection.windowSeconds` | Integer | 10 | 静态 | 1..300；桶数组容量启动固定 | `SelfProtection`（领域层） |
 | `artemis.registry.selfProtection.factor` | Double | 0.85 | 动态 | 0.1..1.0 | `SelfProtection` |
@@ -258,6 +258,7 @@ review 第二轮修复记录（15 条 findings）：
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.12 | 2026-10-18 | phase-5 同步：租约 TTL 配置定义点迁入 `InstanceRegistry`（§1.4 配置表 owner 更新；§2/§实现记录中的 phase-4 历史描述保留） |
 | 1.11 | 2026-10-18 | 第二轮 review 15 条 findings 处置：可重载文件 source、Spring Environment source、健康服务放行、IPv6、context-path、gauge 缓存等 |
 | 1.10 | 2026-10-18 | `RelaxedEnvironmentConfigurationSource` 移至 artemis-common（通用 source，各服务复用） |
 | 1.9 | 2026-10-18 | D5：指标就地定义（删除 RegistryMetrics/RegistryStats），SelfProtection/RegistryServiceImpl 自注册 meters；guidelines v1.20 同步 |

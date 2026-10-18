@@ -5,6 +5,7 @@ import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.factory.Mappers;
 import org.mydotey.ai.artemis.registry.domain.Ack;
+import org.mydotey.ai.artemis.registry.domain.ConfigProperty;
 import org.mydotey.ai.artemis.registry.domain.DeregisterRequest;
 import org.mydotey.ai.artemis.registry.domain.DeregisterResponse;
 import org.mydotey.ai.artemis.registry.domain.DeregisterResponseData;
@@ -16,6 +17,8 @@ import org.mydotey.ai.artemis.registry.domain.Instance;
 import org.mydotey.ai.artemis.registry.domain.InstanceError;
 import org.mydotey.ai.artemis.registry.domain.InstanceKey;
 import org.mydotey.ai.artemis.registry.domain.InstanceStatus;
+import org.mydotey.ai.artemis.registry.domain.LeaseDetail;
+import org.mydotey.ai.artemis.registry.domain.LeaseStatus;
 import org.mydotey.ai.artemis.registry.domain.RegisterRequest;
 import org.mydotey.ai.artemis.registry.domain.RegisterResponse;
 import org.mydotey.ai.artemis.registry.domain.RegisterResponseData;
@@ -23,6 +26,7 @@ import org.mydotey.ai.artemis.registry.domain.ResponseStatus;
 import org.mydotey.ai.artemis.registry.domain.ServiceInstanceErrors;
 import org.mydotey.ai.artemis.registry.domain.ServiceInstances;
 import org.mydotey.ai.artemis.registry.domain.ServiceKey;
+import org.mydotey.ai.artemis.registry.domain.ServiceSummary;
 import org.mydotey.ai.artemis.registry.domain.UpdateRequest;
 import org.mydotey.ai.artemis.registry.domain.UpdateResponse;
 import org.mydotey.ai.artemis.registry.domain.UpdateResponseData;
@@ -250,5 +254,85 @@ public interface RegistryProtoMapper {
             case UP -> org.mydotey.ai.artemis.proto.common.v1.InstanceStatus.INSTANCE_STATUS_UP;
             case DOWN -> org.mydotey.ai.artemis.proto.common.v1.InstanceStatus.INSTANCE_STATUS_DOWN;
         };
+    }
+
+    // ---- toProto（内部只读查询响应：查询成功恒 SUCCESS，空集合不是错误）----
+
+    default org.mydotey.ai.artemis.proto.management.v1.ListServicesResponse toListServicesResponse(
+            List<ServiceSummary> services) {
+        org.mydotey.ai.artemis.proto.management.v1.ListServicesResponseData.Builder data =
+                org.mydotey.ai.artemis.proto.management.v1.ListServicesResponseData.newBuilder();
+        for (ServiceSummary service : services) {
+            data.addServices(org.mydotey.ai.artemis.proto.management.v1.ServiceSummary.newBuilder()
+                    .setKey(toProto(service.key()))
+                    .setInstanceCount(service.instanceCount()));
+        }
+        return org.mydotey.ai.artemis.proto.management.v1.ListServicesResponse.newBuilder()
+                .setStatus(successStatus())
+                .setData(data)
+                .build();
+    }
+
+    default org.mydotey.ai.artemis.proto.management.v1.GetServiceInstancesResponse toGetServiceInstancesResponse(
+            ServiceInstances services) {
+        org.mydotey.ai.artemis.proto.management.v1.GetServiceInstancesResponseData.Builder data =
+                org.mydotey.ai.artemis.proto.management.v1.GetServiceInstancesResponseData.newBuilder();
+        if (services != null) {
+            for (Instance instance : services.instances()) {
+                data.addInstances(toProto(instance));
+            }
+        }
+        return org.mydotey.ai.artemis.proto.management.v1.GetServiceInstancesResponse.newBuilder()
+                .setStatus(successStatus())
+                .setData(data)
+                .build();
+    }
+
+    default org.mydotey.ai.artemis.proto.management.v1.GetLeaseStatusResponse toGetLeaseStatusResponse(
+            LeaseStatus status) {
+        org.mydotey.ai.artemis.proto.management.v1.GetLeaseStatusResponseData.Builder data =
+                org.mydotey.ai.artemis.proto.management.v1.GetLeaseStatusResponseData.newBuilder()
+                        .setProtection(org.mydotey.ai.artemis.proto.management.v1.SelfProtectionStats.newBuilder()
+                                .setWindowRenewals(status.protection().windowRenewals())
+                                .setMaxCount(status.protection().maxCount())
+                                .setProtecting(status.protection().protecting()));
+        for (LeaseDetail lease : status.leases()) {
+            data.addLeases(org.mydotey.ai.artemis.proto.management.v1.LeaseDetail.newBuilder()
+                    .setService(toProto(lease.service()))
+                    .setInstanceId(lease.instanceId())
+                    .setAgeMs(lease.ageMs())
+                    .setRemainingTtlMs(lease.remainingTtlMs()));
+        }
+        return org.mydotey.ai.artemis.proto.management.v1.GetLeaseStatusResponse.newBuilder()
+                .setStatus(successStatus())
+                .setData(data.setTruncated(status.truncated()))
+                .build();
+    }
+
+    default org.mydotey.ai.artemis.proto.management.v1.GetConfigStatusResponse toGetConfigStatusResponse(
+            List<ConfigProperty> properties) {
+        org.mydotey.ai.artemis.proto.management.v1.GetConfigStatusResponseData.Builder data =
+                org.mydotey.ai.artemis.proto.management.v1.GetConfigStatusResponseData.newBuilder();
+        for (ConfigProperty property : properties) {
+            data.addProperties(org.mydotey.ai.artemis.proto.management.v1.ConfigProperty.newBuilder()
+                    .setKey(property.key())
+                    .setValue(property.value())
+                    .setSource(property.source())
+                    .setIsStatic(property.isStatic())
+                    .setDefaultValue(property.defaultValue())
+                    .setDoc(property.doc()));
+        }
+        return org.mydotey.ai.artemis.proto.management.v1.GetConfigStatusResponse.newBuilder()
+                .setStatus(successStatus())
+                .setData(data)
+                .build();
+    }
+
+    default org.mydotey.ai.artemis.proto.common.v1.ResponseStatus successStatus() {
+        return toProto(new ResponseStatus(Ack.SUCCESS, null));
+    }
+
+    default org.mydotey.ai.artemis.proto.common.v1.ResponseStatus invalidArgumentStatus(String message) {
+        return toProto(new ResponseStatus(Ack.FAIL, new ErrorInfo(ErrorCodes.INVALID_ARGUMENT, message)));
     }
 }

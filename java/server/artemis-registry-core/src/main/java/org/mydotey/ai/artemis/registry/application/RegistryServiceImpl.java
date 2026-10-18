@@ -4,7 +4,6 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -13,7 +12,6 @@ import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
 import org.mydotey.ai.artemis.common.config.ScfProperties;
 import org.mydotey.ai.artemis.registry.domain.Ack;
-import org.mydotey.ai.artemis.registry.domain.ChangeListener;
 import org.mydotey.ai.artemis.registry.domain.DeregisterRequest;
 import org.mydotey.ai.artemis.registry.domain.DeregisterResponse;
 import org.mydotey.ai.artemis.registry.domain.DeregisterResponseData;
@@ -25,7 +23,6 @@ import org.mydotey.ai.artemis.registry.domain.Instance;
 import org.mydotey.ai.artemis.registry.domain.InstanceError;
 import org.mydotey.ai.artemis.registry.domain.InstanceKey;
 import org.mydotey.ai.artemis.registry.domain.InstanceRegistry;
-import org.mydotey.ai.artemis.registry.domain.MonotonicClock;
 import org.mydotey.ai.artemis.registry.domain.RegisterRequest;
 import org.mydotey.ai.artemis.registry.domain.RegisterResponse;
 import org.mydotey.ai.artemis.registry.domain.RegisterResponseData;
@@ -40,7 +37,6 @@ import org.mydotey.ai.artemis.registry.domain.UpdateResponse;
 import org.mydotey.ai.artemis.registry.domain.UpdateResponseData;
 import org.mydotey.scf.Property;
 import org.mydotey.scf.facade.StringProperties;
-import org.mydotey.scf.filter.RangeValueConfig;
 
 /**
  * 应用服务实现：编排 = 契约级校验/归一（一次完成，领域不重复防御）→ 聚合 → 组装领域响应。
@@ -55,11 +51,9 @@ public final class RegistryServiceImpl implements RegistryService {
     /** 契约明示：weight ≤ 0 等同未设置，入口归一为 100。 */
     private static final int DEFAULT_WEIGHT = 100;
 
-    static final String KEY_LEASE_TTL_MS = "artemis.registry.lease.ttlMs";
     static final String KEY_SNAPSHOT_MAX_AGE_MS = "artemis.registry.snapshot.maxAgeMs";
     static final String KEY_SNAPSHOT_CLOCK_SKEW_TOLERANCE_MS = "artemis.registry.snapshot.clockSkewToleranceMs";
 
-    private static final long DEFAULT_LEASE_TTL_MS = 30_000;
     private static final long DEFAULT_SNAPSHOT_MAX_AGE_MS = 3_600_000;
     private static final long DEFAULT_CLOCK_SKEW_TOLERANCE_MS = 60_000;
 
@@ -67,25 +61,24 @@ public final class RegistryServiceImpl implements RegistryService {
     private final Clock clock;
     private final SelfProtection protection;
     private final RegistrySnapshotStore snapshotStore;
-    private final Property<String, Long> leaseTtlMs;
     private final Property<String, Long> snapshotMaxAgeMs;
     private final Property<String, Long> clockSkewToleranceMs;
     private final RegistrySnapshotCodec snapshotCodec = new RegistrySnapshotCodec();
     private final Counter evictions;
     private final Counter heartbeatInstances;
 
-    /** 租约 TTL 为动态 property（每轮续约/清理读取最新值）；回放时效为静态项（启动取值一次）。 */
+    /**
+     * 注册表聚合与 TTL 配置由装配层构造注入（InstanceRegistry 类内定义动态 TTL property）；
+     * 回放时效为静态项（启动取值一次）。
+     */
     public RegistryServiceImpl(
+            InstanceRegistry registry,
             StringProperties properties,
             Clock clock,
-            MonotonicClock monotonicClock,
-            ChangeListener listener,
             SelfProtection protection,
             RegistrySnapshotStore snapshotStore,
             MeterRegistry meterRegistry) {
-        this.leaseTtlMs = properties.getLongProperty(
-                KEY_LEASE_TTL_MS, new RangeValueConfig<>(DEFAULT_LEASE_TTL_MS, 1_000L, 600_000L));
-        this.registry = new InstanceRegistry(() -> Duration.ofMillis(leaseTtlMs.getValue()), monotonicClock, listener);
+        this.registry = registry;
         this.clock = clock;
         this.protection = protection;
         this.snapshotStore = snapshotStore;

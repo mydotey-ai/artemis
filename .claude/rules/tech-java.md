@@ -15,7 +15,7 @@
 - 内部 RPC 通信：core 定义端口接口（入站领域接口 + 出站端口），gRPC 实现（端点绑定、channel、stub、重试）在 server 模块；core 源码禁 import `io.grpc.*`（proto 消息类 `com.google.protobuf` 系不受限）。
 - client 禁依赖 artemis-common 与各 `*-core`/`*-server`；运行时依赖封闭清单：grpc-netty-shaded + grpc-stub + grpc-protobuf + scf-simple + SLF4J API（精确版本见技术选型组件总表）。
 - **新增任何依赖组件须先进 `docs/dev/tech-stack-java.md` 组件总表（评审）再进 pom**。
-- 跨模块传递 proto 生成类以同源 artifact 为界：服务端 common.v1 与 projection.v1 统一生成于 artemis-common，服务端模块间可直传；其余多模块各自生成的组（同 FQCN 异 artifact）与跨进程边界只走 wire 序列化。
+- 跨模块传递 proto 生成类以同源 artifact 为界：服务端 common.v1、projection.v1 与 management.v1 统一生成于 artemis-common，服务端模块间可直传；其余多模块各自生成的组（同 FQCN 异 artifact，如 registry.v1 见服务端与 client）与跨进程边界只走 wire 序列化。
 
 ## proto
 

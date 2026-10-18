@@ -6,6 +6,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import lombok.extern.slf4j.Slf4j;
+import org.mydotey.scf.Property;
+import org.mydotey.scf.facade.StringProperties;
+import org.mydotey.scf.filter.RangeValueConfig;
 
 /**
  * 注册表聚合：四操作语义 + 租约过期清理（ADR-012、架构 §4.1）。
@@ -29,13 +32,19 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public final class InstanceRegistry {
 
+    public static final String KEY_LEASE_TTL_MS = "artemis.registry.lease.ttlMs";
+
+    private static final long DEFAULT_LEASE_TTL_MS = 30_000;
+
     private final ConcurrentHashMap<ServiceKey, ServiceHolder> services = new ConcurrentHashMap<>();
-    private final LeaseTtlSource leaseTtl;
     private final MonotonicClock monotonicClock;
     private final ChangeListener listener;
+    /** 动态 TTL property（class 字段，使用处每次取最新值）；定义在本类（租约 TTL 的消费方）。 */
+    private final Property<String, Long> leaseTtlMs;
 
-    public InstanceRegistry(LeaseTtlSource leaseTtl, MonotonicClock monotonicClock, ChangeListener listener) {
-        this.leaseTtl = leaseTtl;
+    public InstanceRegistry(StringProperties properties, MonotonicClock monotonicClock, ChangeListener listener) {
+        this.leaseTtlMs = properties.getLongProperty(
+                KEY_LEASE_TTL_MS, new RangeValueConfig<>(DEFAULT_LEASE_TTL_MS, 1_000L, 600_000L));
         this.monotonicClock = monotonicClock;
         this.listener = listener;
     }
@@ -132,7 +141,7 @@ public final class InstanceRegistry {
     // 或每 holder 维护 volatile 最早续约下界实现无锁跳过（消每秒持锁扫描对同 holder 心跳续约的排队尖刺）
     public int evictExpired() {
         long now = monotonicClock.monoMillis();
-        long ttlMs = leaseTtl.leaseTtl().toMillis();
+        long ttlMs = leaseTtlMs.getValue();
         int evicted = 0;
         for (Map.Entry<ServiceKey, ServiceHolder> entry : services.entrySet()) {
             ServiceKey key = entry.getKey();
@@ -164,6 +173,26 @@ public final class InstanceRegistry {
     public Optional<ServiceInstances> snapshot(ServiceKey key) {
         ServiceHolder holder = services.get(key);
         return holder == null ? Optional.empty() : Optional.of(holder.snapshot);
+    }
+
+    /**
+     * 全量租约明细（排障用，弱一致读，不加锁）。age/remaining TTL 在聚合内按单调钟计算，
+     * 不对外暴露单调时刻。
+     */
+    // ponytail: 全量扫描 O(实例数)，排障端点非热路径；需要按 service 查询/分页时再加参数
+    public List<LeaseDetail> leaseDetails() {
+        long now = monotonicClock.monoMillis();
+        long ttlMs = leaseTtlMs.getValue();
+        List<LeaseDetail> details = new ArrayList<>();
+        for (Map.Entry<ServiceKey, ServiceHolder> entry : services.entrySet()) {
+            ServiceKey key = entry.getKey();
+            for (Lease lease : entry.getValue().leases.values()) {
+                // 扫描期间并发续约可使 renewalTimeMs 晚于扫描起点：age 下限钳为 0，避免负值/超 TTL
+                long ageMs = Math.max(0L, now - lease.renewalTimeMs);
+                details.add(new LeaseDetail(key, lease.instance.instanceId(), ageMs, ttlMs - ageMs));
+            }
+        }
+        return details;
     }
 
     /** 当前实例总数（指标 gauge；弱一致聚合读，不加锁）。 */
