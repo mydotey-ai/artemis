@@ -9,6 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **原产品仓库（只读参考，勿修改）**：`~/Projects/mydotey/artemis`（Java 8 / Spring Boot 2.3 多模块 Maven 工程）
 - **原产品调查文档 `docs/legacy/`**（重设计的需求输入，入口 `product-overview.md`）：分三层——**规格层**（需求语言：product-overview / nfr-spec / `domains/` 域规格与契约制品）、**事实层**（取证：`features.md` 实现清单 / `arch.md` + `arch/` 架构视图集）、**判断层**（取舍依据）。做任何新设计决策前先读判断层 `legacy-product-analysis.md`（可继承资产 / 局限清单）与 `industry-benchmark.md`；需原产品行为取证查事实层，域级需求输入查规格层
 - 项目文档与交流使用中文，技术名词保留英文
+- **规则优先级**：工作流（`.claude/commands/`）针对具体步骤的明确要求优先于 `.claude/rules/` 的通用规则；两者冲突时以工作流为准（例：`/dev-java` ⑪.3 的 squash 后 push main 是工作流既定动作，不受 git.md「仅在用户明确要求时执行」约束）
 
 ## 架构基线（原产品）
 

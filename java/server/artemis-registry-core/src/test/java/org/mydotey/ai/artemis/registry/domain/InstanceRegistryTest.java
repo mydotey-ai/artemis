@@ -260,6 +260,54 @@ class InstanceRegistryTest {
         assertThat(registry.snapshot(KEY)).containsSame(before);
     }
 
+    // ---- 全量快照读与回放写（phase-3）----
+
+    @Test
+    void should_expose_full_registry_for_snapshot() {
+        ServiceKey other = new ServiceKey("default", "pay-service");
+        registry.register(KEY, List.of(instance("i1")));
+        registry.register(other, List.of(instance("p1"), instance("p2")));
+
+        List<ServiceInstances> all = registry.snapshots();
+
+        assertThat(all).hasSize(2);
+        assertThat(all).extracting(ServiceInstances::key).containsExactlyInAnyOrder(KEY, other);
+        assertThat(all.stream().mapToInt(s -> s.instances().size()).sum()).isEqualTo(3);
+    }
+
+    @Test
+    void should_restore_without_events() {
+        events.clear();
+        List<ServiceInstances> snapshot = List.of(
+                new ServiceInstances(KEY, List.of(instance("i1"), instance("i2"))),
+                new ServiceInstances(new ServiceKey("default", "pay-service"), List.of(instance("p1"))));
+
+        registry.restore(snapshot);
+
+        // 回放零事件（D4 不变量）：listener 零回调，但快照重建可见
+        assertThat(events).isEmpty();
+        assertThat(registry.snapshots()).hasSize(2);
+        assertThat(registry.snapshot(KEY))
+                .hasValueSatisfying(s -> assertThat(s.instances())
+                        .extracting(Instance::instanceId)
+                        .containsExactlyInAnyOrder("i1", "i2"));
+    }
+
+    @Test
+    void should_reset_lease_from_restore_time() {
+        // 回放数据「携带」的陈旧性在回放时点不结算：续约时刻 = 回放时刻，TTL 从回放起算
+        clock.advance(Duration.ofMinutes(10)); // 回放前时钟已远超 TTL
+        registry.restore(List.of(new ServiceInstances(KEY, List.of(instance("i1")))));
+
+        clock.advance(Duration.ofSeconds(29)); // 距回放 29s < TTL 30s：回放前已「过期」的实例不摘
+        assertThat(registry.evictExpired()).isZero();
+        assertThat(registry.snapshot(KEY)).isPresent();
+
+        clock.advance(Duration.ofSeconds(2)); // 距回放 31s >= TTL
+        assertThat(registry.evictExpired()).isEqualTo(1);
+        assertThat(registry.snapshot(KEY)).isEmpty();
+    }
+
     // ---- 设施 ----
 
     private static Instance instance(String instanceId) {

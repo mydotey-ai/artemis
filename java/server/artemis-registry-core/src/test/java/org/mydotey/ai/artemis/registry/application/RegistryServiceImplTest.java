@@ -8,9 +8,11 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mydotey.ai.artemis.registry.InMemorySnapshotStore;
 import org.mydotey.ai.artemis.registry.MutableClock;
 import org.mydotey.ai.artemis.registry.domain.Ack;
 import org.mydotey.ai.artemis.registry.domain.ChangeListener;
+import org.mydotey.ai.artemis.registry.domain.ChangeType;
 import org.mydotey.ai.artemis.registry.domain.DeregisterRequest;
 import org.mydotey.ai.artemis.registry.domain.HeartbeatRequest;
 import org.mydotey.ai.artemis.registry.domain.HeartbeatResponse;
@@ -20,16 +22,26 @@ import org.mydotey.ai.artemis.registry.domain.InstanceStatus;
 import org.mydotey.ai.artemis.registry.domain.LeaseTtlSource;
 import org.mydotey.ai.artemis.registry.domain.RegisterRequest;
 import org.mydotey.ai.artemis.registry.domain.RegisterResponse;
+import org.mydotey.ai.artemis.registry.domain.SelfProtection;
+import org.mydotey.ai.artemis.registry.domain.SelfProtectionConfig;
 import org.mydotey.ai.artemis.registry.domain.ServiceInstances;
 import org.mydotey.ai.artemis.registry.domain.ServiceKey;
 
-/** 应用服务：契约级校验/归一、批量部分失败语义、响应字段组装。 */
+/** 应用服务：契约级校验/归一、批量部分失败语义、响应字段组装、保护编排与快照回放。 */
 class RegistryServiceImplTest {
 
     private static final ServiceKey KEY = new ServiceKey("default", "order-service");
 
+    /** 测试保护参数：低门槛（minCount 5）便于构造保护态；10s 窗口与生产默认一致。 */
+    private static final SelfProtectionConfig PROTECTION_CONFIG =
+            new SelfProtectionConfig(Duration.ofSeconds(10), 0.85, 5);
+
+    private static final Duration MAX_AGE = Duration.ofHours(1);
+
     private MutableClock clock;
     private List<InstanceChange> events;
+    private SelfProtection protection;
+    private InMemorySnapshotStore store;
     private RegistryServiceImpl service;
 
     @BeforeEach
@@ -38,7 +50,9 @@ class RegistryServiceImplTest {
         events = new ArrayList<>();
         LeaseTtlSource ttl = () -> Duration.ofSeconds(30);
         ChangeListener listener = events::add;
-        service = new RegistryServiceImpl(ttl, clock, clock, listener);
+        protection = new SelfProtection(PROTECTION_CONFIG, clock);
+        store = new InMemorySnapshotStore();
+        service = new RegistryServiceImpl(ttl, clock, clock, listener, protection, store, MAX_AGE);
     }
 
     @Test
@@ -113,6 +127,111 @@ class RegistryServiceImplTest {
         assertThat(response.status().ack()).isEqualTo(Ack.SUCCESS);
     }
 
+    // ---- 保护编排（D1：判定与计数在应用层）----
+
+    @Test
+    void should_count_heartbeat_renewals_only() {
+        service.heartbeat(new HeartbeatRequest(
+                List.of(new ServiceInstances(KEY, List.of(instance("i1"), instance("i2")))), 1L));
+
+        assertThat(protection.stats().windowRenewals()).isEqualTo(2);
+
+        // 显式操作非续约信号，不计入窗口
+        service.register(new RegisterRequest(List.of(new ServiceInstances(KEY, List.of(instance("i3"))))));
+        service.heartbeat(new HeartbeatRequest(
+                List.of(new ServiceInstances(KEY, List.of(instance("i1"), instance("i2")))), 2L));
+        assertThat(protection.stats().windowRenewals()).isEqualTo(4);
+
+        service.deregister(
+                new DeregisterRequest(List.of(new org.mydotey.ai.artemis.registry.domain.InstanceKey(KEY, "i1"))));
+        assertThat(protection.stats().windowRenewals()).isEqualTo(4);
+    }
+
+    @Test
+    void should_skip_eviction_when_protected() {
+        // 心跳 100 达峰（≥ minCount 5）→ 静默 11s 滑出窗口 → 续约量 0 < 100×0.85 → 保护态
+        service.heartbeat(new HeartbeatRequest(List.of(new ServiceInstances(KEY, List.of(instance("i1")))), 1L));
+        protection.recordRenewals(100);
+        clock.advance(Duration.ofSeconds(11));
+        assertThat(protection.isProtected()).isTrue();
+
+        clock.advance(Duration.ofSeconds(30)); // 距最后续约超 TTL
+        assertThat(service.evictExpired()).isZero(); // 保护态整轮跳过
+        assertThat(service.getInstances(KEY)).isPresent();
+
+        // 退出保护（心跳恢复）后过期照常清理
+        protection.recordRenewals(90);
+        clock.advance(Duration.ofSeconds(1));
+        assertThat(service.evictExpired()).isEqualTo(1);
+        assertThat(service.getInstances(KEY)).isEmpty();
+    }
+
+    @Test
+    void should_allow_deregister_when_protected() {
+        service.register(new RegisterRequest(List.of(new ServiceInstances(KEY, List.of(instance("i1"))))));
+        protection.recordRenewals(100);
+        clock.advance(Duration.ofSeconds(11));
+        assertThat(protection.isProtected()).isTrue();
+        events.clear();
+
+        var response = service.deregister(
+                new DeregisterRequest(List.of(new org.mydotey.ai.artemis.registry.domain.InstanceKey(KEY, "i1"))));
+
+        // 显式摘除不受保护（架构 §4.1 边界）：照常移除并发 DELETE 事件
+        assertThat(response.status().ack()).isEqualTo(Ack.SUCCESS);
+        assertThat(service.getInstances(KEY)).isEmpty();
+        assertThat(events).singleElement().extracting(InstanceChange::type).isEqualTo(ChangeType.DELETE);
+    }
+
+    // ---- 快照落盘与回放（D3/D6/D10）----
+
+    @Test
+    void should_treat_stale_snapshot_as_invalid() {
+        clock.advance(Duration.ofHours(2)); // now = 2h，快照时间戳 = 0 → 超 maxAge 1h
+        store.write(new RegistrySnapshotCodec()
+                .encode(List.of(new ServiceInstances(KEY, List.of(instance("i1")))), 0L));
+
+        assertThat(service.restoreFromSnapshot()).isZero();
+        assertThat(service.getInstances(KEY)).isEmpty(); // 空表启动，回放被跳过
+    }
+
+    @Test
+    void should_accept_future_timestamp_snapshot_within_clock_skew_tolerance() {
+        clock.advance(Duration.ofHours(2));
+        long future = clock.currentMillis() + Duration.ofSeconds(30).toMillis(); // 墙钟回拨宽容（≤ 1min）
+        store.write(new RegistrySnapshotCodec()
+                .encode(List.of(new ServiceInstances(KEY, List.of(instance("i1")))), future));
+
+        assertThat(service.restoreFromSnapshot()).isEqualTo(1);
+        assertThat(service.getInstances(KEY)).isPresent();
+    }
+
+    @Test
+    void should_discard_far_future_timestamp_snapshot() {
+        clock.advance(Duration.ofHours(2));
+        long farFuture = clock.currentMillis() + Duration.ofMinutes(10).toMillis(); // 超出回拨宽容：损坏/异常时钟
+        store.write(new RegistrySnapshotCodec()
+                .encode(List.of(new ServiceInstances(KEY, List.of(instance("i1")))), farFuture));
+
+        assertThat(service.restoreFromSnapshot()).isZero();
+        assertThat(service.getInstances(KEY)).isEmpty();
+    }
+
+    @Test
+    void should_drop_invalid_entries_when_restoring_snapshot() {
+        // 可解析但语义损坏：空 instanceId、weight=0、空 key——回放须走与 register 相同的校验/归一门
+        ServiceInstances corrupt =
+                new ServiceInstances(KEY, List.of(instance(""), instanceWithWeight("i2", 0), instance("i3")));
+        store.write(new RegistrySnapshotCodec()
+                .encode(List.of(corrupt, new ServiceInstances(new ServiceKey("", ""), List.of(instance("i4")))), 0L));
+
+        assertThat(service.restoreFromSnapshot()).isEqualTo(2); // i2（归一）+ i3；空 id 与空 key 丢弃
+        assertThat(service.getInstances(KEY)).hasValueSatisfying(s -> {
+            assertThat(s.instances()).extracting(Instance::instanceId).containsExactly("i2", "i3");
+            assertThat(s.instances()).extracting(Instance::weight).containsExactly(100, 100);
+        });
+    }
+
     // ---- 设施 ----
 
     private static Instance instance(String instanceId) {
@@ -128,7 +247,14 @@ class RegistryServiceImplTest {
         MutableClock wall = new MutableClock();
         MutableClock mono = new MutableClock();
         wall.advance(Duration.ofMillis(1_700_000_000_000L)); // 两域取完全不同的值域，混用即断言失败
-        RegistryServiceImpl split = new RegistryServiceImpl(() -> Duration.ofSeconds(30), wall, mono, events::add);
+        RegistryServiceImpl split = new RegistryServiceImpl(
+                () -> Duration.ofSeconds(30),
+                wall,
+                mono,
+                events::add,
+                new SelfProtection(PROTECTION_CONFIG, mono),
+                new InMemorySnapshotStore(),
+                MAX_AGE);
 
         split.register(new RegisterRequest(List.of(new ServiceInstances(KEY, List.of(instance("i1"))))));
 

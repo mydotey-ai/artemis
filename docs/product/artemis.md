@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.1    更新时间: 2026-10-14
+版本: 1.2    更新时间: 2026-10-18
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -62,11 +62,19 @@ mvn -f java/pom.xml spotless:apply         # 提交前格式化
 - **接入**：gRPC 服务（Spring Boot 官方 starter 装配，默认端口 9090；心跳为 bidi-stream 逐请求 ack，`seq` 归属 + `server_time_ms` 服务器时间基准）；同 key 变更事件有序派生（为 v0.2 集群复制预留，当前进程内出口为 no-op）。
 - **工程形态**：registry-core 按 DDD 四层组织（ADR-015：application / domain / infrastructure，gRPC 接入在 server 模块）；37 单测 + 6 服务级集成测试（进程内起真实 gRPC 服务端到端验证）。
 
-自我保护（phase-3）、快照落盘与 readiness、HTTP/认证/指标、管理 API、SDK 与 starter 自 phase-3 起递补。
+**phase-3（自我保护 + 服务端快照 + readiness 门控）已交付**：
+
+- **自我保护基础版**：按全局续约滑动窗口统计（窗口 10s），历史峰值达启用下限（50）后，当前窗口续约量低于峰值的 85% 即进入保护态；保护态暂停整轮租约过期清理（防网络分区/客户端异常时大规模误摘），显式 deregister 不受影响。
+- **服务端快照与重启回放**：内存注册表默认每 **5min** 落盘到 `data/registry-snapshot.bin`（原子写：临时文件 fsync 后 rename），快照带落盘时间戳；重启只回放**时效内**（默认 ≤ **1h**）快照，实例 TTL 从回放时刻重新起算；缺失/损坏/超期快照统一丢弃并空表启动（不拒绝启动）。时钟回拨宽容上限 1min，超前超限按超期处置。
+- **readiness 门控**：启动数据源就绪（v0.1 = 回放完成或确认无有效快照）前不接客户端流量，gRPC 返回 `UNAVAILABLE`；无快照时空表直接就绪（心跳即注册，客户端自愈），不做跨节点等待。
+- **工程形态**：56 内核单测 + 5 服务端单测 + 7 服务级集成测试（含重启回放端到端、readiness 正常路径）。
+
+HTTP/认证/指标（phase-4）、管理 API（phase-5）、SDK 与 starter（phase-6）后续递补。
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.2 | 2026-10-18 | phase-3 交付：自我保护基础版（10s 窗口/85%/下限 50）、快照落盘回放（5min / maxAge 1h / 路径默认）、readiness 门控与 UNAVAILABLE 语义 |
 | 1.1 | 2026-10-14 | phase-2 交付：注册四操作 + 心跳对账 + 租约 TTL/清理默认值（30s/1s，单调钟判定）+ gRPC 接入 |
 | 1.0 | 2026-10-12 | 初版（首个收尾 phase 建立）：产品定位、核心概念、开发者入口、交付状态 |

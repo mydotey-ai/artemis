@@ -166,6 +166,42 @@ public final class InstanceRegistry {
         return holder == null ? Optional.empty() : Optional.of(holder.snapshot);
     }
 
+    /** 全量快照读：全部 service 的共享快照聚合（供快照落盘），零克隆。 */
+    public List<ServiceInstances> snapshots() {
+        List<ServiceInstances> result = new ArrayList<>(services.size());
+        for (ServiceHolder holder : services.values()) {
+            result.add(holder.snapshot);
+        }
+        return result;
+    }
+
+    /**
+     * 回放写（快照/peer 同步数据的重建入口，D4）：逐 service 重建租约，续约时刻 = now
+     * （TTL 从回放起算），**不派发事件**——「回放零事件」为 v0.2 复制在位后的不变量。
+     * 空 service 跳过（不建空 holder）。
+     */
+    public void restore(List<ServiceInstances> toRestore) {
+        long now = monotonicClock.monoMillis();
+        for (ServiceInstances service : toRestore) {
+            if (service.instances().isEmpty()) {
+                continue;
+            }
+            while (true) {
+                ServiceHolder holder = services.computeIfAbsent(service.key(), ServiceHolder::new);
+                synchronized (holder) {
+                    if (services.get(service.key()) != holder) {
+                        continue; // 回收竞态：换新 holder 重试（同 apply）
+                    }
+                    for (Instance instance : service.instances()) {
+                        holder.leases.put(instance.instanceId(), new Lease(instance, now));
+                    }
+                    holder.rebuildSnapshot();
+                }
+                break;
+            }
+        }
+    }
+
     /**
      * 结构变更入口：锁内确认 holder 仍登记在 map（与空 service 回收的 remove 竞态时乐观重试——
      * 重试拿到的新 holder 必然建于回收者派发事件之后），写存储后走统一提交尾（D13）。

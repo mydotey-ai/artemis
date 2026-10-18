@@ -1,6 +1,6 @@
 # ADR-015：模块内分层（领域为核心）与层间模型转换
 
-版本: 1.7    更新时间: 2026-10-14
+版本: 1.8    更新时间: 2026-10-15
 
 ## 状态
 
@@ -29,7 +29,7 @@ org.mydotey.ai.artemis.<service>
 ```
 
 - **依赖方向**：`application → domain`、`infrastructure → domain`、接入层（server）→ application；**领域层不依赖任何其它层**（不依赖 proto、Spring、配置源）；application 与 infrastructure 互不依赖。
-- **依赖倒置 + 控制反转**：领域层涉及具体实现的能力只定义端口接口（TTL 提供 `LeaseTtlSource`、变更事件出口 `ChangeListener`、租约清理调度 `LeaseEvictionScheduler`、时长判定 `MonotonicClock`、跨进程时间戳用 JDK `java.time.Clock`），由基础设施层实现、装配层（server 的 Spring）注入。
+- **依赖倒置 + 控制反转**：领域层涉及具体实现的能力只定义端口接口（TTL 提供 `LeaseTtlSource`、变更事件出口 `ChangeListener`、租约清理调度 `LeaseEvictionScheduler`、时长判定 `MonotonicClock`、快照存取 `RegistrySnapshotStore`、快照落盘调度 `SnapshotScheduler`、跨进程时间戳用 JDK `java.time.Clock`），由基础设施层实现、装配层（server 的 Spring）注入。
 - **请求/响应模型定义在领域层**（`XxxRequest`/`XxxResponse`，不用 Command/Result 命名），**应用层直接使用**，不重复建模型。
 - **dto（proto 生成消息）只出现在 server 接入层与 application 的转换边界**（mapper/门面）；**domain 不出现 proto 类型**。同名模型以包名区分（`proto.…` / `domain.…`）。
 - **层间 mapper**：proto ↔ domain 一个 mapper（在 application）；主映射由 **MapStruct** 编译期生成，语义性转换（缺省值语义、未知枚举哨兵、结构展开）以显式手写方法补齐。
@@ -65,6 +65,7 @@ org.mydotey.ai.artemis.<service>
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.8 | 2026-10-15 | 端口枚举补快照存取 `RegistrySnapshotStore` 与快照落盘调度 `SnapshotScheduler`（phase-3 D7；store 端口只存取 bytes，格式与编解码归 application） |
 | 1.7 | 2026-10-14 | 端口枚举补时长判定 `MonotonicClock`（phase-2 D14：一切内部时长判定单调钟化，serverTimeMs 保留 JDK Clock） |
 | 1.6 | 2026-10-14 | 端口枚举补租约清理调度 `LeaseEvictionScheduler`（domain 定义接口、infrastructure 实现，phase-2 ⑨ 设计反馈定案，取代「调度器整体归装配层组合」的临时处理） |
 | 1.5 | 2026-10-13 | ④ 实现期坐标定案：gRPC starter 更正为 Spring Boot 4.1 官方模块 `org.springframework.boot:spring-boot-starter-grpc-server`（spring-grpc 自身 starter 止于 1.0.3，SB 4.0 起收编官方） |

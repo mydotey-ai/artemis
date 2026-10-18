@@ -47,9 +47,9 @@
 ### ① worktree 开工
 
 - 分支命名 `{milestone}-phase<N>-{title}`（如 `v0.1-phase2-heartbeat`，git.md 分支命名表「开发工作流」行）；worktree 居 `.claude/worktrees/`，目录名与分支名一致。
-- **幂等**：开工前检测同名分支/worktree 是否已存在——已存在则采纳续用（以文件系统为准），补齐 state 登记后继续，不重建。
+- **幂等**：开工前检测同名分支/worktree 是否已存在——已存在则**先报告其与 main 的分叉/完工状态**（已 squash 合并的残留分支 vs 进行中分支），由用户决定续用或重建，**不静默续用**（静默续用已完工分叉分支会使二次 squash merge 冲突）。用户确认续用时以文件系统为准，补齐 state 登记后继续，不重建。
 - 建 worktree 前检查 `.gitignore` 是否含 `.claude/worktrees/`，未含则添加。
-- worktree 就绪后**会话即切入 worktree 内工作**：②–⑩ 的文件读写与命令一律在 worktree 目录执行，不从主工作区以绝对路径远程操作 worktree 文件；⑪ 完工删 worktree 时切回主工作区。
+- worktree 就绪后**会话即切入 worktree 内工作**：②–⑩ 的文件读写与命令一律在 worktree 目录执行，不从主工作区以绝对路径远程操作 worktree 文件；⑪ 完工时切回主工作区（worktree 保留不删）。
 - **产出**：分支 + worktree；**phase 设计文档骨架**（附录 B 模板）；`phases/README.md` 登记本 phase 两份文档。滚动细化的 phase 清单调整（拆分/新增）在本步同步更新 plan.md 与 dev-state phase 总览，随分支提交。
 
 ### ② 上下文加载（强制清单，缺一不可）
@@ -114,9 +114,9 @@
 
 ### ⑪ 完工
 
-1. 提示用户发起 `/mydotey-ai:commit`（在 worktree 分支上提交，含代码、三文档与 state 更新——plan 与 state 基线已在 main，分支上为增量；**只提交不推送**，分支生命周期止于本地 squash merge）。
-2. 提交完成后（**转换点**）：确认后删 worktree、回到主工作区。
-3. squash merge 回 main：`git merge --squash <分支>`（暂存不提交）→ 更新 state（当前 phase 标 done、清空「当前版本」节的 phase/步骤字段，保留 phase 总览）并加入暂存 → 单个 squash commit 一并落地（message 按 git.md 取本 phase 核心变更）→ 删分支。state 收尾随 squash commit 原子入 main，主工作区无未提交残留，下个 worktree 从含收尾的 HEAD 起。
+1. 提示用户发起 `/mydotey-ai:commit`（在 worktree 分支上提交，含代码、三文档与 state 更新——plan 与 state 基线已在 main，分支上为增量；**只提交不推送**，分支止于本地 squash merge，合并后保留不删）。
+2. 提交完成后（**转换点**）：确认后回到主工作区（worktree 与分支均保留，不自动删除，由用户决定何时清理）。
+3. squash merge 回 main：`git merge --squash <分支>`（暂存不提交）→ 更新 state（当前 phase 标 done、清空「当前版本」节的 phase/步骤字段，保留 phase 总览）并加入暂存 → 单个 squash commit 一并落地（message 按 git.md 取本 phase 核心变更）→ **push main 到远程**（`git push origin main`，本步为工作流既定动作；worktree 分支仍只留本地不推送）→ **保留分支，不自动删除**（squash 后分支与 main 无共同祖先、显示分叉属预期；分支留作本 phase 完整提交历史，由用户决定何时清理）。state 收尾随 squash commit 原子入 main，主工作区无未提交残留，下个 worktree 从含收尾的 HEAD 起。
 4. 出口分支：phase 总览仍有 planned → 回到 ① 开工下一 phase（转换点确认）；已全部 done → 环节 3 开工（版本总览标 acceptance 后执行）。
 
 ## 3. 版本收尾

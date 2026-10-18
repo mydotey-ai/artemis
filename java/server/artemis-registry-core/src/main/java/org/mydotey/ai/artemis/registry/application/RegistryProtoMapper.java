@@ -219,4 +219,36 @@ public interface RegistryProtoMapper {
                 .setSeq(data.seq())
                 .build();
     }
+
+    // ---- toProto（快照编码，手写：domain → proto common.v1，phase-3 快照落盘方向）----
+
+    default org.mydotey.ai.artemis.proto.common.v1.Instance toProto(Instance instance) {
+        return org.mydotey.ai.artemis.proto.common.v1.Instance.newBuilder()
+                .setInstanceId(instance.instanceId())
+                .setHost(instance.host())
+                .setPort(instance.port())
+                .setStatus(toProto(instance.status()))
+                .setWeight(instance.weight())
+                .putAllMetadata(instance.metadata())
+                .build();
+    }
+
+    default org.mydotey.ai.artemis.proto.common.v1.ServiceInstances toProto(ServiceInstances services) {
+        org.mydotey.ai.artemis.proto.common.v1.ServiceInstances.Builder builder =
+                org.mydotey.ai.artemis.proto.common.v1.ServiceInstances.newBuilder()
+                        .setKey(toProto(services.key()));
+        for (Instance instance : services.instances()) {
+            builder.addInstances(toProto(instance));
+        }
+        return builder.build();
+    }
+
+    default org.mydotey.ai.artemis.proto.common.v1.InstanceStatus toProto(InstanceStatus status) {
+        return switch (status) {
+            case UNSPECIFIED -> org.mydotey.ai.artemis.proto.common.v1.InstanceStatus.INSTANCE_STATUS_UNSPECIFIED;
+            case UNKNOWN -> org.mydotey.ai.artemis.proto.common.v1.InstanceStatus.INSTANCE_STATUS_UNKNOWN;
+            case UP -> org.mydotey.ai.artemis.proto.common.v1.InstanceStatus.INSTANCE_STATUS_UP;
+            case DOWN -> org.mydotey.ai.artemis.proto.common.v1.InstanceStatus.INSTANCE_STATUS_DOWN;
+        };
+    }
 }

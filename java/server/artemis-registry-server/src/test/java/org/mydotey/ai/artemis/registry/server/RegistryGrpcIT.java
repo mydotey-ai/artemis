@@ -4,12 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
-import io.grpc.stub.StreamObserver;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -24,6 +21,7 @@ import org.mydotey.ai.artemis.proto.registry.v1.HeartbeatResponse;
 import org.mydotey.ai.artemis.proto.registry.v1.RegisterRequest;
 import org.mydotey.ai.artemis.proto.registry.v1.RegisterResponse;
 import org.mydotey.ai.artemis.proto.registry.v1.RegistryServiceGrpc;
+import org.mydotey.ai.artemis.registry.InMemorySnapshotStore;
 import org.mydotey.ai.artemis.registry.MutableClock;
 import org.mydotey.ai.artemis.registry.TestAwait;
 import org.mydotey.ai.artemis.registry.application.RegistryService;
@@ -31,6 +29,8 @@ import org.mydotey.ai.artemis.registry.domain.ChangeListener;
 import org.mydotey.ai.artemis.registry.domain.ChangeType;
 import org.mydotey.ai.artemis.registry.domain.InstanceChange;
 import org.mydotey.ai.artemis.registry.domain.LeaseTtlSource;
+import org.mydotey.ai.artemis.registry.domain.RegistrySnapshotStore;
+import org.mydotey.ai.artemis.registry.domain.SelfProtection;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.grpc.test.autoconfigure.LocalGrpcServerPort;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -63,6 +63,9 @@ class RegistryGrpcIT {
     @Autowired
     private List<InstanceChange> events;
 
+    @Autowired
+    private SelfProtection selfProtection;
+
     private ManagedChannel channel;
     private RegistryServiceGrpc.RegistryServiceBlockingStub blocking;
 
@@ -72,8 +75,9 @@ class RegistryGrpcIT {
                 .usePlaintext()
                 .build();
         blocking = RegistryServiceGrpc.newBlockingStub(channel);
-        // context 跨用例缓存：清理共享单例（时钟归零、摘除残留实例、清空事件）保证用例独立
+        // context 跨用例缓存：清理共享单例（时钟归零、摘除残留实例、清空事件、清空续约统计）保证用例独立
         clock.reset();
+        selfProtection.reset();
         registryService.deregister(new org.mydotey.ai.artemis.registry.domain.DeregisterRequest(java.util.List.of(
                 new org.mydotey.ai.artemis.registry.domain.InstanceKey(DOMAIN_KEY, "i1"),
                 new org.mydotey.ai.artemis.registry.domain.InstanceKey(DOMAIN_KEY, "i2"))));
@@ -108,26 +112,8 @@ class RegistryGrpcIT {
         TestAwait.await("registered", () -> instanceCount() == 1);
 
         // bidi 流上发两条心跳：i1 续约 + i2 缺席补注册
-        CountDownLatch acked = new CountDownLatch(2);
-        List<HeartbeatResponse> responses = new CopyOnWriteArrayList<>();
-        StreamObserver<HeartbeatRequest> requests = RegistryServiceGrpc.newStub(channel)
-                .heartbeat(new StreamObserver<>() {
-                    @Override
-                    public void onNext(HeartbeatResponse response) {
-                        responses.add(response);
-                        acked.countDown();
-                    }
-
-                    @Override
-                    public void onError(Throwable error) {}
-
-                    @Override
-                    public void onCompleted() {}
-                });
-        requests.onNext(heartbeatRequest(1L, "i1"));
-        requests.onNext(heartbeatRequest(2L, "i2"));
-        requests.onCompleted();
-        assertThat(acked.await(5, TimeUnit.SECONDS)).isTrue();
+        List<HeartbeatResponse> responses =
+                Heartbeats.collect(channel, heartbeatRequest(1L, "i1"), heartbeatRequest(2L, "i2"));
         assertThat(responses)
                 .extracting(response -> response.getData().getSeq())
                 .containsExactly(1L, 2L);
@@ -139,23 +125,8 @@ class RegistryGrpcIT {
         // t=110 距续约 50 < 100 仍在（若续约未生效，距注册 110 >= 100 即摘——有区分度）；
         // t=161 距续约 101 >= 100 被摘
         clock.advance(Duration.ofMillis(60));
-        CountDownLatch renewed = new CountDownLatch(1);
-        StreamObserver<HeartbeatRequest> renewalRequests = RegistryServiceGrpc.newStub(channel)
-                .heartbeat(new StreamObserver<>() {
-                    @Override
-                    public void onNext(HeartbeatResponse response) {
-                        renewed.countDown();
-                    }
-
-                    @Override
-                    public void onError(Throwable error) {}
-
-                    @Override
-                    public void onCompleted() {}
-                });
-        renewalRequests.onNext(heartbeatRequest(3L, "i1", "i2"));
-        renewalRequests.onCompleted();
-        assertThat(renewed.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(Heartbeats.collect(channel, heartbeatRequest(3L, "i1", "i2")))
+                .hasSize(1);
         clock.advance(Duration.ofMillis(50));
         assertThat(instanceCount()).isEqualTo(2);
         clock.advance(Duration.ofMillis(51));
@@ -218,25 +189,7 @@ class RegistryGrpcIT {
         clock.advance(Duration.ofMillis(1234));
 
         // bidi 流只有 async stub（blocking stub 不生成流方法）
-        CountDownLatch acked = new CountDownLatch(1);
-        List<HeartbeatResponse> responses = new CopyOnWriteArrayList<>();
-        StreamObserver<HeartbeatRequest> requests = RegistryServiceGrpc.newStub(channel)
-                .heartbeat(new StreamObserver<>() {
-                    @Override
-                    public void onNext(HeartbeatResponse response) {
-                        responses.add(response);
-                        acked.countDown();
-                    }
-
-                    @Override
-                    public void onError(Throwable error) {}
-
-                    @Override
-                    public void onCompleted() {}
-                });
-        requests.onNext(heartbeatRequest(5L, "i1"));
-        requests.onCompleted();
-        assertThat(acked.await(5, TimeUnit.SECONDS)).isTrue();
+        List<HeartbeatResponse> responses = Heartbeats.collect(channel, heartbeatRequest(5L, "i1"));
 
         assertThat(responses).singleElement().satisfies(response -> {
             assertThat(response.getData().getServerTimeMs()).isEqualTo(1234L);
@@ -260,6 +213,13 @@ class RegistryGrpcIT {
         @Primary
         LeaseTtlSource shortLeaseTtl() {
             return () -> Duration.ofMillis(100);
+        }
+
+        @Bean
+        @Primary
+        RegistrySnapshotStore inMemorySnapshotStore() {
+            // 隔离文件系统：不读写工作目录快照（重启回放语义由 SnapshotRestoreIT 专测）
+            return new InMemorySnapshotStore();
         }
 
         @Bean

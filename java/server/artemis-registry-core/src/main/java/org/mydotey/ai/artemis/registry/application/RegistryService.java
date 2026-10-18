@@ -32,6 +32,19 @@ public interface RegistryService {
     /** 读快照：共享不可变实例集；未注册 key 返回 empty。 */
     Optional<ServiceInstances> getInstances(ServiceKey key);
 
-    /** 租约过期清理（同步单轮，返回摘除数）；由装配层注入的调度器周期触发。 */
+    /**
+     * 租约过期清理（同步单轮，返回摘除数）；由装配层注入的调度器周期触发。
+     * 保护态整轮跳过（返回 0，过期实例保留）——显式 deregister 不受保护。
+     */
     int evictExpired();
+
+    /** 全量快照落盘（domain 快照 → 编码（含墙钟时间戳）→ store 写入）；由快照调度器周期触发，亦可手动触发。 */
+    void writeSnapshot();
+
+    /**
+     * 启动回放（架构 §4.1 三分支 ②/③）：store 读取 → 解码 → 时效判定（落盘时间距今 ≤ maxAge，
+     * 回拨宽容）→ 重建注册表（回放零事件、TTL 从回放起算），返回恢复实例数。
+     * 无效快照（缺失/损坏/超期）丢弃 + WARN + 返回 0（空表启动，不拒绝启动、不影响 ready）。
+     */
+    int restoreFromSnapshot();
 }

@@ -16,23 +16,23 @@
 |---|---|
 | phase | — |
 | 步骤 | — |
-| 分支 / worktree | v0.1-phase2-heartbeat @ .claude/worktrees/v0.1-phase2-heartbeat |
+| 分支 / worktree | — |
 
 ## 当前 phase 步骤进度
 
 | 步骤 | 状态 | 备注 |
 |---|---|---|
 | worktree 开工 | done | 分支/worktree 新建（非幂等续用）；设计/测试文档骨架落盘，phases/README 登记 |
-| 上下文加载 | done | 已读：roadmap v0.1、架构 §4.1、tech-java.md 全文、guidelines 全文、proto-contract.md、legacy §2.1–2.3/§5–§6、ADR-012、tech-stack §2、phase-1 设计/测试文档、parent 与 registry-core pom |
-| 设计 | done | review 四次修订：对齐标准 DDD 四层（ADR-015 v1.4）；/code-review + /fix 修复 10 findings；决策表全项 ✅；人工 review 终审通过（371f12d） |
-| 实现 | done | D13 同 key 事件定序（锁内全同步 + 回收后置 + 竞态重试）+ D14 时长判定单调钟化（MonotonicClock 端口，serverTimeMs 留壁挂）；文档即时同步（phase v2.2、ADR-015 v1.7）；修复 IT 装配 bean 名冲突/双 primary |
-| 测试 | done | dev-test.sh all 全 reactor BUILD SUCCESS：registry-core 34 单测（聚合 19 含并发定序守护）+ 6 IT（failsafe tests=6 failures=0） |
-| code-review | done | D13+D14 增量 max effort：15 findings——锁内派发正确性 3（listener 异常跳过回收尾/空摘路径快照陈旧/apply 无隔离）、bidi 死流双 onError、锁内延迟权衡未记、时钟两域测试零区分、javadoc 矛盾 2、changeTimeMs 语义无标记、jar-plugin 未锁版、三处内联协议重复、@GrpcAdvice 高度、await 重复、evict 双循环；2 项验证驳回（unary onError-after-cancel、serverTimeMs 移门面） |
-| fix | done | 13 项修复：fire 逐事件隔离 + commit 统一提交尾（空摘重建快照）、bidi dead 标记（grpc 1.84.2 验证）、两域时钟区分测试、TestAwait/maven-jar-plugin 锁版、javadoc/契约 4 处；@GrpcAdvice 登记缓期（phase-5）；详见 phase 文档第 3 轮 fix 记录 |
-| 回归测试 | done | dev-test.sh all 全 reactor BUILD SUCCESS（第 6 轮：37 单测 + 6 IT） |
-| 验证（人工） | done | 清单 1–3 通过、4（可选）跳过（测试文档回填，2026-10-14） |
-| 文档同步 | done | 产品文档 v1.1（phase-2 交付 + D6 默认值落地）；ADR-015 端口枚举（D12/D14）；phase 文档 v2.4「文档同步」节登记清单；无 API/架构/CLAUDE.md 变更（理由见该节） |
-| 完工 | done | 分支提交 1eb006e；squash merge 回 main，worktree/分支随收尾删除 |
+| 上下文加载 | done | 已读：roadmap v0.1、架构 §4.1/§7/§8、tech-java.md 全文、guidelines 全文、proto-contract.md、legacy §2.3/§2.7/§5 #9#10/§6 #5#9/§8（空集群死锁）、phase-2 设计/测试文档、registry-core/server 现有代码（InstanceRegistry/RegistryService/RegistryConfiguration 等） |
+| 设计 | done | review 三轮修订（D5 三分支 / D10 时效 / D7 周期 5min 可配）人工复审通过；架构 §4.1 v1.19、ADR-015 v1.8 同步 |
+| 实现 | done | 四层落地：domain（SelfProtection 分桶滑窗、快照端口、InstanceRegistry.snapshots/restore）、application（ReadinessGate、codec、编排）、infrastructure（文件 store 原子写、快照调度器）、server（bootstrap、UNAVAILABLE interceptor、装配）。实现期修正：SelfProtection 轮换改逐秒推进 + 滑出前采样（maxCount 峰值不依赖查询驱动） |
+| 测试 | done | dev-test.sh all 全绿（core 单测 56 + server 单测 5 + IT 7） |
+| code-review | done | max 级：主会话实证 + 10 角度并行审查，合并去重后终审 22 条（3 high / 6 medium），已核对核心代码事实与行号锚点 |
+| fix | done | 22 条全部处置（含新增 9 用例）；治理类：CLAUDE.md 规则优先级条款、dev-java ① 分支状态 guard |
+| 回归测试 | done | dev-test.sh all BUILD SUCCESS（含新增修复用例全绿） |
+| 验证（人工） | done | 4 项清单用户执行确认 pass |
+| 文档同步 | done | 产品文档 v1.2（phase-3 交付节）、架构 v1.20（时效回拨有界）、无新 ADR/API 变更 |
+| 完工 | done | worktree 分支 c2fd6ae 已提交；squash merge 回 main |
 
 步骤状态枚举：pending | in-progress | done | skipped。
 
@@ -42,7 +42,7 @@
 |---|---|
 | phase-1-scaffold | done |
 | phase-2-heartbeat | done |
-| phase-3-protect-snapshot | planned |
+| phase-3-protect-snapshot | done |
 | phase-4-server-assembly | planned |
 | phase-5-admin-api | planned |
 | phase-6-client-sdk | planned |

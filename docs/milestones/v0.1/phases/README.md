@@ -4,3 +4,4 @@
 |---|---|---|
 | phase-1-scaffold | [phase-1-scaffold.md](phase-1-scaffold.md) | [phase-1-scaffold-test.md](phase-1-scaffold-test.md) |
 | phase-2-heartbeat | [phase-2-heartbeat.md](phase-2-heartbeat.md) | [phase-2-heartbeat-test.md](phase-2-heartbeat-test.md) |
+| phase-3-protect-snapshot | [phase-3-protect-snapshot.md](phase-3-protect-snapshot.md) | [phase-3-protect-snapshot-test.md](phase-3-protect-snapshot-test.md) |
