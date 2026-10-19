@@ -1,6 +1,6 @@
 # v0.1 版本规划
 
-版本: 1.13    更新时间: 2026-10-19
+版本: 1.14    更新时间: 2026-10-19
 
 ## 目标
 
@@ -37,11 +37,21 @@ phase-4 配置规范化说明（2026-10-18 定案）：phase-4 先落地 SCF 配
 
 | roadmap 验收要点 | 对应测试 | 结果 |
 |---|---|---|
+| 单节点起停 | `RegistryGrpcIT` / `RegistryQueryIT` / `SnapshotRestoreIT`（进程内真实服务、随机端口）；phase-8 CI `docker` job 镜像构建成功 | 通过 |
+| SDK 注册/心跳 | `ClientSdkIT` 5 例（注册可见、周期续约、update 覆盖、close 即注销、错误凭证拒绝） | 通过 |
+| 实例经状态/管理 API 可观测 | `ManagementAdminIT`（服务列表/详情、租约状态 API）+ `RegistryQueryIT`（服务/实例/租约/配置状态） | 通过 |
+| 摘除/恢复经管理查询 API 的有效视图可验证 | `ManagementAdminIT`（effective view、includeEjected、registry facts 不变、restore、幂等） | 通过 |
+| 快照重启回放 | `SnapshotRestoreIT.should_restore_instances_after_server_restart` | 通过 |
+| 认证生效 | `AuthObservabilityIT`（gRPC/外部 HTTP 拒绝、/readyz 放行）、`RegistryQueryIT.should_reject_query_when_unauthenticated`、`ManagementAdminIT` 认证 5 例 | 通过 |
+| 指标可抓取 | `AuthObservabilityIT.should_scrape_prometheus_metrics`（`/actuator/prometheus`） | 通过 |
+
+服务发现查询按 roadmap 归 v0.3，不在本版验收。
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.14 | 2026-10-19 | v0.1 收尾：验收对照表按 roadmap 要点逐条填写（对应测试与结果） |
 | 1.13 | 2026-10-19 | phase-7 主题修订（设计 review 定案）：注册侧 SDK 去磁盘快照（归发现侧 v0.3；注册事实源是业务代码，重启重注册 + 心跳幂等收敛自愈） |
 | 1.12 | 2026-10-18 | ADR-016：管理面从 v0.1 独立交付——phase-5 改为 registry 只读查询 RPC，新增 phase-6-management-service，原 SDK/starter 顺延 |
 | 1.11 | 2026-10-18 | phase-4 范围调整：先做 SCF 配置规范化（source/manager/properties，各服务独立门面），工作量 2→3 天、主题与验收方式同步 |

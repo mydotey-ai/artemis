@@ -6,7 +6,7 @@
 
 | 版本 | 状态 | 备注 |
 |---|---|---|
-| v0.1 | in-progress | 当前版本 |
+| v0.1 | done | |
 
 状态枚举：planned | in-progress | acceptance | done（planned = 启动产物已写、基线未提交）。
 
@@ -17,6 +17,8 @@
 | phase | — |
 | 步骤 | — |
 | 分支 / worktree | — |
+
+> v0.1 已于 2026-10-19 收尾（验收对照见 `v0.1/plan.md`）。
 
 ## 当前 phase 步骤进度
 
@@ -40,13 +42,5 @@
 
 | phase | 状态 |
 |---|---|
-| phase-1-scaffold | done |
-| phase-2-heartbeat | done |
-| phase-3-protect-snapshot | done |
-| phase-4-server-assembly | done |
-| phase-5-registry-query-api | done |
-| phase-6-management-service | done |
-| phase-7-client-sdk | done |
-| phase-8-starter-ci | done |
 
 状态枚举：planned | in-progress | done。
