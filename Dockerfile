@@ -5,7 +5,9 @@ FROM maven:3.9-eclipse-temurin-25 AS build
 WORKDIR /src
 COPY java ./java
 COPY proto ./proto
-RUN mvn -B -f java/pom.xml -pl :artemis-registry-server -am package -Dmaven.test.skip=true
+# -DskipTests（非 maven.test.skip）：registry-server 依赖 registry-core 的 test-jar 测试设施，
+# 跳过 test-compile 会让该 artifact 不产出，依赖解析失败
+RUN mvn -B -f java/pom.xml -pl :artemis-registry-server -am package -DskipTests
 
 FROM eclipse-temurin:25-jre
 WORKDIR /app

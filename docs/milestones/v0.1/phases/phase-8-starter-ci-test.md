@@ -1,6 +1,6 @@
 # Phase 8 测试：Spring Boot starter + CI + Dockerfile
 
-版本: 1.3    更新时间: 2026-10-19
+版本: 1.4    更新时间: 2026-10-19
 
 ## 测试方案
 
@@ -26,9 +26,9 @@ CI 与镜像构建不是 JUnit 用例：CI 绿与 `docker build` 成功由 ⑨ �
 | # | 命令 / 步骤 | 预期 | 结论 |
 |---|---|---|---|
 | 1 | `java/scripts/dev-test.sh all` | BUILD SUCCESS；starter `Tests run: 8, Failures: 0`；全 reactor 12 模块 SUCCESS | 通过（用户确认） |
-| 2 | `docker build -t artemis-registry-server:dev .` | 多阶段构建成功（构建环境需可用 Docker daemon；本机当前 daemon 未启动，可由 CI `docker` job 作等效验证） | 通过（用户确认；CI docker job 复验） |
-| 3 | `docker run --rm -d --name artemis-dev -p 8080:8080 -p 9090:9090 artemis-registry-server:dev`，等待数秒后 `curl -sf http://localhost:8080/readyz` | 返回 `ready`（`/readyz` 无认证白名单）；随后 `docker exec artemis-dev sh -c 'test -w /app/data'` 退出码 0（快照目录可写）；`docker stop artemis-dev` | 通过（用户确认） |
-| 4 | ⑪ 推送 main 后查看 GitHub Actions `CI` 运行 | `java` job 绿（JDK 25 + toolchains JDK 8、spotless/enforcer/测试）与 `docker` job 绿（镜像构建）；若红按失败日志修复后重跑 | 待 ⑪ 推送后确认 |
+| 2 | `docker build -t artemis-registry-server:dev .` | 多阶段构建成功（构建环境需可用 Docker daemon；本机当前 daemon 未启动，可由 CI `docker` job 作等效验证） | 首轮 CI 失败：`-Dmaven.test.skip=true` 致 registry-core test-jar 缺失；已回退 `-DskipTests`，待复验 |
+| 3 | `docker run --rm -d --name artemis-dev -p 8080:8080 -p 9090:9090 artemis-registry-server:dev`，等待数秒后 `curl -sf http://localhost:8080/readyz` | 返回 `ready`（`/readyz` 无认证白名单）；随后 `docker exec artemis-dev sh -c 'test -w /app/data'` 退出码 0（快照目录可写）；`docker stop artemis-dev` | 待步骤 2 复验后执行 |
+| 4 | ⑪ 推送 main 后查看 GitHub Actions `CI` 运行 | `java` job 绿（JDK 25 + toolchains JDK 8、spotless/enforcer/测试）与 `docker` job 绿（镜像构建）；若红按失败日志修复后重跑 | 首轮：java 绿 / docker 红；修复后待重跑 |
 
 ## 回归记录（⑧ 填，经 dev-test.sh）
 
@@ -41,6 +41,7 @@ CI 与镜像构建不是 JUnit 用例：CI 绿与 `docker build` 成功由 ⑨ �
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.4 | 2026-10-19 | CI 首轮 docker job 失败（test-jar 缺失），回退 `-DskipTests`；验证结论按实际状态修正 |
 | 1.3 | 2026-10-19 | ⑨ 人工验证结论（1–3 通过；CI 待推送后确认） |
 | 1.2 | 2026-10-19 | ⑦ review 修复补 `should_resolve_relaxed_key_variants`（配置键多写法归一） |
 | 1.1 | 2026-10-19 | ③ 测试设计定稿：7 个装配单测用例 + CI/镜像人工验证口径 |

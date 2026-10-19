@@ -1,6 +1,6 @@
 # Phase 8：Spring Boot starter + CI + Dockerfile
 
-版本: 1.1    更新时间: 2026-10-19
+版本: 1.4    更新时间: 2026-10-19
 
 ## 目标
 
@@ -122,7 +122,7 @@ ENTRYPOINT ["java", "-jar", "/app/app.jar"]
 | 10 | docker job 只 build 不起容器 | 接受：本 phase 验收口径为「镜像构建成功」；运行时冒烟归 v1.0 部署形态验收（/app/data 权限问题已按 #1 根因修复） |
 | 11 | 测试 `@AfterEach` 清空全局 Micrometer registry | 删除；client close 已摘除自身 gauge，无残留 |
 | 12 | 注入 registry 用例未断言 global 未被写 | 补断言 |
-| 13 | Docker 构建无依赖缓存且 skipTests 仍编译测试 | 改 `-Dmaven.test.skip=true`；依赖缓存留给 v1.0 镜像优化 |
+| 13 | Docker 构建无依赖缓存且 skipTests 仍编译测试 | 尝试 `-Dmaven.test.skip=true` 后 CI docker job 失败（registry-core test-jar 不产出、server 依赖解析失败），回退 `-DskipTests` 并注释原因；依赖缓存留给 v1.0 镜像优化 |
 | 14 | 基础镜像 mutable tag | 接受：已锁主/次版本线，digest 固定在 v1.0 发布镜像时落实 |
 | 15 | CI 重复维护 toolchains.xml、各模块重复 surefire 配置 | CI 从 `java/toolchains.xml.example` sed 生成；surefire `jdkToolchain` 上移 client parent |
 
@@ -140,6 +140,7 @@ ENTRYPOINT ["java", "-jar", "/app/app.jar"]
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.4 | 2026-10-19 | CI 首轮 docker job 修复：`-Dmaven.test.skip=true` → `-DskipTests`（test-jar 依赖） |
 | 1.3 | 2026-10-19 | ⑩ 文档同步清单 |
 | 1.2 | 2026-10-19 | ⑦ 实现结果与 code-review 修复记录；装配契约按 review 收敛（仅 `ArtemisClient` 可覆盖、配置键多写法归一） |
 | 1.1 | 2026-10-19 | ③ 设计定稿：starter 装配契约、SB 2.7.18 基线、CI 与多阶段 Dockerfile |
