@@ -1,6 +1,6 @@
 # Java 技术选型
 
-版本: 1.20    更新时间: 2026-10-19
+版本: 1.21    更新时间: 2026-10-19
 
 > 本文是新一代 Artemis Java 实现的技术选型基线：语言与运行时、工程结构、全量技术组件清单与依赖冲突策略。设计依据为[架构设计](../arch/artemis-next-architecture.md)（§3 技术栈策略、§7 关键决策 D8），开发规范见[Java 开发规范](coding-guidelines-java.md)。Rust 实现（v1.x 混合集群）直接消费仓库顶层 `proto/` 契约目录（见[proto 契约规范](proto-contract.md)），不受本文 Java 组件约束。
 
@@ -121,6 +121,7 @@ Java 各消费模块从仓库顶层 `proto/`（组织与治理见[proto 契约�
 | 28 | CI/CD | 发布渠道 | Maven Central（Central Portal）+ 容器镜像仓库 | SDK/starter（v1.0）、镜像 | 镜像仓库 GHCR vs Docker Hub 待 v1.0 定 |
 | 29 | SDK 分发 | starter 自动装配 | `AutoConfiguration.imports` + `spring.factories` 双注册 | starter | 覆盖 SB 2.7+ 与老 SB 2.x；编译目标 Java 8 |
 | 30 | SDK 分发 | client 依赖纪律 | grpc-netty-shaded + grpc-stub + grpc-protobuf（传递 protobuf-java 3.25.x）+ SCF（scf-simple，传递 scf-core/lang-extension）+ SLF4J API + micrometer-core（#34） | artemis-client | grpc-netty-shaded **不传递** stub/protobuf 集成类，生成代码必需 grpc-stub/grpc-protobuf；冲突策略见 §5 |
+| 35 | 框架 | Spring Boot 2.x（starter 基线） | Spring Boot **2.7.18**（2.x 末版，Java 8 兼容；`spring-boot-autoconfigure` compile、`spring-boot-test` test，client 线自钉、不 import SB BOM） | spring-boot-starter-artemis-client（v0.1 phase-8 起） | starter 自动装配基线：配置经 SCF（不引 `@ConfigurationProperties`）、`initMethod=start`/`destroyMethod=close` 管生命周期、Boot `MeterRegistry` 注入回落 global；兼容 SB 2.7+（AutoConfiguration.imports）与老 2.x（spring.factories），自动配置类只用 2.x 全系 API（不用 `@AutoConfiguration`）；与 #7 服务端 SB 4.1 线互不传导 |
 
 生效期暗含在类别中：#13–16 期 3（v0.4）引入；v0.1 实际依赖面为语言、构建、SB、gRPC、Lombok、SCF、可观测、测试与质量工具。
 
@@ -188,6 +189,7 @@ shaded 版将 netty 重打包进 `io.grpc.netty.shaded.*` 命名空间，与宿�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.21 | 2026-10-19 | v0.1 phase-8 设计定案：组件总表新增 #35 Spring Boot 2.x starter 基线（2.7.18，Java 8 兼容，client 线自钉不 import BOM） |
 | 1.20 | 2026-10-19 | v0.1 phase-7 设计 review 定案：组件总表新增 #34 Micrometer（client 库模式，SDK 可观测标准端口，替换自建 ClientMetrics）；#17/#30 同步 |
 | 1.19 | 2026-10-19 | management.v1 生成矩阵调整：统一生成于 artemis-common（registry 实现只读查询 / management 消费，registry-core 与 management-core 不再自生成） |
 | 1.18 | 2026-10-18 | #19 日志补精确版本 logstash-logback-encoder 9.0 与 logstash 默认字段 schema（phase-4 实施） |

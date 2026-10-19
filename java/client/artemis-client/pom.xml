@@ -75,41 +75,7 @@
           </execution>
         </executions>
       </plugin>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-surefire-plugin</artifactId>
-        <configuration>
-          <!-- Java 8 运行时兼容在测试 JVM 层验证（#27）：fork JDK 8 执行，
-               前提 ~/.m2/toolchains.xml 含 JDK 8 toolchain -->
-          <jdkToolchain>
-            <version>8</version>
-          </jdkToolchain>
-        </configuration>
-      </plugin>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-enforcer-plugin</artifactId>
-        <executions>
-          <execution>
-            <id>enforce-client-boundaries</id>
-            <goals>
-              <goal>enforce</goal>
-            </goals>
-            <configuration>
-              <rules>
-                <bannedDependencies>
-                  <excludes>
-                    <!-- client 独立于服务端：proto 契约经文件级引用自生成（技术选型 §2.3） -->
-                    <exclude>org.mydotey.ai.artemis:artemis-common</exclude>
-                    <exclude>org.mydotey.ai.artemis:artemis-*-core</exclude>
-                    <exclude>org.mydotey.ai.artemis:artemis-*-server</exclude>
-                  </excludes>
-                </bannedDependencies>
-              </rules>
-            </configuration>
-          </execution>
-        </executions>
-      </plugin>
+      <!-- surefire（JDK 8 toolchain fork）与 SDK 边界 enforcer 均在 artemis-client-parent 统一配置 -->
     </plugins>
   </build>
 </project>

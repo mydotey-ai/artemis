@@ -1,0 +1,2 @@
+org.springframework.boot.autoconfigure.EnableAutoConfiguration=\
+org.mydotey.ai.artemis.client.spring.boot.ArtemisClientAutoConfiguration

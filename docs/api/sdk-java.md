@@ -1,6 +1,6 @@
 # Artemis Java SDK（注册侧）
 
-版本: 1.0    更新时间: 2026-10-19
+版本: 1.1    更新时间: 2026-10-19
 
 > `artemis-client` 是注册侧 Java 8 SDK：本地实例集为唯一事实源，显式操作 + 心跳全量上报。协议契约（`registry.v1`）见[proto 契约规范](../dev/proto-contract.md)，内部只读查询契约见 [registry-query-api.md](registry-query-api.md)。
 
@@ -16,6 +16,16 @@
 
 - Java 8 运行时（`release=8`），零 Spring 依赖。
 - 运行时依赖封闭清单：grpc-netty-shaded / grpc-stub / grpc-protobuf / scf-simple / SLF4J API / micrometer-core。
+
+Spring Boot 宿主使用 starter（Java 8 / Spring Boot 2.7+）：
+
+```xml
+<dependency>
+  <groupId>org.mydotey.ai.artemis</groupId>
+  <artifactId>spring-boot-starter-artemis-client</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+</dependency>
+```
 
 ## 2. 快速开始
 
@@ -50,9 +60,29 @@ client.register(ServiceInstance.newBuilder()
 client.close();                                  // 优雅下线：停心跳 → 注销全部实例 → 释放资源
 ```
 
+### Spring Boot 自动装配
+
+引入 starter 后无需手工创建 client：
+
+```properties
+# application.properties（也支持 YAML kebab-case：artemis.client.server-addresses）
+artemis.client.serverAddresses=localhost:9090
+artemis.client.auth.username=artemis
+artemis.client.auth.password=artemis
+```
+
+```java
+@Autowired ArtemisClient client;   // 容器启动即 start()，关闭时自动优雅下线
+client.register(instance);
+```
+
+- 自动接管生命周期（`start`/`close`）、把 Boot/actuator 的 `MeterRegistry` 注入 SDK（无 registry 或多个同型 bean 时回落 `Metrics.globalRegistry`）。
+- `artemis.client.enabled=false` 关闭自动装配；宿主自定义 `ArtemisClient` bean 时自动装配让位。
+- 未配置 `serverAddresses` 时启动 fail-fast（`IllegalArgumentException`），不会静默不注册。
+
 ## 3. 配置
 
-全部配置经 SCF 键 `artemis.client.*`（键定义在各消费类内）。缺省配置源为**系统属性 > 环境变量**（环境变量做容器友好映射：`ARTEMIS_CLIENT_SERVERADDRESSES`）；宿主可注入 `StringProperties` 装配文件源等。
+全部配置经 SCF 键 `artemis.client.*`（键定义在各消费类内）。缺省配置源为**系统属性 > 环境变量**（环境变量做容器友好映射：`ARTEMIS_CLIENT_SERVER_ADDRESSES`）；宿主可注入 `StringProperties` 装配文件源等。starter 额外支持 `application.properties`/YAML 与命令行，并接受同一键的 camelCase、kebab-case（`artemis.client.server-addresses`）、小写蛇形与 `ARTEMIS_CLIENT_SERVER_ADDRESSES` / `ARTEMIS_CLIENT_SERVERADDRESSES` 环境变量写法。
 
 | 键 | 默认 | 说明 |
 |---|---|---|
@@ -102,10 +132,11 @@ client.close();                                  // 优雅下线：停心跳 →
 ## 7. 已知限制
 
 - 同 JVM 多 client 共用缺省配置源时同键共享（v0.1 单 client 假设）；多 client 场景请注入隔离的 `StringProperties`。
-- 服务发现（消费方）SDK、Spring Boot starter（含 Micrometer 自动注入）分别在 v0.3 与 phase-8 交付。
+- 服务发现（消费方）SDK 与发现侧 starter 随 v0.3 交付。
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-19 | phase-8：补 Spring Boot starter 坐标、自动装配用法与条件；修正环境变量映射名并列出 starter 支持的键写法 |
 | 1.0 | 2026-10-19 | 初版：phase-7 注册侧 SDK 公开 API、配置、语义、可观测与限制 |

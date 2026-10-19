@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.7    更新时间: 2026-10-19
+版本: 1.8    更新时间: 2026-10-19
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -35,6 +35,7 @@ mvn -f java/pom.xml verify                 # 全量构建 + 测试（spotless + 
 java/scripts/dev-test.sh [unit|integration|all]   # 统一测试入口，默认 all
 mvn -f java/server/pom.xml spotless:apply  # 提交前格式化（服务端线）
 mvn -f java/client/pom.xml spotless:apply  # 提交前格式化（SDK 线）
+docker build -t artemis-registry-server .  # registry-server 镜像（多阶段自包含）
 ```
 
 环境前提：JDK 25（编译/工具进程）与 JDK 8（client 测试 JVM，经 Maven toolchains；模板 `java/toolchains.xml.example`，复制到 `~/.m2/toolchains.xml` 并改 `jdkHome`）。
@@ -48,7 +49,7 @@ mvn -f java/client/pom.xml spotless:apply  # 提交前格式化（SDK 线）
 | `artemis-discovery-core` / `-server` | 25 | discovery 投影内核 / Spring Boot 装配 |
 | `artemis-management-core` / `-server` | 25 | 治理面内核 / Spring Boot 装配 |
 | `artemis-client` | 8 | 注册 + 发现统一 SDK（零 Spring） |
-| `spring-boot-starter-artemis-client` | 8 | client 的 Spring Boot 集成 |
+| `spring-boot-starter-artemis-client` | 8 | client 的 Spring Boot 集成（自动装配、生命周期托管、MeterRegistry 注入） |
 
 ## 4. 交付状态
 
@@ -105,12 +106,17 @@ mvn -f java/client/pom.xml spotless:apply  # 提交前格式化（SDK 线）
 - **可观测**：Micrometer 指标（操作失败/耗时、心跳失败、重连、连接态、本地实例数，带 client 标签），缺省挂 `Metrics.globalRegistry`，starter 将自动接 Boot `MeterRegistry`。
 - **工程形态**：client 24 单测（JDK 8 运行时）；registry-server 侧 `ClientSdkIT` 5 例端到端（注册可见/续约/更新/优雅下线/错误凭证）。
 
-starter/CI/Dockerfile（phase-8）后续递补。
+**phase-8（Spring Boot starter + CI + Dockerfile）已交付**：
+
+- **starter**：`spring-boot-starter-artemis-client`（Java 8 / Spring Boot 2.7+）自动装配——`spring.factories`（老 2.x）+ `AutoConfiguration.imports`（2.7+）双注册；配置经 Spring Environment 进 SCF（application.properties/YAML、命令行、系统属性/环境变量，键写法 camelCase/kebab/snake 均可）；`initMethod=start` / `destroyMethod=close` 托管生命周期；自动注入 Boot `MeterRegistry`（无 registry 或多个同型 bean 时回落 `Metrics.globalRegistry`）；`artemis.client.enabled=false` 可关闭，宿主自定义 `ArtemisClient` 时让位。用法见 [sdk-java.md](../api/sdk-java.md#spring-boot-自动装配)。
+- **CI**：GitHub Actions 按路径触发（`java/**`、`proto/**`、Dockerfile/workflow 变更）；`java` job 以 JDK 25 构建、经 Maven toolchains fork JDK 8 跑 client/starter 测试，强制 spotless:check + enforcer + 单测/集成测试；`docker` job 构建镜像。
+- **镜像**：仓库根多阶段 Dockerfile（`maven:3.9-eclipse-temurin-25` → `eclipse-temurin:25-jre`），`docker build .` 一条命令产出 registry 单服务镜像；非 root 运行，快照目录 `/app/data` 可写；暴露外部 gRPC 9090 / HTTP 8080。
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.8 | 2026-10-19 | phase-8 交付节：Spring Boot starter 自动装配、CI 流水线、多阶段 Docker 镜像；开发者入口补镜像构建命令 |
 | 1.7 | 2026-10-19 | phase-7 交付节：Java 8 注册侧 SDK（fire-and-forget、心跳自愈、生命周期、SCF 配置、Micrometer 指标）；新增 SDK API 文档 |
 | 1.6 | 2026-10-19 | phase-6 交付节：management-service 独立进程、Admin API（有效视图/摘除/恢复）、状态 API、出站只读查询与错误语义；管理面 API 文档链接 |
 | 1.5 | 2026-10-19 | phase-5 交付节：内部只读查询能力/脱敏/上限/契约归属（management.v1，client 不生成）；common 生成组同步 |

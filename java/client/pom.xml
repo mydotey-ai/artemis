@@ -27,6 +27,8 @@
     <scf.version>1.6.3</scf.version>
     <slf4j.version>2.0.20</slf4j.version>
     <micrometer.version>1.17.1</micrometer.version>
+    <!-- starter 集成基线：SB 2.7 为支持 Java 8 的末条线（组件总表 #35），不 import SB BOM -->
+    <spring-boot2.version>2.7.18</spring-boot2.version>
     <junit.version>5.14.4</junit.version>
     <assertj.version>3.27.7</assertj.version>
 
@@ -68,6 +70,16 @@
         <groupId>io.micrometer</groupId>
         <artifactId>micrometer-core</artifactId>
         <version>${micrometer.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-autoconfigure</artifactId>
+        <version>${spring-boot2.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-test</artifactId>
+        <version>${spring-boot2.version}</version>
       </dependency>
       <dependency>
         <groupId>org.junit</groupId>
@@ -118,6 +130,12 @@
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-surefire-plugin</artifactId>
           <version>3.6.0</version>
+          <configuration>
+            <!-- 所有 SDK 模块的测试统一 fork JDK 8（Java 8 运行时兼容验证，#27） -->
+            <jdkToolchain>
+              <version>8</version>
+            </jdkToolchain>
+          </configuration>
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
@@ -201,6 +219,25 @@
                   <version>[3.9,)</version>
                 </requireMavenVersion>
                 <requireUpperBoundDeps />
+              </rules>
+            </configuration>
+          </execution>
+          <execution>
+            <id>enforce-sdk-boundaries</id>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
+            <configuration>
+              <rules>
+                <bannedDependencies>
+                  <excludes>
+                    <!-- SDK 模块（client/starter）独立于服务端：禁 common/core/server（技术选型 §2.3）。
+                         Java 8 宿主无法加载 release=25 的服务端类，边界必须在构建期硬失败 -->
+                    <exclude>org.mydotey.ai.artemis:artemis-common</exclude>
+                    <exclude>org.mydotey.ai.artemis:artemis-*-core</exclude>
+                    <exclude>org.mydotey.ai.artemis:artemis-*-server</exclude>
+                  </excludes>
+                </bannedDependencies>
               </rules>
             </configuration>
           </execution>
