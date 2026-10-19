@@ -7,6 +7,7 @@ import org.mydotey.ai.artemis.registry.domain.ClusterMember;
 import org.mydotey.ai.artemis.registry.domain.ClusterMembers;
 import org.mydotey.scf.Property;
 import org.mydotey.scf.facade.StringProperties;
+import org.mydotey.scf.type.string.StringToListConverter;
 
 /**
  * 领域端口 {@link ClusterMembers} 的静态配置实现（架构 §4.1：成员抽象接口先行为主）。
@@ -16,15 +17,21 @@ public final class StaticClusterMembers implements ClusterMembers {
 
     static final String KEY_MEMBERS = "artemis.registry.cluster.members";
 
-    private final Property<String, String> membersProperty;
     private final List<ClusterMember> members;
 
+    @SuppressWarnings("unchecked")
     public StaticClusterMembers(StringProperties properties) {
-        this(ScfProperties.staticString(properties, KEY_MEMBERS, "", "static cluster members host:port list"));
+        this(ScfProperties.staticProperty(
+                properties,
+                KEY_MEMBERS,
+                (Class<List<String>>) (Class<?>) List.class,
+                List.of(),
+                StringToListConverter.DEFAULT,
+                null,
+                "static cluster members host:port list"));
     }
 
-    StaticClusterMembers(Property<String, String> membersProperty) {
-        this.membersProperty = membersProperty;
+    StaticClusterMembers(Property<String, List<String>> membersProperty) {
         this.members = parse(membersProperty.getValue());
     }
 
@@ -33,16 +40,12 @@ public final class StaticClusterMembers implements ClusterMembers {
         return members;
     }
 
-    static List<ClusterMember> parse(String raw) {
-        if (raw == null || raw.isBlank()) {
+    static List<ClusterMember> parse(List<String> entries) {
+        if (entries == null || entries.isEmpty()) {
             return List.of();
         }
         List<ClusterMember> members = new ArrayList<>();
-        for (String entry : raw.split(",")) {
-            String value = entry.trim();
-            if (value.isEmpty()) {
-                continue;
-            }
+        for (String value : entries) {
             String host;
             String portText;
             if (value.startsWith("[")) {

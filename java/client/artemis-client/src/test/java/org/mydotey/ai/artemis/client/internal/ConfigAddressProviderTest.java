@@ -52,8 +52,7 @@ class ConfigAddressProviderTest {
         assertThatThrownBy(() -> provider(null).select()).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> provider("").select()).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> provider("no-port").select()).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> ConfigAddressProvider.parseAddresses(" ,, "))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> provider(" ,, ").select()).isInstanceOf(IllegalArgumentException.class);
     }
 
     private static ConfigAddressProvider provider(String addresses) {

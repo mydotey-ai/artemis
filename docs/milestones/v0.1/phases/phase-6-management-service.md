@@ -1,6 +1,6 @@
 # Phase 6：management-service 骨架与内存态管理面
 
-版本: 2.0    更新时间: 2026-10-19
+版本: 2.2    更新时间: 2026-10-19
 
 ## 目标
 
@@ -271,7 +271,7 @@ Base path `/admin/v1`，JSON（camelCase），Basic 认证。
 | `artemis.management.registry.timeoutMs` | 静态 long | `3000` | 单次查询 deadline（1..60000） |
 
 - 配置项定义在使用类内：认证项在 `auth/ManagementAuthConfig`，registry 客户端项在 `grpc/RegistryClientConfig`（guidelines §10）。
-- **SCF 空白语义**：SCF 把空白/纯空白字符串视为「未设置」（`ObjectExtension.isNullOrEmpty`），会回落默认值而非把空白原样交给使用方。因此空白凭证/端点不会 fail-fast；部署时应确保凭证非空或显式设置 `artemis.management.auth.enabled=false`（eval）。类内空白校验仅作防御性守卫。
+- **SCF 空白语义**：SCF 把空白/纯空白字符串视为「未设置」（`ObjectExtension.isNullOrEmpty`），会回落默认值而非把空白原样交给使用方。因此空白凭证/端点不会 fail-fast；部署时应确保凭证非空或显式设置 `artemis.management.auth.enabled=false`（eval）。类内不再重复空白校验（SCF 语义已保证）。
 - source 装配同 registry：工作目录 `artemis.properties`（reloadable）< 环境变量 < 系统属性 < Spring Environment；manager 名 `artemis-management`。
 - 框架/三方组件配置（端口、actuator、trace 导出）仍归 Spring Boot。
 
@@ -318,7 +318,7 @@ Base path `/admin/v1`，JSON（camelCase），Basic 认证。
 | # | finding | 处置 |
 |---|---|---|
 | 1 | 兜底 `Exception` handler 吞掉 Spring MVC 4xx | 新增 400（消息不可读/参数类型不匹配/缺参）、404、405 显式映射；catch-all 仅兜未预期 500；IT 验证 404/400 |
-| 2 | 空白配置 fail-fast 不可达（SCF 空白视为未设置） | 接受 SCF 语义并修订设计文档 §6；类内校验降级为防御性守卫，测试断言回落默认值 |
+| 2 | 空白配置 fail-fast 不可达（SCF 空白视为未设置） | 接受 SCF 语义并修订设计文档 §6；类内校验移除（不可达），测试断言回落默认值 |
 | 3 | registry 响应无分页 + gRPC 默认 4 MiB 入站上限 | channel `maxInboundMessageSize` 放宽至 16 MiB；设计文档登记已知上限 |
 | 4 | `reason` 长度按 UTF-16 code unit 计 | 改用 `codePointCount`（按字符计） |
 | 5 | HTTP 过滤器缺错误凭证用例 | 补 `should_reject_request_when_credentials_wrong` |
@@ -345,6 +345,7 @@ Base path `/admin/v1`，JSON（camelCase），Basic 认证。
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 2.2 | 2026-10-19 | 删除不可达的类内空白校验（SCF 空白视为未设置并回落默认值），同步 §6 与 review 记录 |
 | 2.1 | 2026-10-19 | code-review 同步：平铺 InstanceView/EjectionView、countByService 聚合、16 MiB 入站上限、每次调用现算 deadline、SCF 空白回落语义、404/405 错误语义 |
 | 2.0 | 2026-10-19 | 产品设计定稿：领域/应用模型、有效视图语义、HTTP 契约、出站查询、认证配置与装配 |
 | 1.0 | 2026-10-19 | 开工骨架 |

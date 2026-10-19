@@ -29,13 +29,6 @@ public final class ManagementAuthConfig {
                 properties, KEY_USERNAME, DEFAULT_USERNAME, "authentication username (static)");
         this.password = ScfProperties.staticString(
                 properties, KEY_PASSWORD, DEFAULT_PASSWORD, "authentication password (static)");
-        // 防御性校验：SCF 把空白视为未设置并回落默认值，正常配置路径不会触发
-        if (enabled() && username().isBlank()) {
-            throw new IllegalArgumentException(KEY_USERNAME + " must not be blank when auth enabled");
-        }
-        if (enabled() && password().isBlank()) {
-            throw new IllegalArgumentException(KEY_PASSWORD + " must not be blank when auth enabled");
-        }
         if (!enabled()) {
             log.warn("management authentication is disabled by configuration ({}=false)", KEY_ENABLED);
         } else if (DEFAULT_PASSWORD.equals(password())) {

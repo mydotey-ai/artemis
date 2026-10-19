@@ -34,16 +34,6 @@ public final class RegistryClientConfig {
                 properties, KEY_PASSWORD, DEFAULT_PASSWORD, "registry basic auth password (static)");
         this.timeoutMs = ScfProperties.staticLong(
                 properties, KEY_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1, 60_000, "registry query deadline ms (static)");
-        // 防御性校验：SCF 把空白视为未设置并回落默认值，正常配置路径不会触发
-        if (endpoint().isBlank()) {
-            throw new IllegalArgumentException(KEY_ENDPOINT + " must not be blank");
-        }
-        if (username().isBlank()) {
-            throw new IllegalArgumentException(KEY_USERNAME + " must not be blank");
-        }
-        if (password().isBlank()) {
-            throw new IllegalArgumentException(KEY_PASSWORD + " must not be blank");
-        }
     }
 
     public String endpoint() {

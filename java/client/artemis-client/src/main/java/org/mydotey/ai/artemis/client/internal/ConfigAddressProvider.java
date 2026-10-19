@@ -1,9 +1,12 @@
 package org.mydotey.ai.artemis.client.internal;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import org.mydotey.scf.Property;
+import org.mydotey.scf.facade.ConfigurationProperties;
+import org.mydotey.scf.type.string.StringToListConverter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 配置驱动的地址供给：每次 {@link #select()} 读取 SCF property——无静态固化（未 setStatic(true)）。
@@ -15,42 +18,51 @@ final class ConfigAddressProvider implements ServerAddressProvider {
 
     static final String KEY_SERVER_ADDRESSES = "artemis.client.serverAddresses";
 
-    private final Property<String, String> serverAddresses;
+    private static final Logger LOG = LoggerFactory.getLogger(ConfigAddressProvider.class);
 
-    ConfigAddressProvider(Property<String, String> serverAddresses) {
+    private final Property<String, List<String>> serverAddresses;
+
+    ConfigAddressProvider(Property<String, List<String>> serverAddresses) {
         this.serverAddresses = serverAddresses;
     }
 
-    static Property<String, String> property(org.mydotey.scf.facade.StringProperties properties) {
-        return ClientProperties.stringProperty(
-                properties, KEY_SERVER_ADDRESSES, null, "registry server addresses, comma separated (required)");
+    /** string 源值经 SCF 内置 ListConverter 转成地址列表（split/trim/跳过空项），Property 缓存解析结果。 */
+    @SuppressWarnings("unchecked")
+    static Property<String, List<String>> property(org.mydotey.scf.facade.StringProperties properties) {
+        return properties
+                .getManager()
+                .getProperty(ConfigurationProperties.<String, List<String>>newConfigBuilder()
+                        .setKey(KEY_SERVER_ADDRESSES)
+                        .setValueType((Class<List<String>>) (Class<?>) List.class)
+                        .addValueConverter(StringToListConverter.DEFAULT)
+                        .setValueFilter(ConfigAddressProvider::validateAddresses)
+                        .setDoc("registry server addresses, comma separated (required)")
+                        .build());
     }
 
     @Override
     public String select() {
-        List<String> addresses = parseAddresses(serverAddresses.getValue());
+        List<String> addresses = serverAddresses.getValue();
+        if (addresses == null || addresses.isEmpty()) {
+            throw new IllegalArgumentException(KEY_SERVER_ADDRESSES + " must be set (comma separated host:port)");
+        }
         if (addresses.size() == 1) {
             return addresses.get(0);
         }
         return addresses.get(ThreadLocalRandom.current().nextInt(addresses.size()));
     }
 
-    /** 逗号分隔地址解析（host:port）；空白/缺失抛 {@link IllegalArgumentException}（消费方构造期 fail-fast）。 */
-    static List<String> parseAddresses(String value) {
-        if (value == null || value.trim().isEmpty()) {
-            throw new IllegalArgumentException(KEY_SERVER_ADDRESSES + " must be set (comma separated host:port)");
-        }
-        List<String> addresses = new ArrayList<>();
-        for (String part : value.split(",")) {
-            String address = part.trim();
-            if (address.isEmpty()) {
-                continue;
+    /**
+     * valueFilter 校验 host:port：非法返回 null 丢弃该值（SCF 不传播 filter 异常，抛异常会让非法值原样生效）。
+     */
+    private static List<String> validateAddresses(List<String> addresses) {
+        for (String address : addresses) {
+            try {
+                validateAddress(address);
+            } catch (IllegalArgumentException e) {
+                LOG.warn(e.getMessage());
+                return null;
             }
-            validateAddress(address);
-            addresses.add(address);
-        }
-        if (addresses.isEmpty()) {
-            throw new IllegalArgumentException(KEY_SERVER_ADDRESSES + " must contain at least one host:port");
         }
         return addresses;
     }

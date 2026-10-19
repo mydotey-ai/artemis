@@ -29,14 +29,8 @@ public final class AuthConfig {
                 properties, KEY_USERNAME, DEFAULT_USERNAME, "authentication username (static)");
         this.password = ScfProperties.staticString(
                 properties, KEY_PASSWORD, DEFAULT_PASSWORD, "authentication password (static)");
-        // 启动期校验（构造即触发）：非法布尔值/空白凭证 fail-fast
+        // 启动期提示（构造即触发）：认证关闭或仍使用默认密码
         boolean enabledValue = enabled();
-        if (enabledValue && username().isBlank()) {
-            throw new IllegalArgumentException(KEY_USERNAME + " must not be blank when auth enabled");
-        }
-        if (enabledValue && password().isBlank()) {
-            throw new IllegalArgumentException(KEY_PASSWORD + " must not be blank when auth enabled");
-        }
         if (!enabledValue) {
             log.warn("registry authentication is disabled by configuration ({}=false)", KEY_ENABLED);
         } else if (DEFAULT_PASSWORD.equals(password())) {
