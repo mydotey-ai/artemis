@@ -16,7 +16,7 @@
 
 推进规则：
 
-- **转换点确认、步骤内自动**：phase 清单确认、新 phase 开工、设计制品 review 三个转换点先报告等用户人工 review，**通过后才能进入下一阶段**；phase 内其余步骤连续推进（⑨ 验证为人工停点：验证清单就绪后停待用户执行并记录结论，不通过走该节回退规则）。**⑪ 提交后的 squash 合并不再是转换点**：worktree 分支提交完成即自动回主工作区 squash、更新 state、commit 并 push（见 ⑪ 步骤 2–3）。
+- **转换点确认、步骤内自动**：phase 清单确认、新 phase 开工、设计制品 review 三个转换点先报告等用户人工 review，**通过后才能进入下一阶段**；phase 内其余步骤连续推进（⑨ 验证为人工停点：验证清单就绪后停待用户执行并记录结论，不通过走该节回退规则）。**⑪ 提交后的 squash 合并不再是转换点**：worktree 分支提交完成即自动回主工作区 squash、更新 state、commit 并 push（见 ⑪ 步骤 2–3）；**版本收尾提交（环节 3 步骤 4）同样自动**——收尾变更直接 commit 并 push main，不再提示用户发起。
 - **每完成一个步骤立即更新 dev-state.md**，这是断点续推的唯一依据。dev-state.md 是全流程**唯一状态源**：进度、版本/phase 状态以此为准；plan 不设状态列、phase 设计文档不记进度状态，不双写。
 - 步骤状态枚举：`pending` | `in-progress` | `done` | `skipped`（如 ⑦ 在 ⑥ 无 findings 时标 skipped 并备注原因）。
 - 若当前会话不在 worktree 而 state 显示 phase 进行中，**提示用户自行切换到对应 worktree**，切换完成后继续（不自动进入）。
@@ -127,7 +127,7 @@
 | 1 | roadmap 该版验收要点**逐条对照**：每条有对应可执行测试且通过（guidelines §7）。该版无「验收要点」条目时（如 v1.x），以各 phase 验收方式汇总对照 | plan 文档验收对照表填齐（要点 / 对应测试 / 结果） |
 | 2 | 文档终检 | 各级索引（含 milestones/ 索引）、CLAUDE.md「当前状态」的更新（如过时） |
 | 3 | 版本标记完成 | state：版本总览该版本标 `done`（行保留，不清空；备注列移除「当前版本」标记）、清空「当前版本」节与 phase 总览 |
-| 4 | **收尾提交**：提示用户发起 `/mydotey-ai:commit-and-push`（main，plan/state/终检变更） | main 收尾提交 |
+| 4 | **收尾提交（自动）**：在主工作区提交 plan/state/终检变更并 `git push origin main`（工作流既定动作，无需用户发起） | main 收尾提交 |
 | 5 | 下次 `/dev-java` 自动进入下一版本启动 | — |
 
 ## 附录 A：plan 文档模板（`docs/milestones/v<版本>/plan.md`）
