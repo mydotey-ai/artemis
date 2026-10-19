@@ -35,6 +35,11 @@
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-api</artifactId>
     </dependency>
+    <dependency>
+      <!-- SDK 可观测标准端口（技术选型 #34）：注入或 globalRegistry，宿主不配则空转 -->
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-core</artifactId>
+    </dependency>
 
     <dependency>
       <groupId>com.google.protobuf</groupId>

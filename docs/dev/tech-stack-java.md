@@ -1,6 +1,6 @@
 # Java 技术选型
 
-版本: 1.19    更新时间: 2026-10-19
+版本: 1.20    更新时间: 2026-10-19
 
 > 本文是新一代 Artemis Java 实现的技术选型基线：语言与运行时、工程结构、全量技术组件清单与依赖冲突策略。设计依据为[架构设计](../arch/artemis-next-architecture.md)（§3 技术栈策略、§7 关键决策 D8），开发规范见[Java 开发规范](coding-guidelines-java.md)。Rust 实现（v1.x 混合集群）直接消费仓库顶层 `proto/` 契约目录（见[proto 契约规范](proto-contract.md)），不受本文 Java 组件约束。
 
@@ -101,12 +101,13 @@ Java 各消费模块从仓库顶层 `proto/`（组织与治理见[proto 契约�
 | 12 | 代码简化 | Lombok | 1.18.x | java/ reactor | `provided` scope，不传递给 SDK 使用方 |
 | 31 | 配置管理 | SCF（Spark Configuration Framework） | `org.mydotey.scf:scf-bom` 1.6.x（scf-core + scf-simple） | java/ reactor（含 client） | manager / sources / property 三层抽象，与具体配置源解耦；原产品同栈（Maven Central 在库）；Java 8 目标两端通用，传递闭包仅 scf-core + lang-extension + slf4j-api；动静分型与合规校验规范见[开发规范](coding-guidelines-java.md) §10 |
 | 32 | 模型转换 | MapStruct | 1.6.x（`mapstruct` + `mapstruct-processor`） | 各 core（[ADR-015](../decisions/adr-015-layered-model-inside-core.md) 层间 mapper） | 编译期生成 mapper 实现，**零运行时依赖**（mapstruct 仅注解，processor 为 annotation processor）；与 Lombok 协同需 `lombok-mapstruct-binding`（processor path 顺序）；Java 25 支持在实施期验证（见 §4.6） |
+| 34 | 可观测（SDK） | Micrometer（client 库模式） | `io.micrometer:micrometer-core` 1.17.x（client 线自钉，Java 8 基线兼容） | artemis-client（v0.1 phase-7 起） | SDK 可观测标准化端口（Counter/Timer/Gauge 全套 + 标签维度），替代自建 metrics 接口；`newClient(properties, meterRegistry)` 注入、缺省挂 `Metrics.globalRegistry`（官方库模式，宿主 `Metrics.addRegistry` 接管、不加则空转）；指标集见 phase-7 设计文档；starter（phase-8）自动注入 Boot `MeterRegistry`，经宿主 actulator 供 Prometheus 抓取 |
 | 33 | 通信 | gRPC（Spring Boot 官方装配） | `org.springframework.boot:spring-boot-starter-grpc-server`（SB 4.1 官方，版本随 SB BOM；底层 spring-grpc-core 1.1.x） | 各 server 模块 | 官方 gRPC 自动装配（`@GrpcService` + `spring.grpc.server.*` 配置），**不自写 Server/生命周期**；集成测试支持 `org.springframework.boot:spring-boot-grpc-test`（随机端口/进程内）；grpc-java 版本线：SB BOM 管理 1.83.1，本 reactor 窄版本线先声明锁 1.84.2（`requireUpperBoundDeps` 兜底），phase-2 实测兼容（见 §4.7） |
 | 13 | 数据（期 3） | ORM | MyBatis-Plus 3.5.x + SB starter | 仅 management | 版本锁 SB 4.1 适配线，期 3 实施时锁定 |
 | 14 | 数据（期 3） | Schema migration | Flyway（SB 管版本） | 仅 management | MySQL/PG 双方言脚本 |
 | 15 | 数据（期 3） | 连接池 | HikariCP（SB 自带） | 仅 management | — |
 | 16 | 数据（期 3） | 数据库 | MySQL 8.x / PostgreSQL 16+ | 运维侧二选一 | 双方言为产品承诺 |
-| 17 | 可观测 | Metrics | Micrometer + Prometheus registry | 全服务端 | actuator 端点，v0.1 第一天 |
+| 17 | 可观测 | Metrics | Micrometer + Prometheus registry | 服务端（Boot actuator）+ client SDK（micrometer-core 库模式） | actuator 端点 v0.1 第一天；client 侧 #34 |
 | 18 | 可观测 | Trace | OpenTelemetry（SB 4.1 官方集成） | 全服务端 | v0.1 传播 + 基础 span |
 | 19 | 可观测 | 日志 | SLF4J + Logback + logstash-logback-encoder **9.0** | 服务端；client 仅依赖 SLF4J API | 结构化 JSON 第一天（logstash 默认字段 schema：`@timestamp/logger_name`）；SDK 不打日志实现进宿主（避免 multiple SLF4J providers 冲突） |
 | 20 | 测试 | 单元测试 | JUnit 5 + Mockito + AssertJ | java/ reactor | — |
@@ -119,7 +120,7 @@ Java 各消费模块从仓库顶层 `proto/`（组织与治理见[proto 契约�
 | 27 | CI/CD | CI | GitHub Actions | 全仓（按路径触发：java/** Java job、rust/** Rust job、proto/** 全量） | **JDK 25 单构建 job**（工具/插件进程全跑 JDK 25），client 的 Java 8 运行时兼容经 **Maven toolchains 以 JDK 8 fork 测试 JVM** 验证——不设 JDK 8 独立构建 job（`release=25` 模块在其上无法构建） |
 | 28 | CI/CD | 发布渠道 | Maven Central（Central Portal）+ 容器镜像仓库 | SDK/starter（v1.0）、镜像 | 镜像仓库 GHCR vs Docker Hub 待 v1.0 定 |
 | 29 | SDK 分发 | starter 自动装配 | `AutoConfiguration.imports` + `spring.factories` 双注册 | starter | 覆盖 SB 2.7+ 与老 SB 2.x；编译目标 Java 8 |
-| 30 | SDK 分发 | client 依赖纪律 | grpc-netty-shaded + grpc-stub + grpc-protobuf（传递 protobuf-java 3.25.x）+ SCF（scf-simple，传递 scf-core/lang-extension）+ SLF4J API | artemis-client | grpc-netty-shaded **不传递** stub/protobuf 集成类，生成代码必需 grpc-stub/grpc-protobuf；冲突策略见 §5 |
+| 30 | SDK 分发 | client 依赖纪律 | grpc-netty-shaded + grpc-stub + grpc-protobuf（传递 protobuf-java 3.25.x）+ SCF（scf-simple，传递 scf-core/lang-extension）+ SLF4J API + micrometer-core（#34） | artemis-client | grpc-netty-shaded **不传递** stub/protobuf 集成类，生成代码必需 grpc-stub/grpc-protobuf；冲突策略见 §5 |
 
 生效期暗含在类别中：#13–16 期 3（v0.4）引入；v0.1 实际依赖面为语言、构建、SB、gRPC、Lombok、SCF、可观测、测试与质量工具。
 
@@ -187,6 +188,7 @@ shaded 版将 netty 重打包进 `io.grpc.netty.shaded.*` 命名空间，与宿�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.20 | 2026-10-19 | v0.1 phase-7 设计 review 定案：组件总表新增 #34 Micrometer（client 库模式，SDK 可观测标准端口，替换自建 ClientMetrics）；#17/#30 同步 |
 | 1.19 | 2026-10-19 | management.v1 生成矩阵调整：统一生成于 artemis-common（registry 实现只读查询 / management 消费，registry-core 与 management-core 不再自生成） |
 | 1.18 | 2026-10-18 | #19 日志补精确版本 logstash-logback-encoder 9.0 与 logstash 默认字段 schema（phase-4 实施） |
 | 1.17 | 2026-10-13 | parent 命名统一：artemis-parent（java/ 聚合器，原 artemis-java）/artemis-server-parent（服务端线，原 artemis）/artemis-client-parent（SDK 线）——三 pom 角色由名字表达，前缀例外条款更新 |

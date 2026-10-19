@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.6    更新时间: 2026-10-19
+版本: 1.7    更新时间: 2026-10-19
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -95,12 +95,23 @@ mvn -f java/client/pom.xml spotless:apply  # 提交前格式化（SDK 线）
 - **契约**：Admin/状态 API 为 HTTP/JSON（[admin-api.md](../api/admin-api.md)），不新增 proto；`BasicAuth` 上移 `artemis-common` 供两服务复用。
 - **工程形态**：management-core 19 单测；management-server 16 单测 + 11 服务级集成测试（同 JVM 起真实 registry + management，覆盖有效视图/事实不变/恢复/幂等/认证/状态 API）。
 
-SDK（phase-7）、starter/CI/Dockerfile（phase-8）后续递补。
+**phase-7（Java 8 SDK 注册侧）已交付**：
+
+- **公开 API**：`ArtemisClient`（`start`/`register`/`update`/`deregister`/`close`）+ 不可变值类型 `ServiceId`/`InstanceId`/`ServiceInstance`/`InstanceStatus`；入口 `ArtemisClients.newClient(...)`（无 builder）。完整用法见 [sdk-java.md](../api/sdk-java.md)。
+- **操作语义**：fire-and-forget——本地集同步更新后异步上报，失败内部重试 + 心跳自愈，调用方不处理操作结果；重试前重读本地集，防陈旧状态重放。
+- **心跳与容错**：gRPC bidi 流全量上报（默认 5s），seq/ack、指数退避重连、ack 看门狗与 keepAlive 感知半开连接；三级地址容灾骨架（配置地址列表随机选址，运行时断流换址）。
+- **生命周期**：`start`/`close` 幂等；close 先停心跳、等待在途上报，再全量注销——优雅下线实例即刻消失；零非 daemon 线程遗留。
+- **配置**：全部经 SCF `artemis.client.*`（地址/凭证/重试/心跳/重连），环境变量容器友好映射；注册侧不做磁盘快照（崩溃后业务重新注册 + 心跳幂等收敛）。
+- **可观测**：Micrometer 指标（操作失败/耗时、心跳失败、重连、连接态、本地实例数，带 client 标签），缺省挂 `Metrics.globalRegistry`，starter 将自动接 Boot `MeterRegistry`。
+- **工程形态**：client 24 单测（JDK 8 运行时）；registry-server 侧 `ClientSdkIT` 5 例端到端（注册可见/续约/更新/优雅下线/错误凭证）。
+
+starter/CI/Dockerfile（phase-8）后续递补。
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.7 | 2026-10-19 | phase-7 交付节：Java 8 注册侧 SDK（fire-and-forget、心跳自愈、生命周期、SCF 配置、Micrometer 指标）；新增 SDK API 文档 |
 | 1.6 | 2026-10-19 | phase-6 交付节：management-service 独立进程、Admin API（有效视图/摘除/恢复）、状态 API、出站只读查询与错误语义；管理面 API 文档链接 |
 | 1.5 | 2026-10-19 | phase-5 交付节：内部只读查询能力/脱敏/上限/契约归属（management.v1，client 不生成）；common 生成组同步 |
 | 1.4 | 2026-10-18 | phase-5 交付：registry 内部只读查询 RPC（服务/实例/租约/配置状态，敏感值脱敏）；phase 编号按 ADR-016 重排（管理面 phase-6） |

@@ -1,6 +1,6 @@
 # 新一代 Artemis 产品规划与版本路线图
 
-版本: 1.9    更新时间: 2026-10-18
+版本: 1.10    更新时间: 2026-10-19
 
 > 本文是新一代 Artemis 的产品规划与版本路线图：定位与成功标准、迭代式版本切分（每版可发布可 eval）、各版本范围与验收要点。架构设计详见 [架构设计](../arch/artemis-next-architecture.md)；设计输入见 [原产品能力基线](../legacy/legacy-product-analysis.md) 与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -38,7 +38,7 @@
 - **治理期 1 前半**：management-service 起步（内存态）——实例管理 Admin API（列表/详情/摘除/恢复）+ 状态 API 排障面（leases/config 类）；registry 提供只读事实查询 RPC，摘除记录归 management（ADR-016）。
 - **安全**：默认开启的单账户认证。
 - **可观测**：metrics（Micrometer/Prometheus）+ 结构化 log + OpenTelemetry trace，第一天内建。
-- **客户端**：Java 8 SDK 注册侧——心跳客户端、实例管理、生命周期 API（close/优雅下线）、磁盘快照、三级地址容灾骨架；随附 Spring Boot starter（注册侧自动装配）。
+- **客户端**：Java 8 SDK 注册侧——心跳客户端、实例管理、生命周期 API（close/优雅下线）、三级地址容灾骨架；随附 Spring Boot starter（注册侧自动装配）。注册侧不做客户端磁盘快照：注册事实源是业务代码自身，重启后业务重新注册 + 心跳幂等收敛天然自愈；磁盘快照归发现侧 SDK（v0.3，消费方服务列表缓存 + server 全挂兜底）。
 - **工程**：monorepo 目录布局与 Maven 多模块（第一天就定，见技术选型 §2.1；三服务边界同此）、proto 契约（六组 proto：common 公共数据模型 + 五组 service proto，数据模型含 namespace 字段——架构 D10）、CI、Dockerfile。
 - **验收要点**：单节点起停、SDK 注册/心跳、实例经状态/管理 API 可观测、摘除/恢复经管理查询 API 的**有效视图**（已应用摘除过滤）可验证、快照重启回放、认证生效、指标可抓取。（服务发现查询归 discovery，v0.3 起验收）
 
@@ -112,6 +112,7 @@
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.10 | 2026-10-19 | v0.1 客户端条目修正（phase-7 设计 review 定案）：注册侧 SDK 不做磁盘快照（注册事实源是业务代码，重启重注册 + 心跳幂等收敛自愈）；磁盘快照归发现侧 SDK（v0.3 已列） |
 | 1.9 | 2026-10-18 | ADR-016：management-service 从 v0.1 独立交付（内存态管理面，摘除记录归 management）；v0.2 删摘除扇出；v0.3 接 management 摘除规则；v0.4 补 DB/账户 |
 | 1.8 | 2026-10-12 | 分组退出数据模型同步：v0.3 投影模型与 v0.5 分组路由表述 |
 | 1.7 | 2026-10-12 | v0.1 内核心跳表述精化（全量上报续约/补注册） |

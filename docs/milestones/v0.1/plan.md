@@ -1,6 +1,6 @@
 # v0.1 版本规划
 
-版本: 1.12    更新时间: 2026-10-18
+版本: 1.13    更新时间: 2026-10-19
 
 ## 目标
 
@@ -20,7 +20,7 @@
 | phase-4-server-assembly | 配置规范化（SCF：source/manager/properties）+ registry-server 装配：gRPC+HTTP 双协议、内外端口分离、默认认证、metrics/log/trace、成员抽象接口 | 3 | 配置源优先级/默认值/校验单测；进程内起停测试：认证拒绝/放行、指标端点可抓取、trace 产出 |
 | phase-5-registry-query-api | registry 只读事实查询 RPC（服务列表 / 实例快照 / 租约明细与保护统计 / 配置状态，敏感值脱敏） | 2 | 单测 + 服务级集成测试：认证后经 gRPC 查询真实注册表；敏感配置脱敏 |
 | phase-6-management-service | management-service 骨架（独立服务 + 认证 + 配置）+ 实例管理 Admin API（列表/详情/摘除/恢复）+ 状态 API + 有效视图（内存态摘除记录，经 registry 只读查询组合） | 3 | 管理面集成测试：经 registry 查询组合有效视图；摘除/恢复可验证；状态 API 可观测 |
-| phase-7-client-sdk | Java 8 SDK 注册侧：心跳客户端（含本地实例集管理）、生命周期 API、磁盘快照、三级地址容灾骨架 | 2 | SDK 单测 + 对接 server 的进程内集成测试 |
+| phase-7-client-sdk | Java 8 SDK 注册侧：心跳客户端（含本地实例集管理）、生命周期 API、三级地址容灾骨架 | 2 | SDK 单测 + 对接 server 的进程内集成测试 |
 | phase-8-starter-ci | Spring Boot starter（注册侧自动装配）+ CI + Dockerfile | 2 | starter 自动装配测试；CI 绿；镜像构建成功 |
 
 phase-1 说明：建齐六组 proto 目录骨架（`proto/` 组织见 proto-contract.md），v0.1 仅定稿 `common.v1` + `registry.v1` 两组消息，其余组随各自版本填充；Maven reactor 按 tech-stack-java.md §2.1 全模块一次到位（边界后拆代价大）。
@@ -42,6 +42,7 @@ phase-4 配置规范化说明（2026-10-18 定案）：phase-4 先落地 SCF 配
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.13 | 2026-10-19 | phase-7 主题修订（设计 review 定案）：注册侧 SDK 去磁盘快照（归发现侧 v0.3；注册事实源是业务代码，重启重注册 + 心跳幂等收敛自愈） |
 | 1.12 | 2026-10-18 | ADR-016：管理面从 v0.1 独立交付——phase-5 改为 registry 只读查询 RPC，新增 phase-6-management-service，原 SDK/starter 顺延 |
 | 1.11 | 2026-10-18 | phase-4 范围调整：先做 SCF 配置规范化（source/manager/properties，各服务独立门面），工作量 2→3 天、主题与验收方式同步 |
 | 1.10 | 2026-10-13 | ④ 实现期坐标定案：phase-2 分工说明 gRPC starter 坐标更正为 `org.springframework.boot:spring-boot-starter-grpc-server` |

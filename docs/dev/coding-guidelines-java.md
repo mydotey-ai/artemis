@@ -1,6 +1,6 @@
 # Java 开发规范
 
-版本: 1.22    更新时间: 2026-10-19
+版本: 1.23    更新时间: 2026-10-19
 
 > 本文是新一代 Artemis Java 实现的开发规范：包结构、代码风格、并发与线程、错误处理、日志、测试、proto 兼容、SDK 特殊约束与配置管理。技术选型（组件与版本）见[Java 技术选型](tech-stack-java.md)；Git 分支与 commit 规范见 `.claude/rules/git.md`，不在此重复。
 
@@ -105,7 +105,7 @@ proto 的 wire 兼容规则与变更流程是**跨语言不变量**，单一来�
 
 ## 9. SDK（artemis-client / starter）特殊规范
 
-- **Java 8 语法子集**：不用 Java 8 以上语法/ API；SDK 内工具类自备，不引 Guava 等额外运行时依赖（依赖纪律：grpc-netty-shaded + grpc-stub + grpc-protobuf（传递 protobuf-java 3.25.x）+ SCF（scf-simple）+ SLF4J API，见技术选型 §5）。
+- **Java 8 语法子集**：不用 Java 8 以上语法/ API；SDK 内工具类自备，不引 Guava 等额外运行时依赖（依赖纪律：grpc-netty-shaded + grpc-stub + grpc-protobuf（传递 protobuf-java 3.25.x）+ SCF（scf-simple）+ SLF4J API + micrometer-core（SDK 可观测标准端口，#34），见技术选型 §5）。
 - 公共 API 即产品承诺：可见性最小化（只公开必须的），内部实现类放 `internal` 子包。
 - 回调有界队列（修复原产品局限 #13「单线程无界队列，慢消费者拖垮全部通知」）：订阅回调在 SDK 专属 executor 执行，队列有界、满时按配置丢弃最旧 + 计数，不阻塞推送线程。
 - 生命周期 API（close/优雅下线）是 v0.1 交付物，资源（连接、线程、磁盘快照句柄）在 close 全量释放，禁止遗留非 daemon 线程。
@@ -149,6 +149,7 @@ proto 的 wire 兼容规则与变更流程是**跨语言不变量**，单一来�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.23 | 2026-10-19 | §9 SDK 依赖清单补 micrometer-core（Micrometer 库模式替换自建 metrics 接口，技术选型 #34） |
 | 1.22 | 2026-10-19 | management.v1 统一生成于 artemis-common（registry 实现 / management 消费，避免 all-in-one 同 JVM 双份生成类） |
 | 1.21 | 2026-10-18 | §2 依赖方向明确：domain 不依赖 ConfigurationSource，但可按定案使用 SCF StringProperties/Property |
 | 1.20 | 2026-10-18 | §1 修订：监控就地定义（不建集中 binder/统计 DTO），且不侵入服务接口 |

@@ -93,6 +93,14 @@
       <artifactId>spring-boot-grpc-test</artifactId>
       <scope>test</scope>
     </dependency>
+    <!-- SDK 端到端 IT：ClientSdkIT 以 artemis-client 驱动真服务端（反向依赖不违 enforcer——
+         边界纪律只禁 client 依赖服务端模块；SDK 版本走独立字面版本线） -->
+    <dependency>
+      <groupId>org.mydotey.ai.artemis</groupId>
+      <artifactId>artemis-client</artifactId>
+      <version>0.1.0-SNAPSHOT</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>
