@@ -48,7 +48,7 @@
 
 - 分支命名 `{milestone}-phase<N>-{title}`（如 `v0.1-phase2-heartbeat`，git.md 分支命名表「开发工作流」行）；worktree 居 `.claude/worktrees/`，目录名与分支名一致。
 - **幂等**：开工前检测同名分支/worktree 是否已存在——已存在则**先报告其与 main 的分叉/完工状态**（已 squash 合并的残留分支 vs 进行中分支），由用户决定续用或重建，**不静默续用**（静默续用已完工分叉分支会使二次 squash merge 冲突）。用户确认续用时以文件系统为准，补齐 state 登记后继续，不重建。
-- 建 worktree 前检查 `.gitignore` 是否含 `.claude/worktrees/`，未含则添加。
+- 建 worktree 前检查 `.gitignore` 是否含 `.claude/worktrees/`，未含则添加；此类对 main 的改动**提交到 main 后再建 worktree**（自动 commit，不单独 push、随 ⑪ squash 收尾一并推送；worktree 从提交后的 HEAD 起点创建，未提交则分支基线缺该改动）。
 - worktree 就绪后**不自动进入**（不调用 EnterWorktree、不切工作目录）：报告 worktree 路径与分支，**等用户自行切换进入**后继续。②–⑩ 的文件读写与命令一律在 worktree 目录执行，不从主工作区以绝对路径远程操作 worktree 文件；⑪ 提交完成后**自动回主工作区**执行 squash 收尾（无需用户手动切换；见 ⑪），worktree 保留不删。
 - **产出**：分支 + worktree；**phase 设计文档骨架**（附录 B 模板）；`phases/README.md` 登记本 phase 两份文档。滚动细化的 phase 清单调整（拆分/新增）在本步同步更新 plan.md 与 dev-state phase 总览，随分支提交。
 
