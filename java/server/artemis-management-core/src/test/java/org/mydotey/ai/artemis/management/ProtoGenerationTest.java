@@ -9,8 +9,8 @@ import org.mydotey.ai.artemis.proto.management.v1.GetServiceInstancesRequest;
 class ProtoGenerationTest {
 
     @Test
-    void should_generate_management_proto_when_building_management_core() {
-        // management-core 生成 management.v1（含 registry 只读查询 service）：本模块自生成
+    void should_share_management_proto_when_building_management_core() {
+        // management.v1 统一生成于 artemis-common（含 registry 只读查询 service），management-core 经依赖共享
         GetServiceInstancesRequest request = GetServiceInstancesRequest.newBuilder()
                 .setKey(ServiceKey.newBuilder().setNamespace("default").setService("order-service"))
                 .build();

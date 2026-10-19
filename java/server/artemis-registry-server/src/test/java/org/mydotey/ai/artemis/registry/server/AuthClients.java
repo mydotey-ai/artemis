@@ -7,7 +7,7 @@ import io.grpc.ClientInterceptor;
 import io.grpc.ForwardingClientCall;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
-import org.mydotey.ai.artemis.registry.server.auth.BasicAuth;
+import org.mydotey.ai.artemis.common.auth.BasicAuth;
 
 /**
  * 测试 gRPC 客户端凭证设施：默认账户（与生产默认一致），支持无凭证 channel 构造以测拒绝路径。

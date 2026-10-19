@@ -7,8 +7,8 @@ import io.grpc.ServerCallHandler;
 import io.grpc.ServerInterceptor;
 import io.grpc.Status;
 import java.util.Set;
+import org.mydotey.ai.artemis.common.auth.BasicAuth;
 import org.mydotey.ai.artemis.registry.server.auth.AuthConfig;
-import org.mydotey.ai.artemis.registry.server.auth.BasicAuth;
 import org.springframework.grpc.server.GlobalServerInterceptor;
 
 /**

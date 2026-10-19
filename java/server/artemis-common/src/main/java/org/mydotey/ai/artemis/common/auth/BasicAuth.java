@@ -1,4 +1,4 @@
-package org.mydotey.ai.artemis.registry.server.auth;
+package org.mydotey.ai.artemis.common.auth;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;

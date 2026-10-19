@@ -3,9 +3,9 @@ package org.mydotey.ai.artemis.registry.server.http;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
+import org.mydotey.ai.artemis.common.auth.BasicAuth;
 import org.mydotey.ai.artemis.registry.server.auth.AuthConfig;
 import org.mydotey.ai.artemis.registry.server.auth.AuthConfigs;
-import org.mydotey.ai.artemis.registry.server.auth.BasicAuth;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;

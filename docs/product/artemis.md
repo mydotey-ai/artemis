@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.5    更新时间: 2026-10-19
+版本: 1.6    更新时间: 2026-10-19
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -86,12 +86,22 @@ mvn -f java/client/pom.xml spotless:apply  # 提交前格式化（SDK 线）
 - **安全**：敏感配置（password/passwd/pwd/secret/token/credential/apikey/accesskey/privatekey）的 value 与默认值均输出 `******`，registry 永不返回明文凭证；查询复用外部 gRPC 端口与默认认证；v0.1 与 SDK 共用单账户凭证（RBAC 随 v1.0、内部端口分离随 v0.2）为已知限制。
 - **工程形态**：common 8 + core 89 + server 22 单测、20 服务级集成测试。
 
-管理面 management-service（phase-6）、SDK（phase-7）、starter/CI/Dockerfile（phase-8）后续递补。
+**phase-6（management-service 内存态管理面）已交付**：
+
+- **独立服务**：management-service 独立进程（外部 HTTP **8081**、管理端口 **9092**），默认 Basic 认证；启动不依赖 registry 可用，registry 故障时查询 API 返回 503。
+- **实例管理 Admin API**：服务列表 / 服务详情 / 实例摘除 / 恢复（`/admin/v1`）。摘除记录归 management（内存态、重启丢失），**不修改 registry** 的注册数据与租约；详情默认返回已应用摘除过滤的**有效视图**，`includeEjected=true` 可展开被摘除实例；摘除/恢复幂等。
+- **状态 API**：租约明细 + 自我保护统计、registry 配置状态（敏感值 `******`），数据经 registry 只读查询透传。
+- **出站查询**：management → registry 走 gRPC 只读查询（默认 `localhost:9090`，单次 deadline 3s，入站上限 16 MiB）；registry 不可用映射为 503。
+- **契约**：Admin/状态 API 为 HTTP/JSON（[admin-api.md](../api/admin-api.md)），不新增 proto；`BasicAuth` 上移 `artemis-common` 供两服务复用。
+- **工程形态**：management-core 19 单测；management-server 16 单测 + 11 服务级集成测试（同 JVM 起真实 registry + management，覆盖有效视图/事实不变/恢复/幂等/认证/状态 API）。
+
+SDK（phase-7）、starter/CI/Dockerfile（phase-8）后续递补。
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.6 | 2026-10-19 | phase-6 交付节：management-service 独立进程、Admin API（有效视图/摘除/恢复）、状态 API、出站只读查询与错误语义；管理面 API 文档链接 |
 | 1.5 | 2026-10-19 | phase-5 交付节：内部只读查询能力/脱敏/上限/契约归属（management.v1，client 不生成）；common 生成组同步 |
 | 1.4 | 2026-10-18 | phase-5 交付：registry 内部只读查询 RPC（服务/实例/租约/配置状态，敏感值脱敏）；phase 编号按 ADR-016 重排（管理面 phase-6） |
 | 1.3 | 2026-10-18 | phase-4 交付：SCF 配置（分层 source/热加载/动态与静态项）、默认 Basic 认证、三端口分离、Prometheus/JSON 日志/OTel、HTTP readiness、成员抽象 |

@@ -15,9 +15,9 @@ import io.grpc.ServerCallHandler;
 import io.grpc.Status;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.mydotey.ai.artemis.common.auth.BasicAuth;
 import org.mydotey.ai.artemis.registry.server.auth.AuthConfig;
 import org.mydotey.ai.artemis.registry.server.auth.AuthConfigs;
-import org.mydotey.ai.artemis.registry.server.auth.BasicAuth;
 
 @SuppressWarnings("unchecked")
 class GrpcAuthInterceptorTest {

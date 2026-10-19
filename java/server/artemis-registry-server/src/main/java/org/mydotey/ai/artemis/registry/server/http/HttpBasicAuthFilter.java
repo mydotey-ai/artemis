@@ -6,8 +6,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.Set;
+import org.mydotey.ai.artemis.common.auth.BasicAuth;
 import org.mydotey.ai.artemis.registry.server.auth.AuthConfig;
-import org.mydotey.ai.artemis.registry.server.auth.BasicAuth;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**

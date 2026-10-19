@@ -22,17 +22,17 @@
 
 | 步骤 | 状态 | 备注 |
 |---|---|---|
-| worktree 开工 | done | 分支/worktree 新建（main 33931ad 起；phase 主题按 ADR-016 修订为 registry-query-api）；设计/测试文档骨架落盘，phases/README 登记 |
-| 上下文加载 | done | 已读：roadmap v0.1、架构 §2.2/§3.1/§4.1/§5.1/§5.2/§6、tech-java.md 全文、guidelines 全文、legacy §2.5/§2.6/§3.5/§3.6/§5 #12、phase-4 设计/测试文档、registry-core 领域与 application 层现状、registry-server 装配/认证/HTTP 入口、SCF 1.6.4 API（getProperties/source name）、现有单测与 IT 模式 |
-| 设计 | done | 按 ADR-016 重写为 registry 只读查询 RPC；D1–D4 定案；ADR-016/架构 v1.22/roadmap v1.8/plan v1.12 同步 |
-| 实现 | done | registry 只读查询 RPC：契约/领域/应用/接入/装配 + 单测与 IT |
-| 测试 | done | dev-test.sh all BUILD SUCCESS：common 8 / core 87 / server 22 / IT 20 |
-| code-review | done | 15 条 findings（2 High / 7 Medium / 6 Low） |
-| fix | done | 15 条 findings 全部处置：敏感默认值脱敏、租约过滤/截断、age 钳制、权限边界文档、文档漂移修复 |
-| 回归测试 | done | dev-test.sh all BUILD SUCCESS（common 8 / core 89 / server 22 / IT 20；删除冗余 LeaseTtlSource、契约迁 management.v1 后复跑仍绿） |
-| 验证（人工） | done | 9 项清单用户执行确认通过 |
-| 文档同步 | done | 产品 v1.5、架构 v1.23、ADR-016 v1.2、tech-stack v1.19、guidelines v1.22、新增 docs/api/registry-query-api.md 与索引 |
-| 完工 | done | worktree 分支 4989eb8 已提交；squash merge 回 main |
+| worktree 开工 | done | 分支/worktree 新建（main 2bfbd45 起）；设计/测试文档骨架落盘，phases/README 登记 |
+| 上下文加载 | done | 已读：roadmap v0.1、架构 §2.1/§2.2/§3.1/§4.1/§5.1/§6/§7、tech-java.md 全文、coding-guidelines-java.md 全文、ADR-016、management.proto/common model.proto、phase-5 设计、legacy-product-analysis §5 资产 #4/#12 与 §6、registry-server 装配/查询/认证/IT 既有实现 |
+| 设计 | done | 设计/测试文档 review 通过（2026-10-19） |
+| 实现 | done | management-core/domain/application/infrastructure + management-server 装配/HTTP/gRPC client；BasicAuth 上移 common |
+| 测试 | done | `dev-test.sh all` 全绿（management-core 19 单测、management-server 16 单测 + 11 IT；registry 回归 89+22 单测/20 IT） |
+| code-review | done | /code-review max：12 findings（3 中高风险：4xx 吞并、deadline 固化、无分页上限） |
+| fix | done | 11 项修复 + 1 项技术边界不改（配置 source 重复）；详见设计文档 review 修复记录 |
+| 回归测试 | done | `dev-test.sh all` 全绿（BUILD SUCCESS，01:42 min） |
+| 验证（人工） | done | 验证清单 9 项全部通过（2026-10-19 用户确认） |
+| 文档同步 | done | 产品文档 v1.6、新增 docs/api/admin-api.md 与索引；架构/ADR/技术选型无变更 |
+| 完工 | done | worktree 分支 0fc3a3e 已提交；squash merge 回 main |
 
 步骤状态枚举：pending | in-progress | done | skipped。
 
@@ -45,7 +45,7 @@
 | phase-3-protect-snapshot | done |
 | phase-4-server-assembly | done |
 | phase-5-registry-query-api | done |
-| phase-6-management-service | planned |
+| phase-6-management-service | done |
 | phase-7-client-sdk | planned |
 | phase-8-starter-ci | planned |
 

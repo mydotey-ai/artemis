@@ -11,7 +11,7 @@
   </parent>
 
   <artifactId>artemis-management-server</artifactId>
-  <description>治理面服务端 Spring Boot 装配（治理 API 期 2 接入）</description>
+  <description>治理面服务端 Spring Boot 装配：Admin/状态 HTTP API + registry 只读查询客户端</description>
 
   <dependencyManagement>
     <dependencies>
@@ -36,10 +36,88 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter</artifactId>
     </dependency>
+    <!-- 外部 HTTP：Admin/状态 API（v0.1 不提供 gRPC server） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+    </dependency>
+    <!-- trace：Spring Boot 4.1 官方 OpenTelemetry 集成 -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-opentelemetry</artifactId>
+    </dependency>
+    <!-- 结构化 JSON 日志 -->
+    <dependency>
+      <groupId>net.logstash.logback</groupId>
+      <artifactId>logstash-logback-encoder</artifactId>
+    </dependency>
+    <!-- SCF source/manager 装配（配置项定义在使用类内） -->
+    <dependency>
+      <groupId>org.mydotey.scf</groupId>
+      <artifactId>scf-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.mydotey.scf</groupId>
+      <artifactId>scf-simple</artifactId>
+    </dependency>
+    <!-- registry 只读查询 gRPC 客户端传输（stub/protobuf 经 management-core 传递） -->
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-netty</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
       <scope>test</scope>
     </dependency>
+    <!-- IT fixture：同 JVM 起真实 registry-server（随机端口） -->
+    <dependency>
+      <groupId>org.mydotey.ai.artemis</groupId>
+      <artifactId>artemis-registry-server</artifactId>
+      <version>${revision}</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
+
+  <build>
+    <plugins>
+      <!-- 可执行 fat jar（单服务起停/容器化基础）。classifier=exec：原 jar 保持普通布局 -->
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <version>${spring-boot.version}</version>
+        <configuration>
+          <classifier>exec</classifier>
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- failsafe：*IT 服务级集成测试进 verify 生命周期 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>integration-test</goal>
+              <goal>verify</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
 </project>

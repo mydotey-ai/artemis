@@ -7,3 +7,4 @@
 | phase-3-protect-snapshot | [phase-3-protect-snapshot.md](phase-3-protect-snapshot.md) | [phase-3-protect-snapshot-test.md](phase-3-protect-snapshot-test.md) |
 | phase-4-server-assembly | [phase-4-server-assembly.md](phase-4-server-assembly.md) | [phase-4-server-assembly-test.md](phase-4-server-assembly-test.md) |
 | phase-5-registry-query-api | [phase-5-registry-query-api.md](phase-5-registry-query-api.md) | [phase-5-registry-query-api-test.md](phase-5-registry-query-api-test.md) |
+| phase-6-management-service | [phase-6-management-service.md](phase-6-management-service.md) | [phase-6-management-service-test.md](phase-6-management-service-test.md) |
