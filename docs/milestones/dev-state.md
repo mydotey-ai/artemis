@@ -7,7 +7,7 @@
 | 版本 | 状态 | 备注 |
 |---|---|---|
 | v0.1 | done | |
-| v0.2 | planned | 基线待提交（提交后转 in-progress） |
+| v0.2 | in-progress | 当前版本 |
 
 状态枚举：planned | in-progress | acceptance | done（planned = 启动产物已写、基线未提交）。
 
@@ -15,9 +15,9 @@
 
 | 项 | 值 |
 |---|---|
-| phase | — |
-| 步骤 | — |
-| 分支 / worktree | — |
+| phase | phase-1-peer-protocol |
+| 步骤 | worktree 开工 |
+| 分支 / worktree | v0.2-phase1-peer-protocol @ .claude/worktrees/v0.2-phase1-peer-protocol |
 
 > v0.1 已于 2026-10-19 收尾（验收对照见 `v0.1/plan.md`）。
 
@@ -25,7 +25,7 @@
 
 | 步骤 | 状态 | 备注 |
 |---|---|---|
-| worktree 开工 | pending | 待 phase-1 开工 |
+| worktree 开工 | in-progress | 分支/worktree 新建；设计/测试文档骨架待落盘 |
 | 上下文加载 | pending | |
 | 设计 | pending | |
 | 实现 | pending | |
@@ -43,7 +43,7 @@
 
 | phase | 状态 |
 |---|---|
-| phase-1-peer-protocol | planned |
+| phase-1-peer-protocol | in-progress |
 | phase-2-replication-fanout | planned |
 | phase-3-peer-bootstrap | planned |
 | phase-4-self-protection-2 | planned |
