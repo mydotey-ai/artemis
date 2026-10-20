@@ -5,7 +5,6 @@ import io.micrometer.core.instrument.MeterRegistry;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
-import org.mydotey.ai.artemis.common.config.ScfProperties;
 import org.mydotey.scf.Property;
 import org.mydotey.scf.facade.StringProperties;
 import org.mydotey.scf.filter.RangeValueConfig;
@@ -31,6 +30,9 @@ public final class SelfProtection {
     public static final String KEY_FACTOR = "artemis.registry.selfProtection.factor";
 
     private static final int DEFAULT_WINDOW_SECONDS = 10;
+    /** 分桶环容量固定为上限；窗口长度动态可调（≤ 上限），避免运行时重建环形结构。 */
+    private static final int MAX_WINDOW_SECONDS = 300;
+
     private static final int DEFAULT_MIN_COUNT = 50;
     private static final double DEFAULT_FACTOR = 0.85;
     private static final long METRICS_CACHE_NANOS = TimeUnit.SECONDS.toNanos(1);
@@ -46,22 +48,17 @@ public final class SelfProtection {
     private volatile long metricsStatsAtNanos;
 
     /**
-     * 自我保护参数在类内定义：窗口为静态结构参数（分桶数组容量启动固定），
-     * 启用下限与阈值因子为动态 property。
+     * 自我保护参数全部为动态 property：窗口长度每次聚合时读取（分桶环按上限固定分配），
+     * 启用下限与阈值因子同样动态生效。
      */
     public SelfProtection(StringProperties properties, MeterRegistry meterRegistry, MonotonicClock clock) {
-        this.windowSeconds = ScfProperties.staticInt(
-                properties,
-                KEY_WINDOW_SECONDS,
-                DEFAULT_WINDOW_SECONDS,
-                1,
-                300,
-                "self-protection sliding window in seconds (static, bucket array fixed at startup)");
+        this.windowSeconds = properties.getIntProperty(
+                KEY_WINDOW_SECONDS, new RangeValueConfig<>(DEFAULT_WINDOW_SECONDS, 1, MAX_WINDOW_SECONDS));
         this.minCount =
                 properties.getIntProperty(KEY_MIN_COUNT, new RangeValueConfig<>(DEFAULT_MIN_COUNT, 0, 1_000_000));
         this.factor = properties.getDoubleProperty(KEY_FACTOR, new RangeValueConfig<>(DEFAULT_FACTOR, 0.1, 1.0));
         this.clock = clock;
-        this.buckets = new LongAdder[windowSeconds.getValue()];
+        this.buckets = new LongAdder[MAX_WINDOW_SECONDS];
         for (int i = 0; i < buckets.length; i++) {
             buckets[i] = new LongAdder();
         }
@@ -115,7 +112,7 @@ public final class SelfProtection {
         }
         long second = clock.monoMillis() / 1000;
         advanceBuckets(second);
-        if (second < lastSecond.get() - (buckets.length - 1)) {
+        if (second < lastSecond.get() - (windowSeconds.getValue() - 1L)) {
             return; // 迟到写者已跨轮：该桶已被后续秒复用，累加会污染未来窗口——直接丢弃（统计语义容忍）
         }
         buckets[index(second)].add(instanceCount);
@@ -164,7 +161,8 @@ public final class SelfProtection {
 
     private long sumWindow(long second) {
         long total = 0;
-        for (long s = second - buckets.length + 1; s <= second; s++) {
+        int window = windowSeconds.getValue();
+        for (long s = second - window + 1; s <= second; s++) {
             total += buckets[index(s)].sum();
         }
         return total;

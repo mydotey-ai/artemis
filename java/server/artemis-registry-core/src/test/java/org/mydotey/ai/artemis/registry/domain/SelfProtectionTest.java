@@ -146,6 +146,18 @@ class SelfProtectionTest {
     }
 
     @Test
+    void should_use_latest_window_when_changed() {
+        protection.recordRenewals(100); // 第 0 秒
+        clock.advance(Duration.ofSeconds(6));
+        // 10s 窗口仍包含第 0 秒
+        assertThat(protection.stats().windowRenewals()).isEqualTo(100);
+
+        // 窗口动态缩到 5s：第 0 秒滑出，当前窗口归零
+        properties.set(SelfProtection.KEY_WINDOW_SECONDS, "5");
+        assertThat(protection.stats().windowRenewals()).isZero();
+    }
+
+    @Test
     void should_register_protection_gauges_when_constructed() {
         protection.recordRenewals(100);
         clock.advance(Duration.ofSeconds(11));

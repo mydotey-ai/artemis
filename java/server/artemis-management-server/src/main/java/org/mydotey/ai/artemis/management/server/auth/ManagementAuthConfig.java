@@ -1,7 +1,6 @@
 package org.mydotey.ai.artemis.management.server.auth;
 
 import lombok.extern.slf4j.Slf4j;
-import org.mydotey.ai.artemis.common.config.ScfProperties;
 import org.mydotey.scf.Property;
 import org.mydotey.scf.facade.StringProperties;
 
@@ -24,11 +23,10 @@ public final class ManagementAuthConfig {
     private final Property<String, String> password;
 
     public ManagementAuthConfig(StringProperties properties) {
-        this.enabled = ScfProperties.staticBoolean(properties, KEY_ENABLED, true, "authentication enabled (static)");
-        this.username = ScfProperties.staticString(
-                properties, KEY_USERNAME, DEFAULT_USERNAME, "authentication username (static)");
-        this.password = ScfProperties.staticString(
-                properties, KEY_PASSWORD, DEFAULT_PASSWORD, "authentication password (static)");
+        // 动态配置：启用开关与凭证运行期可改（认证轮换无需重启）
+        this.enabled = properties.getBooleanProperty(KEY_ENABLED, true);
+        this.username = properties.getStringProperty(KEY_USERNAME, DEFAULT_USERNAME);
+        this.password = properties.getStringProperty(KEY_PASSWORD, DEFAULT_PASSWORD);
         if (!enabled()) {
             log.warn("management authentication is disabled by configuration ({}=false)", KEY_ENABLED);
         } else if (DEFAULT_PASSWORD.equals(password())) {

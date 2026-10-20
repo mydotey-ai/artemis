@@ -19,6 +19,14 @@ public final class BasicAuth {
         return PREFIX + Base64.getEncoder().encodeToString(raw.getBytes(StandardCharsets.UTF_8));
     }
 
+    /** 启用认证但凭证未完整配置时返回 null（调用方应拒绝请求，避免空凭证形成可猜测口令）。 */
+    public static String headerValueOrNull(String username, String password) {
+        if (username == null || username.isBlank() || password == null || password.isBlank()) {
+            return null;
+        }
+        return headerValue(username, password);
+    }
+
     public static boolean matches(String actual, String expected) {
         if (actual == null) {
             return false;

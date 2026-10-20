@@ -1,7 +1,114 @@
 syntax = "proto3";
 package artemis.replication.v1;
+import "common/v1/model.proto";
 option java_package = "org.mydotey.ai.artemis.proto.replication.v1";
 option java_multiple_files = true;
 
-// v0.1 占位：对等复制协议契约随 phase-3（自我保护/快照）前后定稿，
-// 组织与冻结范围见 proto-contract.md §1–§2。
+// 对等复制契约（v0.2 冻结范围，ADR-004/D6）：成员/节点状态、增量变更批量投递、全量 bootstrap。
+// 投递语义见各 RPC 注释；不携带跨进程不可比的进程内单调时间（D14）。
+
+// ---- 成员 / 节点状态 ----
+
+// 节点状态自报（不做 peer 主动探测）；DOWN 留给优雅停机显式标记（phase-6）。
+// 各端对未知值统一映射 UNKNOWN，与服务端版本解耦。
+enum NodeState {
+  NODE_STATE_UNSPECIFIED = 0;
+  NODE_STATE_UNKNOWN = 1;    // 本地映射目标（无法识别）
+  NODE_STATE_STARTING = 2;   // 启动中，未 ready
+  NODE_STATE_UP = 3;         // 就绪
+  NODE_STATE_DOWN = 4;       // 显式下线
+}
+
+// 静态成员的最小连接信息。对外（SDK/管理面）端点不在此契约，
+// 由节点状态 API（phase-3）按部署形态确定后追加字段（field number 只增）。
+message ClusterMember {
+  string node_id = 1;
+  // IPv6 地址带方括号（可直接拼接 host:port）；域名/IPv4 原样
+  string peer_host = 2;
+  int32 peer_port = 3;
+}
+
+message NodeStatus {
+  string node_id = 1;
+  NodeState state = 2;
+  int64 started_at_ms = 3;   // epoch 毫秒
+}
+
+message GetNodeStatusRequest {}
+
+message GetNodeStatusResponse {
+  artemis.common.v1.ResponseStatus status = 1;
+  GetNodeStatusResponseData data = 2;
+}
+
+message GetNodeStatusResponseData {
+  NodeStatus self = 1;
+  repeated ClusterMember members = 2;   // 静态成员表（不含探测态）
+}
+
+// ---- 增量变更批量投递 ----
+
+enum ChangeType {
+  CHANGE_TYPE_UNSPECIFIED = 0;
+  CHANGE_TYPE_UNKNOWN = 1;   // 本地映射目标
+  CHANGE_TYPE_NEW = 2;
+  CHANGE_TYPE_UPDATE = 3;
+  CHANGE_TYPE_DELETE = 4;    // instance 至少携带 instance_id，其余字段无意义
+}
+
+message InstanceChange {
+  artemis.common.v1.Instance instance = 1;
+  ChangeType type = 2;
+}
+
+// 按 service 聚合：一个 key 下的变更保持源节点产生序
+message ServiceChange {
+  artemis.common.v1.ServiceKey key = 1;
+  repeated InstanceChange changes = 2;
+}
+
+message ReplicationBatch {
+  string source_node_id = 1;
+  repeated ServiceChange services = 2;
+}
+
+message ReplicateRequest {
+  ReplicationBatch batch = 1;
+}
+
+message ReplicateResponse {
+  artemis.common.v1.ResponseStatus status = 1;
+  ReplicateResponseData data = 2;
+}
+
+// 预留：逐 service 失败明细等随 phase-2 需要追加
+message ReplicateResponseData {}
+
+// ---- 全量 bootstrap（拉取 + 分片应答） ----
+
+message BootstrapRequest {
+  string requester_node_id = 1;
+}
+
+message BootstrapResponse {
+  artemis.common.v1.ResponseStatus status = 1;
+  BootstrapResponseData data = 2;
+}
+
+message BootstrapResponseData {
+  // 分片；空分片 + 流正常结束 = 空注册表。中断/失败由客户端整轮重来（全量覆盖幂等）。
+  repeated artemis.common.v1.ServiceInstances services = 1;
+}
+
+service ReplicationService {
+  // 成员/节点状态自报（v0.2 phase-1 实现）
+  rpc GetNodeStatus(GetNodeStatusRequest) returns (GetNodeStatusResponse);
+
+  // 增量变更批量投递（phase-2）：unary 响应即投递确认；同一源节点对同一 peer
+  // 串行投递、重试保序；重复投递幂等（NEW/UPDATE 覆盖写、DELETE 幂等）。
+  // 整批拒绝走 status=ACK_FAIL + ErrorInfo（INVALID_ARGUMENT），由发送侧重试。
+  rpc Replicate(ReplicateRequest) returns (ReplicateResponse);
+
+  // 全量 bootstrap（phase-3）：server-stream 分片；流正常结束 = 同步完成。
+  rpc Bootstrap(BootstrapRequest) returns (stream BootstrapResponse);
+}

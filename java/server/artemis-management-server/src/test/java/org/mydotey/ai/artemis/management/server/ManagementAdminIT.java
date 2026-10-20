@@ -19,12 +19,14 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mydotey.ai.artemis.common.auth.BasicAuth;
+import org.mydotey.ai.artemis.proto.common.v1.Ack;
 import org.mydotey.ai.artemis.proto.common.v1.Instance;
 import org.mydotey.ai.artemis.proto.common.v1.InstanceKey;
 import org.mydotey.ai.artemis.proto.common.v1.InstanceStatus;
 import org.mydotey.ai.artemis.proto.common.v1.ServiceInstances;
 import org.mydotey.ai.artemis.proto.common.v1.ServiceKey;
 import org.mydotey.ai.artemis.proto.management.v1.GetServiceInstancesRequest;
+import org.mydotey.ai.artemis.proto.management.v1.ListServicesRequest;
 import org.mydotey.ai.artemis.proto.management.v1.RegistryQueryServiceGrpc;
 import org.mydotey.ai.artemis.proto.registry.v1.DeregisterRequest;
 import org.mydotey.ai.artemis.proto.registry.v1.RegisterRequest;
@@ -59,13 +61,15 @@ class ManagementAdminIT {
     @Autowired
     private ObjectMapper objectMapper;
 
-    private ManagedChannel channel;
+    private ManagedChannel externalChannel;
+    private ManagedChannel internalChannel;
     private RegistryServiceGrpc.RegistryServiceBlockingStub registry;
     private RegistryQueryServiceGrpc.RegistryQueryServiceBlockingStub registryQuery;
 
     @DynamicPropertySource
     static void registryEndpoint(DynamicPropertyRegistry properties) {
-        properties.add("artemis.management.registry.endpoint", () -> "localhost:" + RegistryFixture.port());
+        // v0.2：management 只读查询改连 registry 内部 peer 端口（端点显式配置，无默认值）
+        properties.add("artemis.management.registry.endpoint", () -> "localhost:" + RegistryFixture.internalPort());
     }
 
     @AfterAll
@@ -75,14 +79,18 @@ class ManagementAdminIT {
 
     @BeforeEach
     void setUp() throws Exception {
-        channel = ManagedChannelBuilder.forAddress("localhost", RegistryFixture.port())
+        externalChannel = ManagedChannelBuilder.forAddress("localhost", RegistryFixture.externalPort())
+                .usePlaintext()
+                .build();
+        internalChannel = ManagedChannelBuilder.forAddress("localhost", RegistryFixture.internalPort())
                 .usePlaintext()
                 .build();
         Metadata headers = new Metadata();
         headers.put(Metadata.Key.of(BasicAuth.HEADER, Metadata.ASCII_STRING_MARSHALLER), AUTH);
         var interceptor = MetadataUtils.newAttachHeadersInterceptor(headers);
-        registry = RegistryServiceGrpc.newBlockingStub(channel).withInterceptors(interceptor);
-        registryQuery = RegistryQueryServiceGrpc.newBlockingStub(channel).withInterceptors(interceptor);
+        // 注册走外部端口（外部账户）；内部认证默认关闭，查询无需凭证
+        registry = RegistryServiceGrpc.newBlockingStub(externalChannel).withInterceptors(interceptor);
+        registryQuery = RegistryQueryServiceGrpc.newBlockingStub(internalChannel);
         // 隔离：清掉上一用例的注册数据与摘除记录
         registry.deregister(DeregisterRequest.newBuilder()
                 .addInstances(instanceKey("i1"))
@@ -94,13 +102,25 @@ class ManagementAdminIT {
 
     @AfterEach
     void tearDown() throws InterruptedException {
-        channel.shutdown().awaitTermination(5, TimeUnit.SECONDS);
+        externalChannel.shutdown().awaitTermination(5, TimeUnit.SECONDS);
+        internalChannel.shutdown().awaitTermination(5, TimeUnit.SECONDS);
     }
 
     @Test
     void should_require_auth_when_admin_api_called_without_credentials() throws Exception {
         assertThat(get("/admin/v1/services", false).statusCode()).isEqualTo(401);
         assertThat(get("/admin/v1/services", true).statusCode()).isEqualTo(200);
+    }
+
+    @Test
+    void should_query_registry_when_management_uses_internal_port() {
+        assertThat(registryQuery
+                        .listServices(ListServicesRequest.newBuilder()
+                                .setNamespace(NAMESPACE)
+                                .build())
+                        .getStatus()
+                        .getAck())
+                .isEqualTo(Ack.ACK_SUCCESS);
     }
 
     @Test
@@ -296,17 +316,23 @@ class ManagementAdminIT {
                 .build();
     }
 
-    /** registry fixture：惰性启动（DynamicPropertySource 求值时），端口随机。 */
+    /** registry fixture：惰性启动（DynamicPropertySource 求值时），外部/内部端口均随机。 */
     static final class RegistryFixture {
 
         private static ConfigurableApplicationContext context;
-        private static int grpcPort;
+        private static int externalPort;
+        private static int internalPort;
 
         private RegistryFixture() {}
 
-        static synchronized int port() {
+        static synchronized int externalPort() {
             start();
-            return grpcPort;
+            return externalPort;
+        }
+
+        static synchronized int internalPort() {
+            start();
+            return internalPort;
         }
 
         private static void start() {
@@ -314,6 +340,7 @@ class ManagementAdminIT {
                 return;
             }
             try {
+                internalPort = freePort();
                 String snapshotPath = Files.createTempDirectory("artemis-registry-it")
                         .resolve("snapshot.bin")
                         .toString();
@@ -325,11 +352,34 @@ class ManagementAdminIT {
                                 "--spring.grpc.server.port=0",
                                 "--server.port=0",
                                 "--management.server.port=0",
+                                "--artemis.registry.internal.port=" + internalPort,
                                 "--management.endpoint.health.group.readiness.include=readinessState,registryReadiness",
                                 "--artemis.registry.snapshot.path=" + snapshotPath);
-                grpcPort = context.getBean(GrpcServerLifecycle.class).getPort();
+                // 主 server lifecycle 名随传输实现而定（netty/shaded），按名称排除内部 peer 后取
+                externalPort = context.getBeansOfType(GrpcServerLifecycle.class).entrySet().stream()
+                        .filter(entry -> !entry.getKey().equals("peerGrpcServerLifecycle"))
+                        .findFirst()
+                        .orElseThrow()
+                        .getValue()
+                        .getPort();
+                // 内部端口为固定预分配值；这里仅校验实际绑定与配置一致
+                int bound = context.getBeansOfType(GrpcServerLifecycle.class)
+                        .get("peerGrpcServerLifecycle")
+                        .getPort();
+                if (bound != internalPort) {
+                    throw new IllegalStateException(
+                            "peer port mismatch: configured " + internalPort + ", bound " + bound);
+                }
             } catch (IOException e) {
                 throw new IllegalStateException("cannot start registry fixture", e);
+            }
+        }
+
+        private static int freePort() {
+            try (java.net.ServerSocket socket = new java.net.ServerSocket(0)) {
+                return socket.getLocalPort();
+            } catch (IOException e) {
+                throw new IllegalStateException("cannot allocate free port", e);
             }
         }
 
@@ -337,7 +387,8 @@ class ManagementAdminIT {
             if (context != null) {
                 context.close();
                 context = null;
-                grpcPort = 0;
+                externalPort = 0;
+                internalPort = 0;
             }
         }
     }

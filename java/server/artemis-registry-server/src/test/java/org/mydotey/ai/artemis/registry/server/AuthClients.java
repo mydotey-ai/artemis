@@ -20,6 +20,10 @@ final class AuthClients {
     private AuthClients() {}
 
     static ClientInterceptor authenticated() {
+        return authenticated(USERNAME, PASSWORD);
+    }
+
+    static ClientInterceptor authenticated(String username, String password) {
         return new ClientInterceptor() {
             @Override
             public <ReqT, RespT> ClientCall<ReqT, RespT> interceptCall(
@@ -29,7 +33,7 @@ final class AuthClients {
                     public void start(Listener<RespT> responseListener, Metadata headers) {
                         headers.put(
                                 Metadata.Key.of(BasicAuth.HEADER, Metadata.ASCII_STRING_MARSHALLER),
-                                BasicAuth.headerValue(USERNAME, PASSWORD));
+                                BasicAuth.headerValue(username, password));
                         super.start(responseListener, headers);
                     }
                 };

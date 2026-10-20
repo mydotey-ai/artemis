@@ -11,6 +11,14 @@ import org.springframework.context.annotation.Primary;
 @SpringBootTest(properties = {"spring.grpc.server.port=0", "server.port=0", "management.server.port=0"})
 class ApplicationContextTest {
 
+    /** 产品内部端口不接受 0：测试启动前预分配固定端口。 */
+    private static final int PEER_PORT = TestGrpcPorts.freePort();
+
+    @org.springframework.test.context.DynamicPropertySource
+    static void peerPort(org.springframework.test.context.DynamicPropertyRegistry registry) {
+        registry.add("artemis.registry.internal.port", () -> PEER_PORT);
+    }
+
     @Test
     void should_load_application_context_when_server_starts() {
         // 上下文由 @SpringBootTest 启动，进入测试即加载成功

@@ -37,26 +37,45 @@ public final class RegistryQueryGrpcClient implements RegistryQueryPort, AutoClo
 
     private final ManagedChannel channel;
     private final RegistryQueryServiceGrpc.RegistryQueryServiceBlockingStub stub;
-    private final long timeoutMs;
+    /** deadline 是动态配置：保留配置对象，每次调用现取最新值。 */
+    private final RegistryClientConfig config;
+
     private final ManagementProtoMapper mapper = ManagementProtoMapper.INSTANCE;
 
     public RegistryQueryGrpcClient(RegistryClientConfig config) {
+        this.config = config;
+        if (!config.isConfigured()) {
+            // 地址无默认值：未配置上游时保持服务可启动，调用按 REGISTRY_UNAVAILABLE 处理
+            this.channel = null;
+            this.stub = null;
+            return;
+        }
         this.channel = ManagedChannelBuilder.forTarget(config.endpoint())
                 .usePlaintext()
                 .maxInboundMessageSize(MAX_INBOUND_MESSAGE_BYTES)
                 .build();
-        Metadata headers = new Metadata();
-        headers.put(
-                Metadata.Key.of(BasicAuth.HEADER, Metadata.ASCII_STRING_MARSHALLER),
-                BasicAuth.headerValue(config.username(), config.password()));
-        this.stub = RegistryQueryServiceGrpc.newBlockingStub(channel)
-                .withInterceptors(MetadataUtils.newAttachHeadersInterceptor(headers));
-        this.timeoutMs = config.timeoutMs();
+        this.stub = RegistryQueryServiceGrpc.newBlockingStub(channel);
     }
 
-    /** deadline 必须每次调用现算（`withDeadlineAfter` 在调用时固化绝对时刻，不可复用）。 */
+    /**
+     * deadline 每次调用现算（`withDeadlineAfter` 固化绝对时刻，不可复用）；
+     * 认证头同样每次调用现取——支持运行期轮换 username/password。
+     */
     private RegistryQueryServiceGrpc.RegistryQueryServiceBlockingStub stub() {
-        return stub.withDeadlineAfter(timeoutMs, TimeUnit.MILLISECONDS);
+        if (stub == null) {
+            throw new RegistryQueryException(
+                    RegistryQueryException.REGISTRY_UNAVAILABLE, "registry endpoint is not configured");
+        }
+        RegistryQueryServiceGrpc.RegistryQueryServiceBlockingStub callStub = stub;
+        String username = config.username();
+        if (username != null && !username.isBlank()) {
+            Metadata headers = new Metadata();
+            headers.put(
+                    Metadata.Key.of(BasicAuth.HEADER, Metadata.ASCII_STRING_MARSHALLER),
+                    BasicAuth.headerValue(username, config.password()));
+            callStub = callStub.withInterceptors(MetadataUtils.newAttachHeadersInterceptor(headers));
+        }
+        return callStub.withDeadlineAfter(config.timeoutMs(), TimeUnit.MILLISECONDS);
     }
 
     @Override
@@ -103,7 +122,9 @@ public final class RegistryQueryGrpcClient implements RegistryQueryPort, AutoClo
     /** Spring 上下文关闭时释放 channel。 */
     @Override
     public void close() {
-        channel.shutdownNow();
+        if (channel != null) {
+            channel.shutdownNow();
+        }
     }
 
     private static <T> T call(Supplier<T> call) {

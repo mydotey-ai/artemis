@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.8    更新时间: 2026-10-19
+版本: 1.9    更新时间: 2026-10-20
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -53,7 +53,7 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 
 ## 4. 交付状态
 
-当前 **v0.1（registry 单服务）**，进行中；进度以 `docs/milestones/dev-state.md` 为准。
+当前 **v0.2（registry 集群）**，进行中；进度以 `docs/milestones/dev-state.md` 为准。
 
 **phase-1（脚手架 + proto 契约骨架）已交付**：`java/` 十模块 Maven reactor 骨架（parent + 各 core/server/client/starter）与 `proto/` 六组契约骨架（v0.1 定稿 `common.v1` + `registry.v1`，其余四组占位）；`mvn -f java/pom.xml verify` 全绿，enforcer 模块边界断言（core 禁 Spring、client 禁服务端模块）生效。
 
@@ -73,7 +73,7 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 
 **phase-4（配置规范化 + registry-server 装配）已交付**：
 
-- **配置（SCF）**：每服务统一装配 `ConfigurationManager` + `StringProperties`，业务配置项由使用它的类就地定义。source 优先级：Spring Environment（命令行 `--artemis.registry.*=` / Spring 属性）> 系统属性 > 环境变量（`ARTEMIS_REGISTRY_*` 映射）> 工作目录 `artemis.properties`（运行中变更自动重载）。动态项：租约 TTL、保护阈值；静态项：保护窗口、清理/快照周期、快照路径/时效、成员列表、认证（重启生效）。越界数值回落默认并记日志；配置文件不可读/格式错误启动失败。
+- **配置（SCF）**：每服务统一装配 `ConfigurationManager` + `StringProperties`，业务配置项由使用它的类就地定义。source 优先级：Spring Environment（命令行 `--artemis.registry.*=` / Spring 属性）> 系统属性 > 环境变量（`ARTEMIS_REGISTRY_*` 映射）> 工作目录 `artemis.properties`（运行中变更自动重载）。动态项：租约 TTL、自我保护窗口/阈值、清理与快照周期、认证开关与凭证（v0.2 起）、management 查询 deadline；静态项：监听端口/地址、快照路径/回放时效、集群成员与自身标识、management 端点（v0.2 起）。越界数值回落默认并记日志；配置文件不可读/格式错误启动失败。
 - **端口**：外部 gRPC **9090**、外部 HTTP **8080**、管理 HTTP **9091**（默认仅绑本机）。管理端口承载 actuator。
 - **认证**：默认开启单账户 HTTP Basic（默认 `artemis`/`artemis`，生产须修改；`artemis.registry.auth.enabled=false` 可关闭）。gRPC 与外部 HTTP 生效；外部 `/readyz` 与 gRPC 健康探针放行。
 - **可观测**：管理端口 `/actuator/prometheus`（实例数、心跳、清理、保护态指标）与 `/actuator/health/readiness`；外部 `/readyz`；结构化 JSON 日志；OpenTelemetry trace 接线（默认不导出 OTLP，配置 endpoint 后开启）。
@@ -92,7 +92,7 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **独立服务**：management-service 独立进程（外部 HTTP **8081**、管理端口 **9092**），默认 Basic 认证；启动不依赖 registry 可用，registry 故障时查询 API 返回 503。
 - **实例管理 Admin API**：服务列表 / 服务详情 / 实例摘除 / 恢复（`/admin/v1`）。摘除记录归 management（内存态、重启丢失），**不修改 registry** 的注册数据与租约；详情默认返回已应用摘除过滤的**有效视图**，`includeEjected=true` 可展开被摘除实例；摘除/恢复幂等。
 - **状态 API**：租约明细 + 自我保护统计、registry 配置状态（敏感值 `******`），数据经 registry 只读查询透传。
-- **出站查询**：management → registry 走 gRPC 只读查询（默认 `localhost:9090`，单次 deadline 3s，入站上限 16 MiB）；registry 不可用映射为 503。
+- **出站查询**：management → registry 走 gRPC 只读查询（v0.1 复用外部端口；v0.2 起改连内部 peer 端口，端点无默认值，单次 deadline 默认 3s 且动态可调，入站上限 16 MiB）；registry 不可用或端点未配置映射为 503。
 - **契约**：Admin/状态 API 为 HTTP/JSON（[admin-api.md](../api/admin-api.md)），不新增 proto；`BasicAuth` 上移 `artemis-common` 供两服务复用。
 - **工程形态**：management-core 19 单测；management-server 16 单测 + 11 服务级集成测试（同 JVM 起真实 registry + management，覆盖有效视图/事实不变/恢复/幂等/认证/状态 API）。
 
@@ -112,10 +112,19 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **CI**：GitHub Actions 按路径触发（`java/**`、`proto/**`、Dockerfile/workflow 变更）；`java` job 以 JDK 25 构建、经 Maven toolchains fork JDK 8 跑 client/starter 测试，强制 spotless:check + enforcer + 单测/集成测试；`docker` job 构建镜像。
 - **镜像**：仓库根多阶段 Dockerfile（`maven:3.9-eclipse-temurin-25` → `eclipse-temurin:25-jre`），`docker build .` 一条命令产出 registry 单服务镜像；非 root 运行，快照目录 `/app/data` 可写；暴露外部 gRPC 9090 / HTTP 8080。
 
+**v0.2 phase-1（peer 协议与静态多节点成员）已交付**：
+
+- **复制契约**：`replication.v1` 一次定稿成员/节点状态、增量变更批量投递（按 service 聚合，unary 响应即确认）、全量 bootstrap（server-stream 分片）；本 phase 实现 `GetNodeStatus`，`Replicate`/`Bootstrap` 在 phase-2/3 实现前返回 `UNIMPLEMENTED`。
+- **双 gRPC 监听**：外部端口仅承载 SDK；新增内部 peer 端口（默认 **9093**，固定端口，地址无默认值——未配置时绑所有网卡）。内部端口承载 peer 复制/节点状态与 management 只读查询，使用独立认证账户（默认关闭；启用后与外部账户互不通用）。关闭认证的部署需以网络策略隔离内部端口。
+- **静态多节点成员**：`artemis.registry.cluster.members=<node-id>@<host>:<port>,...`（支持括号 IPv6），`artemis.registry.cluster.self` 显式标识本节点；非法条目/重复 id/self 未命中启动失败。节点对外端点不进入成员配置（留待节点状态 API 版本）。
+- **配置动态性**：自我保护窗口、清理/快照周期、认证开关与凭证、management 查询 deadline 支持运行期变更（SCF 监听/每次取值）；监听地址与集群拓扑等启动期属性变更需重启。
+- **工程形态**：双监听/认证隔离/内部查询迁移/3 节点进程内成员互见 IT；proto、架构、开发规范与 API 文档同步。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.9 | 2026-10-20 | v0.2 phase-1 交付：replication.v1、双 gRPC 监听与认证隔离、静态多节点成员/自身识别、配置动态性；当前版本转 v0.2 |
 | 1.8 | 2026-10-19 | phase-8 交付节：Spring Boot starter 自动装配、CI 流水线、多阶段 Docker 镜像；开发者入口补镜像构建命令 |
 | 1.7 | 2026-10-19 | phase-7 交付节：Java 8 注册侧 SDK（fire-and-forget、心跳自愈、生命周期、SCF 配置、Micrometer 指标）；新增 SDK API 文档 |
 | 1.6 | 2026-10-19 | phase-6 交付节：management-service 独立进程、Admin API（有效视图/摘除/恢复）、状态 API、出站只读查询与错误语义；管理面 API 文档链接 |

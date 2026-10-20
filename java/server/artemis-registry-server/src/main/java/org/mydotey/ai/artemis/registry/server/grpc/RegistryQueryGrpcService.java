@@ -13,13 +13,14 @@ import org.mydotey.ai.artemis.proto.management.v1.ListServicesRequest;
 import org.mydotey.ai.artemis.proto.management.v1.ListServicesResponse;
 import org.mydotey.ai.artemis.proto.management.v1.RegistryQueryServiceGrpc;
 import org.mydotey.ai.artemis.registry.application.RegistryQueryProtoFacade;
-import org.springframework.grpc.server.service.GrpcService;
 
 /**
- * 接入层：内部只读查询的 gRPC 传输绑定（ADR-016）。unary 一行委派 proto 门面；
- * 认证与就绪由既有全局拦截器覆盖，无白名单。
+ * 接入层：只读查询的 gRPC 传输绑定（ADR-016）。unary 一行委派 proto 门面。
+ *
+ * <p>v0.2 起该服务只在内部 peer 端口提供（与外部 SDK 端口分离），由
+ * {@code PeerServerConfiguration} 显式绑定并挂内部认证 + readiness 拦截器；主 server
+ * 通过 service filter 排除（Boot 会收集全部 BindableService，仅靠不加注解不够）。
  */
-@GrpcService
 public final class RegistryQueryGrpcService extends RegistryQueryServiceGrpc.RegistryQueryServiceImplBase {
 
     private final RegistryQueryProtoFacade facade;

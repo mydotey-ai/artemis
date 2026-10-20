@@ -18,11 +18,9 @@ public final class HttpBasicAuthFilter extends OncePerRequestFilter {
     private static final Set<String> WHITELIST = Set.of("/readyz", "/error");
 
     private final AuthConfig auth;
-    private final String expected;
 
     public HttpBasicAuthFilter(AuthConfig auth) {
         this.auth = auth;
-        this.expected = BasicAuth.headerValue(auth.username(), auth.password());
     }
 
     @Override
@@ -37,7 +35,9 @@ public final class HttpBasicAuthFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
             return;
         }
-        if (BasicAuth.matches(request.getHeader(BasicAuth.HEADER), expected)) {
+        // 凭证动态：每请求现取，支持运行期轮换；凭证不完整时拒绝
+        String expected = BasicAuth.headerValueOrNull(auth.username(), auth.password());
+        if (expected != null && BasicAuth.matches(request.getHeader(BasicAuth.HEADER), expected)) {
             filterChain.doFilter(request, response);
             return;
         }

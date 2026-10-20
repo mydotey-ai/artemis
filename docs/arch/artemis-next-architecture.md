@@ -1,6 +1,6 @@
 # 新一代 Artemis 架构设计
 
-版本: 1.24    更新时间: 2026-10-19
+版本: 1.27    更新时间: 2026-10-20
 
 > 本文是新一代 Artemis（重设计产品）的架构设计基线：总体架构、核心机制、技术栈策略与关键决策记录。产品定位与版本切分见 [产品规划与路线图](../product/artemis-next-roadmap.md)；设计输入来自 [原产品能力基线](../legacy/legacy-product-analysis.md)（§5 可继承资产 / §6 局限清单）与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -68,7 +68,9 @@
 | discovery ↔ management（规则流/状态上行） | gRPC | 内部端口 |
 | console / Admin API | HTTP | management 外部端口（v0.1 起；实例管理 + 状态 API） |
 
-v0.1 端口落点：registry 外部 gRPC + 外部 HTTP（辅助通道）+ 管理 HTTP（actuator：health/readiness/metrics，默认仅绑本机）；management 外部 HTTP（Admin/状态 API）+ 管理 HTTP。v0.1 management → registry 的只读事实查询复用 registry 外部 gRPC 端口（受默认认证保护，ADR-016）；peer 内部端口与内部查询端口分离随 v0.2 集群复制引入。
+v0.1 端口落点：registry 外部 gRPC + 外部 HTTP（辅助通道）+ 管理 HTTP（actuator：health/readiness/metrics，默认仅绑本机）；management 外部 HTTP（Admin/状态 API）+ 管理 HTTP。v0.1 management → registry 的只读事实查询复用 registry 外部 gRPC 端口（受默认认证保护，ADR-016）。
+
+v0.2 端口落点：registry 起两个 gRPC 监听——外部端口只承载 SDK（四操作/心跳）；内部 peer 端口（`artemis.registry.internal.*`，端口固定默认 9093，地址无默认值、未配置时绑所有网卡以保证 peer 跨节点可达）承载 peer 复制/成员状态与 management 只读事实查询。内部端口使用独立认证账户且**默认关闭**（启用时须显式配置凭证），与外部账户互不通用；关闭认证的部署必须以网络策略隔离内部端口。只读查询保留 readiness 门控，复制/节点状态在未就绪时仍可应答（peer bootstrap 需要）。
 
 所有 proto 按服务与版本组织（`artemis.common.v1`（公共数据模型）/ `artemis.registry.v1` / `artemis.replication.v1` / `artemis.projection.v1` / `artemis.discovery.v1` / `artemis.management.v1`（管理面契约；含 registry 提供给管理面的只读查询 service，client 不生成）），作为语言中立的稳定契约，居多语言 monorepo 顶层 `proto/` 目录（组织与治理见[proto 契约规范](../dev/proto-contract.md)；Java 侧生成矩阵见[Java 技术选型](../dev/tech-stack-java.md) §2.2）。
 
@@ -132,7 +134,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 **readiness 门控（继承）**：HTTP 出口为管理端口 `/actuator/health/readiness` 与外部 `/readyz`（未就绪 503）；启动数据源按优先级三分支——① **存在已就绪 peer**：直接从任一已就绪 peer 全量同步，同步成功即 ready（不设数据非空门槛，空数据 peer 也算同步成功），同步失败定期重试、保持不 ready、不降级本地快照（数据源存在时带旧数据服务是错误行为）；② **无已就绪 peer**：回放本地时效内快照（见持久化节，超期/损坏/缺失均视为无效）；③ **无有效快照**：空表直接 ready（心跳即注册，客户端自愈补齐）。不存在已就绪 peer（空集群/首个节点/全集群同时冷启动）不等待 peer——修复原产品双重冷启动死锁（无 UP peer 永不就绪 + `replicationInstanceCount > 0` 空数据门槛，legacy runtime §3.3）。**不继承 force 开关族**（force-up/force-down 6 键旁路，原产品死锁引导补丁，legacy §7.3–7.6 判为危险开关/口径分裂/DOWN 粘性缺陷簇，且发布样例常开致门控形同虚设）：死锁根因消除后引导必要性消失；唯一长等待场景（有已就绪 peer 但同步持续失败）的逃生路径为调整静态成员配置移除故障 peer（重启后按「无已就绪 peer」走 ②/③ 直接 ready，收进自洽的单节点语义，避免留在集群跳过同步造成的复制分叉）。
 
-**集群成员（第一天约束）**：成员抽象接口 v0.1 进架构，静态配置实现先行；动态成员（K8s 成员源）后置版本。
+**集群成员（第一天约束）**：成员抽象接口 v0.1 进架构，静态配置实现先行；动态成员（K8s 成员源）后置版本。v0.2 静态配置条目 `<node-id>@<peer-host>:<peer-port>`（逗号分隔，host 支持括号 IPv6），自身身份显式配置 `artemis.registry.cluster.self`（替代原产品 URL 子串匹配本机，legacy §6 #10）；成员表/自身身份非法启动失败。成员表**只含连接 peer 所需的最小信息**——节点对外（SDK/管理面）端点由节点状态 API 按部署形态确定（phase-3 追加，wire field number 只增）。
 
 **实例管理（治理期 1 前半，management-service，ADR-016）**：management-service 从 v0.1 起独立交付实例列表/详情、手动摘除/恢复与状态 API（leases/config 排障面）。摘除是 management 的内存态记录（重启丢失），不改变 registry 租约与心跳；**registry 不感知摘除**，只提供只读事实查询（服务列表、实例快照、租约明细与保护统计、配置状态，敏感值在 registry 侧脱敏）。**有效视图 = registry 事实 + management 摘除记录**，由 management 查询时组合；v0.3 起 discovery 经 management 规则流获取摘除规则后自行过滤（治理启用时）。v0.4 由 DB 持久化接管（四级摘除、审计、重下发）。
 
@@ -255,6 +257,9 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.27 | 2026-10-20 | §2.2 内部端口：地址无默认值（未配置绑所有网卡）、端口必须固定（不支持 0） |
+| 1.26 | 2026-10-20 | §2.2 补内部端口默认绑 `0.0.0.0`（peer 跨节点可达）与关闭认证时的网络隔离要求 |
+| 1.25 | 2026-10-20 | v0.2 phase-1 设计定案：§2.2 v0.2 双监听落点（内部端口承载复制 + management 查询、独立认证默认关闭）；§4.1 静态成员仅配 peer 端点 + 显式自身识别，对外端点留 phase-3 |
 | 1.24 | 2026-10-19 | §4.1/§8 客户端磁盘快照归属修正（phase-7 设计 review 定案）：归发现侧 SDK（v0.3 消费方服务列表缓存）；注册侧不落盘——注册事实源是业务代码，重启重注册 + 心跳幂等收敛自愈 |
 | 1.23 | 2026-10-19 | §2.2 补 management.v1 承载 registry 只读查询 service（client 不生成）；phase-5 实现同步 |
 | 1.22 | 2026-10-18 | ADR-016：管理面从 v0.1 独立交付——摘除记录归 management，registry 只提供只读事实查询；§2.1/§2.2/§4.1/§5.1/§7 同步 |

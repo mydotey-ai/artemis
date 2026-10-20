@@ -34,11 +34,11 @@ import org.mydotey.ai.artemis.registry.domain.RegistrySnapshotStore;
 import org.mydotey.ai.artemis.registry.domain.SelfProtection;
 import org.mydotey.scf.facade.StringProperties;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.grpc.test.autoconfigure.LocalGrpcServerPort;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.grpc.server.lifecycle.GrpcServerLifecycle;
 
 /**
  * 服务级集成测试：进程内起真实 registry 服务（Spring Boot 官方 gRPC starter，随机端口），
@@ -48,12 +48,17 @@ import org.springframework.context.annotation.Primary;
 @SpringBootTest(properties = {"spring.grpc.server.port=0", "server.port=0", "management.server.port=0"})
 class RegistryGrpcIT {
 
+    /** 产品内部端口不接受 0：测试启动前预分配固定端口。 */
+    private static final int PEER_PORT = TestGrpcPorts.freePort();
+
     private static final String NAMESPACE = "default";
     private static final String SERVICE = "order-service";
     private static final org.mydotey.ai.artemis.registry.domain.ServiceKey DOMAIN_KEY =
             new org.mydotey.ai.artemis.registry.domain.ServiceKey(NAMESPACE, SERVICE);
 
-    @LocalGrpcServerPort
+    @Autowired
+    private Map<String, GrpcServerLifecycle> lifecycles;
+
     private int port;
 
     @Autowired
@@ -73,6 +78,7 @@ class RegistryGrpcIT {
 
     @BeforeEach
     void setUp() {
+        port = TestGrpcPorts.external(lifecycles);
         channel = ManagedChannelBuilder.forAddress("localhost", port)
                 .usePlaintext()
                 .build();
@@ -214,7 +220,11 @@ class RegistryGrpcIT {
         @Bean
         @Primary
         StringProperties testProperties() {
-            return TestProperties.of(Map.of("artemis.registry.lease.ttlMs", "1000"))
+            return TestProperties.of(Map.of(
+                            "artemis.registry.lease.ttlMs",
+                            "1000",
+                            "artemis.registry.internal.port",
+                            String.valueOf(PEER_PORT)))
                     .properties();
         }
 

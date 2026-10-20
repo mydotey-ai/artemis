@@ -1,6 +1,6 @@
 # Java 开发规范
 
-版本: 1.24    更新时间: 2026-10-19
+版本: 1.25    更新时间: 2026-10-20
 
 > 本文是新一代 Artemis Java 实现的开发规范：包结构、代码风格、并发与线程、错误处理、日志、测试、proto 兼容、SDK 特殊约束与配置管理。技术选型（组件与版本）见[Java 技术选型](tech-stack-java.md)；Git 分支与 commit 规范见 `.claude/rules/git.md`，不在此重复。
 
@@ -12,6 +12,7 @@
 - **client（artemis-client）不得依赖任何服务端模块**（core/server/common），仅从仓库顶层 `proto/` 目录引用 .proto 文件自行生成。
 - **core 模块禁 Spring**（enforcer 强制）：内核不感知 Spring 类型、不读 Spring 配置抽象；配置经普通 Java 配置类注入。
 - 服务实现类放 server 模块（实现 core 定义的接口/ proto `ImplBase`），core 只含内核逻辑与契约；**gRPC 服务端用 Spring Boot 官方 starter**（`org.springframework.boot:spring-boot-starter-grpc-server` + `@GrpcService`）自动装配，**禁自写 `Server`/生命周期类**（见[技术选型](tech-stack-java.md) §4.7）。
+- **多监听端口**（v0.2 起 registry 外部端口 + 内部 peer 端口）：第二个 server 用官方 `NettyGrpcServerFactory` + `GrpcServerLifecycle` 显式装配（仍不手写 `io.grpc.Server`）；该 factory 不得暴露为 `GrpcServerFactory` bean，内部服务不加 `@GrpcService` 且须经 `GrpcServerFactoryCustomizer` 从主 server 排除。装配细节与原因见[技术选型](tech-stack-java.md) §4.7。
 - **模块内 DDD 四层，领域为核心**（[ADR-015](../../decisions/adr-015-layered-model-inside-core.md)）：接入层（server 承载：协议接入，dto/vo 收发）→ 应用层（core `application`：用例编排 + dto↔domain 转换）→ 领域层（core `domain`）；基础设施层（core `infrastructure`）实现领域端口；`application`/`infrastructure` 依赖 `domain`，**domain 不依赖任何其它层**；领域定义端口、基础设施实现、装配层注入（依赖倒置 + 控制反转）。
 - **dto（proto 生成消息）只出现在 server 接入层与 application 的转换边界**（mapper/proto 门面）；**domain 出现 proto 类型即违规**。
 - **监控就地定义、不侵入服务接口**：metrics/log/trace 是实现与装配层关注点，**在产生/持有该数据的实现类内就地定义**（如自我保护窗口指标定义在 `SelfProtection`、心跳/清理计数定义在 `RegistryServiceImpl`），不建集中 metrics binder/统计 DTO；领域/应用服务接口只表达业务用例，不暴露监控数据。
@@ -150,6 +151,7 @@ proto 的 wire 兼容规则与变更流程是**跨语言不变量**，单一来�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.25 | 2026-10-20 | v0.2 phase-1：§1 补多监听端口装配纪律（官方 factory/lifecycle + 主 server 排除内部服务） |
 | 1.24 | 2026-10-19 | §9 补 starter 编译基线（SB 2.7.18、双注册、`@Configuration` 而非 `@AutoConfiguration`、配置走 SCF 不用 `@ConfigurationProperties`） |
 | 1.23 | 2026-10-19 | §9 SDK 依赖清单补 micrometer-core（Micrometer 库模式替换自建 metrics 接口，技术选型 #34） |
 | 1.22 | 2026-10-19 | management.v1 统一生成于 artemis-common（registry 实现 / management 消费，避免 all-in-one 同 JVM 双份生成类） |

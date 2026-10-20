@@ -1,6 +1,6 @@
 # management-service Admin 与状态 API
 
-版本: 1.0    更新时间: 2026-10-19
+版本: 1.3    更新时间: 2026-10-20
 
 > 本文定义 management-service 对外 HTTP API（v0.1 内存态管理面）：实例管理 Admin API 与 registry 状态排障面。有效视图 = registry 只读事实 + management 摘除记录（ADR-016）；registry 不感知摘除。内部 gRPC 查询契约见 [registry-query-api.md](registry-query-api.md)。
 
@@ -12,7 +12,7 @@
 | 管理端口 | **9092**（`management.server.port`，默认仅绑 `127.0.0.1`；actuator health/info/prometheus） |
 | 认证 | 默认开启 HTTP Basic 单账户（默认 `artemis`/`artemis`，生产必须修改） |
 | 关闭认证 | `artemis.management.auth.enabled=false`（仅 eval） |
-| 上游 | registry 只读查询 gRPC（默认 `localhost:9090`，受同一 Basic 认证保护） |
+| 上游 | registry 只读查询 gRPC（registry 内部 peer 端口；端点**无默认值**，未配置时调用返回 REGISTRY_UNAVAILABLE；内部认证默认关闭，配置了 username 才附加 Basic 认证） |
 
 配置项（SCF，静态）：
 
@@ -20,11 +20,11 @@
 |---|---|---|
 | `artemis.management.auth.enabled` | `true` | 认证开关 |
 | `artemis.management.auth.username` / `password` | `artemis` / `artemis` | 外部 HTTP 凭证 |
-| `artemis.management.registry.endpoint` | `localhost:9090` | registry gRPC 地址 |
-| `artemis.management.registry.username` / `password` | `artemis` / `artemis` | 调用 registry 的凭证 |
-| `artemis.management.registry.timeoutMs` | `3000` | 单次查询 deadline（1..60000） |
+| `artemis.management.registry.endpoint` | （无默认值） | registry 内部端口 `host:port`；未配置时 management 正常启动，查询返回 REGISTRY_UNAVAILABLE |
+| `artemis.management.registry.username` / `password` | 空 / 空 | 调用 registry 内部端口的凭证（**动态**，可运行期轮换）；username 非空才发送 Basic 认证 |
+| `artemis.management.registry.timeoutMs` | `3000` | 单次查询 deadline（1..60000，**动态**，每次调用现取） |
 
-> SCF 将空白字符串视为「未设置」并回落默认值；空白凭证不会 fail-fast，部署时须确保非空。
+> SCF 将空白字符串视为「未设置」并回落默认值。registry 内部认证启用（`artemis.registry.internal.auth.enabled=true`）时，须同时配置 management 侧 `artemis.management.registry.username/password` 为内部账户。
 
 ## 2. 有效视图语义
 
@@ -194,4 +194,7 @@ management 启动不依赖 registry 可用；registry 故障时管理面仍可�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.3 | 2026-10-20 | v0.2：上游单一 endpoint（无默认值）；凭证与 timeout 动态化 |
+| 1.2 | 2026-10-20 | v0.2：上游地址/端口分离（已废弃，回归单一 endpoint） |
+| 1.1 | 2026-10-20 | v0.2：上游 registry 只读查询改连内部 peer 端口 |
 | 1.0 | 2026-10-19 | 初版：实例管理 Admin API、状态 API、有效视图语义、认证配置与错误语义 |

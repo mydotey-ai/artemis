@@ -124,6 +124,9 @@ class SnapshotRestoreIT {
         /** 每个 context 启动前由测试设置，供测试 StringProperties 指向 @TempDir 隔离路径。 */
         static Path snapshotFilePath;
 
+        /** 产品内部端口不接受 0：每个 context 启动前预分配固定端口。 */
+        static int peerPort;
+
         @Bean
         @Primary
         MutableClock testClock() {
@@ -138,7 +141,9 @@ class SnapshotRestoreIT {
                             "artemis.registry.lease.ttlMs",
                             "1000",
                             "artemis.registry.snapshot.path",
-                            snapshotFilePath.toString()))
+                            snapshotFilePath.toString(),
+                            "artemis.registry.internal.port",
+                            String.valueOf(peerPort)))
                     .properties();
         }
 
@@ -158,6 +163,7 @@ class SnapshotRestoreIT {
 
     private ConfigurableApplicationContext startContext(int grpcPort, Path snapshotFile) {
         RestoreTestConfig.snapshotFilePath = snapshotFile;
+        RestoreTestConfig.peerPort = TestGrpcPorts.freePort();
         // 命令行参数优先级高于 application.properties（本用例需覆盖默认端口/关闭 web）
         return new SpringApplicationBuilder(ArtemisRegistryServer.class)
                 .sources(RestoreTestConfig.class)

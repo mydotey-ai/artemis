@@ -15,6 +15,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
@@ -32,13 +33,13 @@ import org.mydotey.ai.artemis.registry.TestProperties;
 import org.mydotey.ai.artemis.registry.domain.RegistrySnapshotStore;
 import org.mydotey.scf.facade.StringProperties;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.grpc.test.autoconfigure.LocalGrpcServerPort;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalManagementPort;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.grpc.server.lifecycle.GrpcServerLifecycle;
 
 /**
  * phase-4 端到端验收：认证拒绝/放行（gRPC + HTTP）、metrics 抓取、readiness、trace 观测产出。
@@ -48,8 +49,11 @@ import org.springframework.context.annotation.Primary;
         properties = {"spring.grpc.server.port=0", "management.server.port=0"})
 class AuthObservabilityIT {
 
-    @LocalGrpcServerPort
-    private int grpcPort;
+    /** 产品内部端口不接受 0：测试启动前预分配固定端口。 */
+    private static final int PEER_PORT = TestGrpcPorts.freePort();
+
+    @Autowired
+    private Map<String, GrpcServerLifecycle> lifecycles;
 
     @LocalServerPort
     private int httpPort;
@@ -63,8 +67,11 @@ class AuthObservabilityIT {
     private final HttpClient http = HttpClient.newHttpClient();
     private ManagedChannel channel;
 
+    private int grpcPort;
+
     @BeforeEach
     void setUp() {
+        grpcPort = TestGrpcPorts.external(lifecycles);
         channel = ManagedChannelBuilder.forAddress("localhost", grpcPort)
                 .usePlaintext()
                 .build();
@@ -179,8 +186,9 @@ class AuthObservabilityIT {
         @Bean
         @Primary
         StringProperties testProperties() {
-            // 隔离宿主环境变量/工作目录配置文件，认证断言只依赖默认值
-            return TestProperties.empty();
+            // 隔离宿主环境变量/工作目录配置文件，认证断言只依赖默认值；内部端口随机避免上下文间冲突
+            return TestProperties.of(Map.of("artemis.registry.internal.port", String.valueOf(PEER_PORT)))
+                    .properties();
         }
     }
 }

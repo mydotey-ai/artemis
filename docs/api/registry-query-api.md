@@ -1,6 +1,6 @@
 # registry 内部只读查询 API
 
-版本: 1.0    更新时间: 2026-10-19
+版本: 1.2    更新时间: 2026-10-20
 
 > 本文定义 registry 提供给管理面的只读事实查询契约（management-service 消费、registry 实现，ADR-016）。**非 SDK 公开 API**：契约位于 `management.v1`（管理面组），client SDK 不生成；面向用户的 Admin HTTP API 属 management-service（phase-6）。
 
@@ -10,8 +10,8 @@
 |---|---|
 | proto | `proto/management/v1/management.proto`（`package artemis.management.v1`） |
 | Java 生成 | 服务端统一生成于 `artemis-common`（registry 实现与 management 调用共享单份生成类） |
-| 传输 | gRPC（unary），复用 registry 外部 gRPC 端口（默认 9090） |
-| 认证 | 外部端口默认 Basic 认证（与 SDK 共用单账户凭证） |
+| 传输 | gRPC（unary），registry **内部 peer 端口**（`artemis.registry.internal.port`，默认 9093） |
+| 认证 | 内部端口独立账户 `artemis.registry.internal.auth.*`，**默认关闭**；启用时 management 侧须配置 `artemis.management.registry.username/password`。认证开关与凭证均为动态配置，可运行期轮换 |
 | 就绪 | 复用 registry readiness 门控；未就绪返回 `UNAVAILABLE` |
 
 ## 2. 通用约定
@@ -76,12 +76,13 @@
 
 ## 5. 已知限制（v0.1）
 
-- 查询面与 SDK 共用单账户凭证：任何持注册凭证的调用方可读管理视图（含跨 namespace 枚举）；RBAC 随 v1.0。
-- 复用外部 gRPC 端口；内部/外部端口分离随 v0.2 统一规划。
+- 查询面在内部端口提供；内部认证默认关闭，部署须以网络策略隔离内部端口（默认绑 `0.0.0.0` 以支持 peer 跨节点通信）；启用后仍为单账户、无 per-namespace 权限隔离；RBAC 随 v1.0。
 - 租约明细为弱一致全表扫描（并发续约时 age 钳为 ≥ 0）。
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.2 | 2026-10-20 | v0.2：认证开关/凭证动态化（支持运行期轮换） |
+| 1.1 | 2026-10-20 | v0.2：查询迁移到 registry 内部 peer 端口，独立内部认证且默认关闭 |
 | 1.0 | 2026-10-19 | 初版：registry 内部只读查询四条 RPC、脱敏、排序、上限与错误语义 |

@@ -31,6 +31,21 @@ class AuthConfigTest {
     }
 
     @Test
+    void should_use_latest_credentials_when_changed() {
+        TestProperties properties = TestProperties.of(Map.of(
+                AuthConfig.KEY_USERNAME, "artemis",
+                AuthConfig.KEY_PASSWORD, "artemis"));
+        AuthConfig config = new AuthConfig(properties.properties());
+
+        // 运行期轮换凭证：无需重启，下一次取用即生效
+        properties.set(AuthConfig.KEY_USERNAME, "rotated");
+        properties.set(AuthConfig.KEY_PASSWORD, "n3w-secret");
+
+        assertThat(config.username()).isEqualTo("rotated");
+        assertThat(config.password()).isEqualTo("n3w-secret");
+    }
+
+    @Test
     void should_disable_auth_when_explicitly_false() {
         AuthConfig config = new AuthConfig(
                 TestProperties.of(Map.of(AuthConfig.KEY_ENABLED, "false")).properties());

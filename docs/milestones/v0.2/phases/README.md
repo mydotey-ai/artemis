@@ -4,7 +4,7 @@ phase 设计文档与测试文档在各自 phase 开工（① worktree 开工）
 
 | phase | 设计文档 | 测试文档 |
 |---|---|---|
-| phase-1-peer-protocol | — | — |
+| phase-1-peer-protocol | [phase-1-peer-protocol.md](phase-1-peer-protocol.md) | [phase-1-peer-protocol-test.md](phase-1-peer-protocol-test.md) |
 | phase-2-replication-fanout | — | — |
 | phase-3-peer-bootstrap | — | — |
 | phase-4-self-protection-2 | — | — |

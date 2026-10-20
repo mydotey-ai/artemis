@@ -1,23 +1,20 @@
 package org.mydotey.ai.artemis.registry.domain;
 
 /**
- * 集群成员（成员抽象接口的静态实现元素，架构 §4.1）。
+ * 集群成员（静态配置实现的最小连接信息）。对外（SDK/管理面）端点不在此模型，
+ * 由节点状态 API 按部署形态确定（phase-3）。
  *
- * @param id 成员标识（静态配置下取配置原文）
- * @param host 主机名或 IP
- * @param port 内部 peer 端口
+ * @param nodeId 成员标识（配置显式给出，不再按 URL 子串猜测本机）
+ * @param peer 内部 peer 端点（复制/成员状态）
  */
-public record ClusterMember(String id, String host, int port) {
+public record ClusterMember(String nodeId, ClusterEndpoint peer) {
 
     public ClusterMember {
-        if (id == null || id.isBlank()) {
-            throw new IllegalArgumentException("cluster member id must not be blank");
+        if (nodeId == null || nodeId.isBlank()) {
+            throw new IllegalArgumentException("cluster member node id must not be blank");
         }
-        if (host == null || host.isBlank()) {
-            throw new IllegalArgumentException("cluster member host must not be blank: " + id);
-        }
-        if (port < 1 || port > 65535) {
-            throw new IllegalArgumentException("cluster member port out of range: " + id);
+        if (peer == null) {
+            throw new IllegalArgumentException("cluster member peer endpoint must not be null: " + nodeId);
         }
     }
 }

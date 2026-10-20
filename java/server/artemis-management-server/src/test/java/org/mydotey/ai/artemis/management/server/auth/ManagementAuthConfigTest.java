@@ -28,6 +28,20 @@ class ManagementAuthConfigTest {
     }
 
     @Test
+    void should_use_latest_credentials_when_changed() {
+        TestProperties properties = TestProperties.mutable(Map.of(
+                ManagementAuthConfig.KEY_USERNAME, "artemis",
+                ManagementAuthConfig.KEY_PASSWORD, "artemis"));
+        ManagementAuthConfig config = new ManagementAuthConfig(properties.properties());
+
+        properties.set(ManagementAuthConfig.KEY_USERNAME, "rotated");
+        properties.set(ManagementAuthConfig.KEY_PASSWORD, "n3w-secret");
+
+        assertThat(config.username()).isEqualTo("rotated");
+        assertThat(config.password()).isEqualTo("n3w-secret");
+    }
+
+    @Test
     void should_disable_auth_when_explicitly_false() {
         ManagementAuthConfig config =
                 new ManagementAuthConfig(TestProperties.of(Map.of(ManagementAuthConfig.KEY_ENABLED, "false")));

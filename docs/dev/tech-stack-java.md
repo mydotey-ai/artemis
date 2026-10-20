@@ -1,6 +1,6 @@
 # Java 技术选型
 
-版本: 1.21    更新时间: 2026-10-19
+版本: 1.22    更新时间: 2026-10-20
 
 > 本文是新一代 Artemis Java 实现的技术选型基线：语言与运行时、工程结构、全量技术组件清单与依赖冲突策略。设计依据为[架构设计](../arch/artemis-next-architecture.md)（§3 技术栈策略、§7 关键决策 D8），开发规范见[Java 开发规范](coding-guidelines-java.md)。Rust 实现（v1.x 混合集群）直接消费仓库顶层 `proto/` 契约目录（见[proto 契约规范](proto-contract.md)），不受本文 Java 组件约束。
 
@@ -164,7 +164,8 @@ shaded 版将 netty 重打包进 `io.grpc.netty.shaded.*` 命名空间，与宿�
 
 - **不自写 Server/生命周期类**：`org.springframework.boot:spring-boot-starter-grpc-server`（Spring Boot 4.1 官方模块）提供 gRPC 服务端自动装配——服务实现以 `@GrpcService` 注册、端口与传输经 `spring.grpc.server.*` 配置，生命周期由 starter 管理（含优雅停机接入 Spring 生命周期）。
 - **坐标沿革（phase-2 实施期定案）**：spring-grpc 项目自身的 starter 线止于 1.0.3（SB 3.x 适配）；SB 4.0 起 starter 收编为 Spring Boot 官方模块（`spring-boot-starter-grpc-server` / `spring-boot-grpc-test`），spring-grpc 1.1.x 只发布 core 库（`@GrpcService` 注解即出自其 `org.springframework.grpc.server.service` 包）。SB 4.1 reactor 的正确坐标是 Boot 官方 starter，版本随 SB BOM。
-- **测试支持**：`org.springframework.boot:spring-boot-grpc-test` 提供随机端口（`spring.grpc.server.port=0` + `@LocalGrpcServerPort`）与进程内传输支持，集成测试（`*IT`）据此起服务，不起外部进程（guidelines §7）。
+- **多监听（v0.2 起：registry 外部端口 + 内部 peer 端口）**：第二个 server 用 `spring-grpc-core` 的 `NettyGrpcServerFactory` + `GrpcServerLifecycle` 显式装配（官方组件，不手写 `io.grpc.Server`）。两点约束：① 该 factory **不注册为 `GrpcServerFactory` bean**——Boot 的 `@ConditionalOnMissingNetworkGrpcServer` 会因该类型 bean 存在而关闭主 server 自动装配；② 内部服务**不加 `@GrpcService`**，且必须用 `GrpcServerFactoryCustomizer` + `ServerServiceDefinitionFilter` 从主 server 排除——`DefaultGrpcServiceDiscoverer` 实际会收集**全部** `BindableService` bean（含未标注 `@GrpcService` 的），仅靠注解无法隔离。
+- **测试支持**：`org.springframework.boot:spring-boot-grpc-test` 提供随机端口（`spring.grpc.server.port=0`）与进程内传输支持，集成测试（`*IT`）据此起服务，不起外部进程（guidelines §7）。**双 server 下不要用 `@LocalGrpcServerPort`**（端口属性会被后启动的 server 覆盖）：主 server 端口按 `GrpcServerLifecycle` bean 解析，并按名称（`peerGrpcServerLifecycle`）排除内部 listener；主 lifecycle bean 名随传输实现（`nettyGrpcServerLifecycle`/`shadedNettyGrpcServerLifecycle`）而变，不硬编码。
 - 与 #8 grpc-java 的关系：SB 4.1.1 starter 传递 grpc-java 1.83.1（SB BOM 管理），本 reactor 的窄版本线在前声明锁 1.84.2（parent `dependencyManagement` 先声明者优先）；phase-2 实测（enforcer + 编译 + 装配 + 进程内起服务）兼容。grpc 线内 guava flavor 混排（stub/protobuf/netty → android、services → jre）由 parent dm 统一 jre flavor。
 
 ## 5. 依赖冲突策略（SDK 对宿主的影响）
@@ -189,6 +190,7 @@ shaded 版将 netty 重打包进 `io.grpc.netty.shaded.*` 命名空间，与宿�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.22 | 2026-10-20 | v0.2 phase-1：§4.7 补双监听装配纪律（factory 不作 bean、全量 BindableService 发现需 service filter）、测试端口解析；`@LocalGrpcServerPort` 在双 server 下不适用 |
 | 1.21 | 2026-10-19 | v0.1 phase-8 设计定案：组件总表新增 #35 Spring Boot 2.x starter 基线（2.7.18，Java 8 兼容，client 线自钉不 import BOM） |
 | 1.20 | 2026-10-19 | v0.1 phase-7 设计 review 定案：组件总表新增 #34 Micrometer（client 库模式，SDK 可观测标准端口，替换自建 ClientMetrics）；#17/#30 同步 |
 | 1.19 | 2026-10-19 | management.v1 生成矩阵调整：统一生成于 artemis-common（registry 实现只读查询 / management 消费，registry-core 与 management-core 不再自生成） |

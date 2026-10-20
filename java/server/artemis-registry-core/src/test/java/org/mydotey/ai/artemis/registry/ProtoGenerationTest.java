@@ -26,4 +26,19 @@ class ProtoGenerationTest {
         assertThat(RegistryServiceGrpc.getServiceDescriptor().getName())
                 .isEqualTo("artemis.registry.v1.RegistryService");
     }
+
+    @Test
+    void should_generate_replication_proto_when_building_registry_core() {
+        org.mydotey.ai.artemis.proto.replication.v1.ClusterMember member =
+                org.mydotey.ai.artemis.proto.replication.v1.ClusterMember.newBuilder()
+                        .setNodeId("node-a")
+                        .setPeerHost("10.0.0.1")
+                        .setPeerPort(9093)
+                        .build();
+
+        assertThat(member.getNodeId()).isEqualTo("node-a");
+        assertThat(org.mydotey.ai.artemis.proto.replication.v1.ReplicationServiceGrpc.getServiceDescriptor()
+                        .getName())
+                .isEqualTo("artemis.replication.v1.ReplicationService");
+    }
 }

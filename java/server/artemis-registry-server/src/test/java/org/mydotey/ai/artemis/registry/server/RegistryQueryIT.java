@@ -1,12 +1,9 @@
 package org.mydotey.ai.artemis.registry.server;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
-import io.grpc.Status;
-import io.grpc.StatusRuntimeException;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -32,39 +29,47 @@ import org.mydotey.ai.artemis.registry.TestProperties;
 import org.mydotey.ai.artemis.registry.domain.RegistrySnapshotStore;
 import org.mydotey.scf.facade.StringProperties;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.grpc.test.autoconfigure.LocalGrpcServerPort;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.grpc.server.lifecycle.GrpcServerLifecycle;
 
 /**
- * 服务级集成测试：真实 gRPC 接入 + 真实注册链路后，经 RegistryQueryService 驱动查询
- * （服务列表/实例快照/租约与保护统计/配置脱敏/认证与校验）。
+ * 服务级集成测试：真实 gRPC 接入 + 真实注册链路后，经 RegistryQueryService（v0.2 起在
+ * 内部 peer 端口）驱动查询（服务列表/实例快照/租约与保护统计/配置脱敏/校验）。
  */
 @SpringBootTest(properties = {"spring.grpc.server.port=0", "server.port=0", "management.server.port=0"})
 class RegistryQueryIT {
 
+    /** 产品内部端口不接受 0：测试启动前预分配固定端口。 */
+    private static final int PEER_PORT = TestGrpcPorts.freePort();
+
     private static final String NAMESPACE = "query-it";
     private static final String SERVICE = "order-service";
 
-    @LocalGrpcServerPort
-    private int port;
+    @Autowired
+    private Map<String, GrpcServerLifecycle> lifecycles;
 
     @Autowired
     private MutableClock clock;
 
-    private ManagedChannel channel;
+    private ManagedChannel externalChannel;
+    private ManagedChannel internalChannel;
     private RegistryServiceGrpc.RegistryServiceBlockingStub registry;
     private RegistryQueryServiceGrpc.RegistryQueryServiceBlockingStub query;
 
     @BeforeEach
     void setUp() {
-        channel = ManagedChannelBuilder.forAddress("localhost", port)
+        externalChannel = ManagedChannelBuilder.forAddress("localhost", TestGrpcPorts.external(lifecycles))
                 .usePlaintext()
                 .build();
-        registry = RegistryServiceGrpc.newBlockingStub(channel).withInterceptors(AuthClients.authenticated());
-        query = RegistryQueryServiceGrpc.newBlockingStub(channel).withInterceptors(AuthClients.authenticated());
+        internalChannel = ManagedChannelBuilder.forAddress("localhost", TestGrpcPorts.internal(lifecycles))
+                .usePlaintext()
+                .build();
+        registry = RegistryServiceGrpc.newBlockingStub(externalChannel).withInterceptors(AuthClients.authenticated());
+        // 内部认证默认关闭：查询走内部端口且无需凭证
+        query = RegistryQueryServiceGrpc.newBlockingStub(internalChannel);
         clock.reset();
         registry.deregister(DeregisterRequest.newBuilder()
                 .addInstances(instanceKey("i1"))
@@ -74,18 +79,8 @@ class RegistryQueryIT {
 
     @AfterEach
     void tearDown() throws InterruptedException {
-        channel.shutdown().awaitTermination(5, TimeUnit.SECONDS);
-    }
-
-    @Test
-    void should_reject_query_when_unauthenticated() {
-        RegistryQueryServiceGrpc.RegistryQueryServiceBlockingStub anonymous =
-                RegistryQueryServiceGrpc.newBlockingStub(channel);
-
-        assertThatThrownBy(() -> anonymous.listServices(ListServicesRequest.getDefaultInstance()))
-                .isInstanceOfSatisfying(
-                        StatusRuntimeException.class,
-                        e -> assertThat(e.getStatus().getCode()).isEqualTo(Status.Code.UNAUTHENTICATED));
+        externalChannel.shutdown().awaitTermination(5, TimeUnit.SECONDS);
+        internalChannel.shutdown().awaitTermination(5, TimeUnit.SECONDS);
     }
 
     @Test
@@ -212,7 +207,11 @@ class RegistryQueryIT {
         @Bean
         @Primary
         StringProperties testProperties() {
-            return TestProperties.of(Map.of("artemis.registry.lease.ttlMs", "1000"))
+            return TestProperties.of(Map.of(
+                            "artemis.registry.lease.ttlMs",
+                            "1000",
+                            "artemis.registry.internal.port",
+                            String.valueOf(PEER_PORT)))
                     .properties();
         }
 

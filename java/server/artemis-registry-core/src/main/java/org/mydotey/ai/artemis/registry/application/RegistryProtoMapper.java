@@ -5,6 +5,7 @@ import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.factory.Mappers;
 import org.mydotey.ai.artemis.registry.domain.Ack;
+import org.mydotey.ai.artemis.registry.domain.ClusterMember;
 import org.mydotey.ai.artemis.registry.domain.ConfigProperty;
 import org.mydotey.ai.artemis.registry.domain.DeregisterRequest;
 import org.mydotey.ai.artemis.registry.domain.DeregisterResponse;
@@ -19,6 +20,8 @@ import org.mydotey.ai.artemis.registry.domain.InstanceKey;
 import org.mydotey.ai.artemis.registry.domain.InstanceStatus;
 import org.mydotey.ai.artemis.registry.domain.LeaseDetail;
 import org.mydotey.ai.artemis.registry.domain.LeaseStatus;
+import org.mydotey.ai.artemis.registry.domain.NodeState;
+import org.mydotey.ai.artemis.registry.domain.NodeStatus;
 import org.mydotey.ai.artemis.registry.domain.RegisterRequest;
 import org.mydotey.ai.artemis.registry.domain.RegisterResponse;
 import org.mydotey.ai.artemis.registry.domain.RegisterResponseData;
@@ -326,6 +329,39 @@ public interface RegistryProtoMapper {
                 .setStatus(successStatus())
                 .setData(data)
                 .build();
+    }
+
+    // ---- replication.v1：节点状态自报（toProto 手写，理由同上）----
+
+    default org.mydotey.ai.artemis.proto.replication.v1.NodeStatus toProto(NodeStatus status) {
+        return org.mydotey.ai.artemis.proto.replication.v1.NodeStatus.newBuilder()
+                .setNodeId(status.nodeId())
+                .setState(toProto(status.state()))
+                .setStartedAtMs(status.startedAtMs())
+                .build();
+    }
+
+    default org.mydotey.ai.artemis.proto.replication.v1.ClusterMember toProto(ClusterMember member) {
+        return org.mydotey.ai.artemis.proto.replication.v1.ClusterMember.newBuilder()
+                .setNodeId(member.nodeId())
+                .setPeerHost(wireHost(member.peer().host()))
+                .setPeerPort(member.peer().port())
+                .build();
+    }
+
+    /** wire 上 host 必须是可直接拼接 host:port 的形式：IPv6 带方括号（domain 内不带）。 */
+    default String wireHost(String host) {
+        return host.contains(":") && !host.startsWith("[") ? "[" + host + "]" : host;
+    }
+
+    /** 枚举整表手写：proto 常量带前缀与领域名不对应。 */
+    default org.mydotey.ai.artemis.proto.replication.v1.NodeState toProto(NodeState state) {
+        return switch (state) {
+            case UNKNOWN -> org.mydotey.ai.artemis.proto.replication.v1.NodeState.NODE_STATE_UNKNOWN;
+            case STARTING -> org.mydotey.ai.artemis.proto.replication.v1.NodeState.NODE_STATE_STARTING;
+            case UP -> org.mydotey.ai.artemis.proto.replication.v1.NodeState.NODE_STATE_UP;
+            case DOWN -> org.mydotey.ai.artemis.proto.replication.v1.NodeState.NODE_STATE_DOWN;
+        };
     }
 
     default org.mydotey.ai.artemis.proto.common.v1.ResponseStatus successStatus() {

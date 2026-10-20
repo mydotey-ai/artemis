@@ -34,6 +34,23 @@ class ScheduledSnapshotSchedulerTest {
     }
 
     @Test
+    void should_use_latest_interval_when_changed() {
+        TestProperties properties = TestProperties.of(Map.of(ScheduledSnapshotScheduler.KEY_INTERVAL_MS, "60000"));
+        org.mydotey.scf.Property<String, Long> interval = properties
+                .properties()
+                .getLongProperty(
+                        ScheduledSnapshotScheduler.KEY_INTERVAL_MS,
+                        new org.mydotey.scf.filter.RangeValueConfig<>(60_000L, 1L, 86_400_000L));
+        AtomicInteger rounds = new AtomicInteger();
+        try (ScheduledSnapshotScheduler scheduler = new ScheduledSnapshotScheduler(interval, rounds::incrementAndGet)) {
+            scheduler.start();
+            // 运行期把 60s 周期改短：监听器应取消原排期并按新周期重排
+            properties.set(ScheduledSnapshotScheduler.KEY_INTERVAL_MS, "20");
+            TestAwait.await("interval change applied", () -> rounds.get() >= 3);
+        }
+    }
+
+    @Test
     void should_schedule_using_configured_interval() {
         AtomicInteger rounds = new AtomicInteger();
         try (ScheduledSnapshotScheduler scheduler = new ScheduledSnapshotScheduler(

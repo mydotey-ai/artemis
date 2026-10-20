@@ -9,6 +9,9 @@ import org.mydotey.ai.artemis.registry.application.RegistryQueryService;
 import org.mydotey.ai.artemis.registry.application.RegistryQueryServiceImpl;
 import org.mydotey.ai.artemis.registry.application.RegistryService;
 import org.mydotey.ai.artemis.registry.application.RegistryServiceImpl;
+import org.mydotey.ai.artemis.registry.application.ReplicationProtoFacade;
+import org.mydotey.ai.artemis.registry.application.ReplicationService;
+import org.mydotey.ai.artemis.registry.application.ReplicationServiceImpl;
 import org.mydotey.ai.artemis.registry.domain.ChangeListener;
 import org.mydotey.ai.artemis.registry.domain.ClusterMembers;
 import org.mydotey.ai.artemis.registry.domain.InstanceRegistry;
@@ -25,6 +28,8 @@ import org.mydotey.ai.artemis.registry.server.auth.AuthConfig;
 import org.mydotey.ai.artemis.registry.server.config.RegistryConfigurationSources;
 import org.mydotey.ai.artemis.registry.server.grpc.GrpcAuthInterceptor;
 import org.mydotey.ai.artemis.registry.server.grpc.ReadinessInterceptor;
+import org.mydotey.ai.artemis.registry.server.grpc.RegistryQueryGrpcService;
+import org.mydotey.ai.artemis.registry.server.grpc.ReplicationGrpcService;
 import org.mydotey.ai.artemis.registry.server.health.ReadinessHealthIndicator;
 import org.mydotey.ai.artemis.registry.server.http.HttpBasicAuthFilter;
 import org.mydotey.scf.ConfigurationManager;
@@ -146,6 +151,26 @@ public class RegistryConfiguration {
     @Bean
     RegistryProtoFacade registryProtoFacade(RegistryService registryService) {
         return new RegistryProtoFacade(registryService);
+    }
+
+    @Bean
+    RegistryQueryGrpcService registryQueryGrpcService(RegistryQueryProtoFacade facade) {
+        return new RegistryQueryGrpcService(facade);
+    }
+
+    @Bean
+    ReplicationService replicationService(ClusterMembers clusterMembers, ReadinessGate readinessGate, Clock clock) {
+        return new ReplicationServiceImpl(clusterMembers, readinessGate, clock);
+    }
+
+    @Bean
+    ReplicationProtoFacade replicationProtoFacade(ReplicationService replicationService) {
+        return new ReplicationProtoFacade(replicationService);
+    }
+
+    @Bean
+    ReplicationGrpcService replicationGrpcService(ReplicationProtoFacade facade) {
+        return new ReplicationGrpcService(facade);
     }
 
     @Bean
