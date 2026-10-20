@@ -7,6 +7,7 @@
 | 版本 | 状态 | 备注 |
 |---|---|---|
 | v0.1 | done | |
+| v0.2 | planned | 基线待提交（提交后转 in-progress） |
 
 状态枚举：planned | in-progress | acceptance | done（planned = 启动产物已写、基线未提交）。
 
@@ -24,17 +25,17 @@
 
 | 步骤 | 状态 | 备注 |
 |---|---|---|
-| worktree 开工 | done | 分支/worktree 新建（main 54304ef 起）；设计/测试文档骨架落盘，phases/README 登记 |
-| 上下文加载 | done | 已读：roadmap v0.1、架构 §2.2/§2.3/§3/§6、tech-java.md、guidelines 全文（重点 §1/§7/§9/§10）、phase-7 设计、client 源码与 pom、registry-server 配置与 pom、legacy 分析 §3/§6（原产品无 starter，局限 #14） |
-| 设计 | done | 设计/测试文档已 review 通过（2026-10-19） |
-| 实现 | done | starter 自动装配 + 双注册 + CI/Dockerfile 落盘 |
-| 测试 | done | dev-test.sh all 全绿（7/7 新测，全 reactor SUCCESS） |
-| code-review | done | max：15 条 findings（4 条接受/延后，其余已修） |
-| fix | done | 修复记录见 phase 设计文档「code-review 修复记录」 |
-| 回归测试 | done | 第二轮 all 全绿（8/8 starter 单测） |
-| 验证（人工） | done | 1–3 通过（用户确认）；CI 待 ⑪ 推送后确认 |
-| 文档同步 | done | 产品文档 1.8、sdk-java 1.1、tech-stack 1.21、guidelines 1.24、README |
-| 完工 | done | 分支提交 9c60622，squash 合并入 main |
+| worktree 开工 | pending | 待 phase-1 开工 |
+| 上下文加载 | pending | |
+| 设计 | pending | |
+| 实现 | pending | |
+| 测试 | pending | |
+| code-review | pending | |
+| fix | pending | |
+| 回归测试 | pending | |
+| 验证（人工） | pending | |
+| 文档同步 | pending | |
+| 完工 | pending | |
 
 步骤状态枚举：pending | in-progress | done | skipped。
 
@@ -42,5 +43,11 @@
 
 | phase | 状态 |
 |---|---|
+| phase-1-peer-protocol | planned |
+| phase-2-replication-fanout | planned |
+| phase-3-peer-bootstrap | planned |
+| phase-4-self-protection-2 | planned |
+| phase-5-sdk-failover | planned |
+| phase-6-graceful-shutdown | planned |
 
 状态枚举：planned | in-progress | done。
