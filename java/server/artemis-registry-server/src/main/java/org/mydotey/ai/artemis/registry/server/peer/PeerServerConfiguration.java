@@ -74,6 +74,12 @@ public class PeerServerConfiguration {
         return new PeerAuthConfig(properties);
     }
 
+    /** 出站 peer 复制传输（领域端口实现）：per-peer 惰性 channel，关闭随 context 释放。 */
+    @Bean(destroyMethod = "close")
+    GrpcPeerReplicator grpcPeerReplicator(StringProperties properties, PeerAuthConfig peerAuthConfig) {
+        return new GrpcPeerReplicator(properties, peerAuthConfig);
+    }
+
     /** 命名虚拟线程 executor（gRPC handler 规范，guidelines §4.2）；关闭时中断任务，不无限等待。 */
     @Bean(destroyMethod = "shutdownNow")
     ExecutorService peerGrpcExecutor() {

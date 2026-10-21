@@ -1,6 +1,7 @@
 package org.mydotey.ai.artemis.registry.domain;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -112,14 +113,18 @@ public final class InstanceRegistry {
         });
     }
 
-    /** 心跳对账（逐实例，不做集合 diff）：缺席 upsert 发 NEW；内容变化覆盖发 UPDATE；相同仅续约零事件。空分组 no-op（同 {@link #register}）。 */
+    /**
+     * 心跳对账（逐实例，不做集合 diff）：缺席 upsert 发 NEW；内容变化覆盖发 UPDATE；相同纯续约发 RENEW
+     * （集群模式扇出维持 peer 副本租约，单节点 listener 为 no-op；副本租约语义见架构 §4.1）。
+     * 空分组 no-op（同 {@link #register}）。
+     */
     public void heartbeatUpsert(ServiceKey key, List<Instance> instances) {
         if (instances.isEmpty()) {
             return;
         }
         apply(key, holder -> {
             long now = monotonicClock.monoMillis();
-            List<InstanceChange> changes = new ArrayList<>();
+            List<InstanceChange> changes = new ArrayList<>(instances.size());
             for (Instance instance : instances) {
                 Lease lease = holder.leases.get(instance.instanceId());
                 if (lease == null) {
@@ -130,13 +135,18 @@ public final class InstanceRegistry {
                     changes.add(new InstanceChange(key, instance, ChangeType.UPDATE, now));
                 } else {
                     lease.renewalTimeMs = now;
+                    changes.add(new InstanceChange(key, instance, ChangeType.RENEW, now));
                 }
             }
             return changes;
         });
     }
 
-    /** 过期清理：now - 续约时刻 &gt;= TTL 即摘除（TTL 每轮读取，动态生效），发 DELETE；返回摘除数。 */
+    /**
+     * 过期清理：now - 续约时刻 &gt;= TTL 即摘除（TTL 每轮读取，动态生效）并本地删除；
+     * **不派发事件**（原产品继承：TTL 清理产生的 DELETE 不扇出——副本与事实源同一种租约、
+     * 靠 RENEW 复制维持，收不到续约的租约在全集群各自过期，删除不跨节点传播）。返回摘除数。
+     */
     // ponytail: 全表 O(服务数×实例数) 扫描，10 万实例按 1s 周期实测容量；成瓶颈改按到期时间分桶，
     // 或每 holder 维护 volatile 最早续约下界实现无锁跳过（消每秒持锁扫描对同 holder 心跳续约的排队尖刺）
     public int evictExpired() {
@@ -150,19 +160,19 @@ public final class InstanceRegistry {
                 if (services.get(key) != holder) {
                     continue; // 迭代快照与回收竞态：旧 holder 的事件已由回收者派发完毕
                 }
-                List<InstanceChange> changes = null;
+                boolean structural = false;
                 for (Lease lease : holder.leases.values()) {
                     if (now - lease.renewalTimeMs >= ttlMs) {
                         holder.leases.remove(lease.instance.instanceId()); // CHM 弱一致迭代器容忍遍历中移除
-                        if (changes == null) {
-                            changes = new ArrayList<>();
-                        }
-                        changes.add(new InstanceChange(key, lease.instance, ChangeType.DELETE, now));
+                        structural = true;
+                        evicted++;
                     }
                 }
-                if (changes != null) {
-                    commit(key, holder, changes);
-                    evicted += changes.size();
+                if (structural) {
+                    holder.rebuildSnapshot();
+                    if (holder.leases.isEmpty()) {
+                        services.remove(key, holder);
+                    }
                 }
             }
         }
@@ -241,6 +251,67 @@ public final class InstanceRegistry {
     }
 
     /**
+     * 复制写（peer 增量事件的应用入口，原产品继承的副本租约语义）：NEW/UPDATE 覆盖写真实租约；
+     * RENEW 命中续约、缺席补注册重建（分区恢复路径）；DELETE 幂等移除。
+     * **不派发事件**（防回环，同 {@link #restore} 零事件不变量）。返回实际应用的变更数。
+     */
+    public int applyReplicated(List<InstanceChange> changes) {
+        if (changes.isEmpty()) {
+            return 0;
+        }
+        Map<ServiceKey, List<InstanceChange>> byService = new LinkedHashMap<>();
+        for (InstanceChange change : changes) {
+            byService.computeIfAbsent(change.key(), key -> new ArrayList<>()).add(change);
+        }
+        int applied = 0;
+        for (Map.Entry<ServiceKey, List<InstanceChange>> entry : byService.entrySet()) {
+            applied += applyReplicated(entry.getKey(), entry.getValue());
+        }
+        return applied;
+    }
+
+    private int applyReplicated(ServiceKey key, List<InstanceChange> changes) {
+        while (true) {
+            ServiceHolder holder = services.computeIfAbsent(key, ServiceHolder::new);
+            synchronized (holder) {
+                if (services.get(key) != holder) {
+                    continue; // 回收竞态：换新 holder 重试（同 apply）
+                }
+                long now = monotonicClock.monoMillis();
+                int applied = 0;
+                boolean structural = false;
+                for (InstanceChange change : changes) {
+                    String instanceId = change.instance().instanceId();
+                    switch (change.type()) {
+                        case NEW, UPDATE -> {
+                            holder.leases.put(instanceId, new Lease(change.instance(), now));
+                            structural = true;
+                        }
+                        case RENEW -> {
+                            Lease lease = holder.leases.get(instanceId);
+                            if (lease == null) {
+                                holder.leases.put(instanceId, new Lease(change.instance(), now));
+                                structural = true;
+                            } else {
+                                lease.renewalTimeMs = now;
+                            }
+                        }
+                        case DELETE -> structural |= holder.leases.remove(instanceId) != null;
+                    }
+                    applied++;
+                }
+                if (structural) {
+                    holder.rebuildSnapshot();
+                }
+                if (holder.leases.isEmpty()) {
+                    services.remove(key, holder); // 含全 DELETE 与 no-op 空分组（不留空 holder）
+                }
+                return applied;
+            }
+        }
+    }
+
+    /**
      * 结构变更入口：锁内确认 holder 仍登记在 map（与空 service 回收的 remove 竞态时乐观重试——
      * 重试拿到的新 holder 必然建于回收者派发事件之后），写存储后走统一提交尾（D13）。
      */
@@ -258,11 +329,12 @@ public final class InstanceRegistry {
     }
 
     /**
-     * 统一提交尾（须在 holder 锁内，D13）：重建快照（不因摘除后变空跳过——派发期间读到的快照
-     * 与事件一致）→ 派发事件（回收后置，事件序 = 存储序）→ 回收空 holder。
+     * 统一提交尾（须在 holder 锁内，D13）：重建快照（仅结构性变更——RENEW 纯续约零快照分配；
+     * 不因摘除后变空跳过——派发期间读到的快照与事件一致）→ 派发事件（回收后置，事件序 =
+     * 存储序）→ 回收空 holder。
      */
     private void commit(ServiceKey key, ServiceHolder holder, List<InstanceChange> changes) {
-        if (!changes.isEmpty()) {
+        if (changes.stream().anyMatch(change -> change.type() != ChangeType.RENEW)) {
             holder.rebuildSnapshot();
         }
         fire(changes);

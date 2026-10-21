@@ -1,26 +1,50 @@
 package org.mydotey.ai.artemis.registry.application;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.util.List;
+import org.mydotey.ai.artemis.registry.domain.Ack;
 import org.mydotey.ai.artemis.registry.domain.ClusterMember;
 import org.mydotey.ai.artemis.registry.domain.ClusterMembers;
+import org.mydotey.ai.artemis.registry.domain.ErrorInfo;
+import org.mydotey.ai.artemis.registry.domain.InstanceChange;
+import org.mydotey.ai.artemis.registry.domain.InstanceRegistry;
 import org.mydotey.ai.artemis.registry.domain.NodeState;
 import org.mydotey.ai.artemis.registry.domain.NodeStatus;
+import org.mydotey.ai.artemis.registry.domain.ReplicationBatch;
+import org.mydotey.ai.artemis.registry.domain.ResponseStatus;
 
 /**
  * 节点状态自报：就绪门映射（未 ready → STARTING，ready → UP），启动时刻取装配层时钟。
  * 单节点模式（无成员身份）node_id 为空。
+ * 入站复制：校验后零事件应用（指标就地定义，guidelines §1）。
  */
 public final class ReplicationServiceImpl implements ReplicationService {
 
     private final ClusterMembers clusterMembers;
     private final ReadinessGate readinessGate;
+    private final InstanceRegistry registry;
     private final long startedAtMs;
+    private final Counter batchesReceived;
+    private final Counter changesApplied;
 
-    public ReplicationServiceImpl(ClusterMembers clusterMembers, ReadinessGate readinessGate, Clock clock) {
+    public ReplicationServiceImpl(
+            ClusterMembers clusterMembers,
+            ReadinessGate readinessGate,
+            InstanceRegistry registry,
+            Clock clock,
+            MeterRegistry meterRegistry) {
         this.clusterMembers = clusterMembers;
         this.readinessGate = readinessGate;
+        this.registry = registry;
         this.startedAtMs = clock.millis();
+        this.batchesReceived = Counter.builder("artemis.registry.replication.batches.received")
+                .description("Incremental replication batches received from peers")
+                .register(meterRegistry);
+        this.changesApplied = Counter.builder("artemis.registry.replication.applied.changes")
+                .description("Instance changes applied from peer replication")
+                .register(meterRegistry);
     }
 
     @Override
@@ -33,5 +57,41 @@ public final class ReplicationServiceImpl implements ReplicationService {
     @Override
     public List<ClusterMember> members() {
         return clusterMembers.members();
+    }
+
+    @Override
+    public ResponseStatus replicate(ReplicationBatch batch) {
+        String error = validate(batch);
+        if (error != null) {
+            return new ResponseStatus(Ack.FAIL, new ErrorInfo(ErrorCodes.INVALID_ARGUMENT, error));
+        }
+        batchesReceived.increment();
+        changesApplied.increment(registry.applyReplicated(batch.changes()));
+        return new ResponseStatus(Ack.SUCCESS, null);
+    }
+
+    /** 信任边界一次校验：source、service key 与逐变更 instanceId 非空、变更类型可识别（与外部入口对齐）。 */
+    private static String validate(ReplicationBatch batch) {
+        if (batch.sourceNodeId() == null || batch.sourceNodeId().isBlank()) {
+            return "batch.sourceNodeId is blank";
+        }
+        for (InstanceChange change : batch.changes()) {
+            if (change.type() == null) {
+                return "change type is null";
+            }
+            if (change.key() == null
+                    || change.key().namespace() == null
+                    || change.key().namespace().isBlank()
+                    || change.key().service() == null
+                    || change.key().service().isBlank()) {
+                return "change service key is blank";
+            }
+            if (change.instance() == null
+                    || change.instance().instanceId() == null
+                    || change.instance().instanceId().isBlank()) {
+                return "change instanceId is blank";
+            }
+        }
+        return null;
     }
 }

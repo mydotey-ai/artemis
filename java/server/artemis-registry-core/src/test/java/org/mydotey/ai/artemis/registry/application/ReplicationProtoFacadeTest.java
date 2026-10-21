@@ -2,6 +2,7 @@ package org.mydotey.ai.artemis.registry.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -12,9 +13,12 @@ import org.mydotey.ai.artemis.proto.common.v1.Ack;
 import org.mydotey.ai.artemis.proto.replication.v1.GetNodeStatusRequest;
 import org.mydotey.ai.artemis.proto.replication.v1.GetNodeStatusResponse;
 import org.mydotey.ai.artemis.proto.replication.v1.NodeState;
+import org.mydotey.ai.artemis.registry.MutableClock;
+import org.mydotey.ai.artemis.registry.TestProperties;
 import org.mydotey.ai.artemis.registry.domain.ClusterEndpoint;
 import org.mydotey.ai.artemis.registry.domain.ClusterMember;
 import org.mydotey.ai.artemis.registry.domain.ClusterMembers;
+import org.mydotey.ai.artemis.registry.domain.InstanceRegistry;
 
 class ReplicationProtoFacadeTest {
 
@@ -26,8 +30,7 @@ class ReplicationProtoFacadeTest {
     @Test
     void should_report_starting_then_up_when_readiness_changes() {
         ReadinessGate gate = new ReadinessGate();
-        ReplicationService service = new ReplicationServiceImpl(members(NODE_A, NODE_B), gate, CLOCK);
-        ReplicationProtoFacade facade = new ReplicationProtoFacade(service);
+        ReplicationProtoFacade facade = new ReplicationProtoFacade(service(members(NODE_A, NODE_B), gate));
 
         assertThat(facade.getNodeStatus(GetNodeStatusRequest.getDefaultInstance())
                         .getData()
@@ -48,8 +51,7 @@ class ReplicationProtoFacadeTest {
     void should_map_members_and_self_when_node_status_queried() {
         ReadinessGate gate = new ReadinessGate();
         gate.markReady();
-        ReplicationProtoFacade facade =
-                new ReplicationProtoFacade(new ReplicationServiceImpl(members(NODE_A, NODE_B), gate, CLOCK));
+        ReplicationProtoFacade facade = new ReplicationProtoFacade(service(members(NODE_A, NODE_B), gate));
 
         GetNodeStatusResponse response = facade.getNodeStatus(GetNodeStatusRequest.getDefaultInstance());
 
@@ -83,8 +85,7 @@ class ReplicationProtoFacadeTest {
                 return Optional.of(members().get(0));
             }
         };
-        ReplicationProtoFacade facade =
-                new ReplicationProtoFacade(new ReplicationServiceImpl(ipv6Members, new ReadinessGate(), CLOCK));
+        ReplicationProtoFacade facade = new ReplicationProtoFacade(service(ipv6Members, new ReadinessGate()));
 
         assertThat(facade.getNodeStatus(GetNodeStatusRequest.getDefaultInstance())
                         .getData()
@@ -95,13 +96,59 @@ class ReplicationProtoFacadeTest {
 
     @Test
     void should_report_blank_node_id_when_single_node() {
-        ReplicationProtoFacade facade =
-                new ReplicationProtoFacade(new ReplicationServiceImpl(singleNode(), new ReadinessGate(), CLOCK));
+        ReplicationProtoFacade facade = new ReplicationProtoFacade(service(singleNode(), new ReadinessGate()));
 
         GetNodeStatusResponse response = facade.getNodeStatus(GetNodeStatusRequest.getDefaultInstance());
 
         assertThat(response.getData().getSelf().getNodeId()).isEmpty();
         assertThat(response.getData().getMembersList()).isEmpty();
+    }
+
+    @Test
+    void should_apply_replicated_batch_and_ack_success_when_replicate_called() {
+        ReadinessGate gate = new ReadinessGate();
+        gate.markReady();
+        MutableClock clock = new MutableClock();
+        List<org.mydotey.ai.artemis.registry.domain.InstanceChange> events = new java.util.ArrayList<>();
+        InstanceRegistry registry = new InstanceRegistry(TestProperties.empty(), clock, events::add);
+        ReplicationProtoFacade facade = new ReplicationProtoFacade(
+                new ReplicationServiceImpl(members(NODE_A, NODE_B), gate, registry, CLOCK, new SimpleMeterRegistry()));
+
+        org.mydotey.ai.artemis.proto.replication.v1.ReplicateResponse response =
+                facade.replicate(org.mydotey.ai.artemis.proto.replication.v1.ReplicateRequest.newBuilder()
+                        .setBatch(org.mydotey.ai.artemis.proto.replication.v1.ReplicationBatch.newBuilder()
+                                .setSourceNodeId("node-b")
+                                .addServices(org.mydotey.ai.artemis.proto.replication.v1.ServiceChange.newBuilder()
+                                        .setKey(org.mydotey.ai.artemis.proto.common.v1.ServiceKey.newBuilder()
+                                                .setNamespace("default")
+                                                .setService("order-service"))
+                                        .addChanges(
+                                                org.mydotey.ai.artemis.proto.replication.v1.InstanceChange.newBuilder()
+                                                        .setInstance(
+                                                                org.mydotey.ai.artemis.proto.common.v1.Instance
+                                                                        .newBuilder()
+                                                                        .setInstanceId("i1"))
+                                                        .setType(
+                                                                org.mydotey.ai.artemis.proto.replication.v1.ChangeType
+                                                                        .CHANGE_TYPE_RENEW))))
+                        .build());
+
+        org.assertj.core.api.Assertions.assertThat(response.getStatus().getAck())
+                .isEqualTo(Ack.ACK_SUCCESS);
+        org.assertj.core.api.Assertions.assertThat(events).isEmpty(); // 零事件（防回环）
+        org.assertj.core.api.Assertions.assertThat(registry.snapshot(
+                        new org.mydotey.ai.artemis.registry.domain.ServiceKey("default", "order-service")))
+                .hasValueSatisfying(s -> org.assertj.core.api.Assertions.assertThat(s.instances())
+                        .hasSize(1)); // RENEW 缺席补注册
+    }
+
+    private static ReplicationService service(ClusterMembers members, ReadinessGate gate) {
+        return new ReplicationServiceImpl(
+                members,
+                gate,
+                new InstanceRegistry(TestProperties.empty(), new MutableClock(), change -> {}),
+                CLOCK,
+                new SimpleMeterRegistry());
     }
 
     private static ClusterMembers members(ClusterMember... members) {

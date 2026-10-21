@@ -17,10 +17,12 @@ import org.mydotey.ai.artemis.registry.domain.ClusterMembers;
 import org.mydotey.ai.artemis.registry.domain.InstanceRegistry;
 import org.mydotey.ai.artemis.registry.domain.LeaseEvictionScheduler;
 import org.mydotey.ai.artemis.registry.domain.MonotonicClock;
+import org.mydotey.ai.artemis.registry.domain.PeerReplicator;
 import org.mydotey.ai.artemis.registry.domain.RegistrySnapshotStore;
 import org.mydotey.ai.artemis.registry.domain.SelfProtection;
 import org.mydotey.ai.artemis.registry.domain.SnapshotScheduler;
 import org.mydotey.ai.artemis.registry.infrastructure.FileRegistrySnapshotStore;
+import org.mydotey.ai.artemis.registry.infrastructure.ReplicationFanout;
 import org.mydotey.ai.artemis.registry.infrastructure.ScheduledLeaseEvictionScheduler;
 import org.mydotey.ai.artemis.registry.infrastructure.ScheduledSnapshotScheduler;
 import org.mydotey.ai.artemis.registry.infrastructure.StaticClusterMembers;
@@ -71,10 +73,22 @@ public class RegistryConfiguration {
         return () -> System.nanoTime() / 1_000_000;
     }
 
-    /** 变更事件出口：v0.2 集群复制前为 no-op（进程内语义已由单测/IT 直接注入收集器验证）。 */
+    /**
+     * 变更事件出口：多节点成员身份（静态配置，装配期判定）→ 扇出管线（运行时类有 public close，
+     * inferred destroy 生效）；单节点 → no-op（零开销，纯续约 RENEW 事件被吞掉，语义与 v0.1 一致）。
+     */
     @Bean
-    ChangeListener changeListener() {
-        return change -> {};
+    ChangeListener changeListener(
+            StringProperties properties,
+            ClusterMembers clusterMembers,
+            PeerReplicator peerReplicator,
+            MeterRegistry meterRegistry) {
+        if (clusterMembers.self().isEmpty()) {
+            return change -> {};
+        }
+        ReplicationFanout fanout = new ReplicationFanout(properties, clusterMembers, peerReplicator, meterRegistry);
+        fanout.start();
+        return fanout;
     }
 
     @Bean
@@ -159,8 +173,13 @@ public class RegistryConfiguration {
     }
 
     @Bean
-    ReplicationService replicationService(ClusterMembers clusterMembers, ReadinessGate readinessGate, Clock clock) {
-        return new ReplicationServiceImpl(clusterMembers, readinessGate, clock);
+    ReplicationService replicationService(
+            ClusterMembers clusterMembers,
+            ReadinessGate readinessGate,
+            InstanceRegistry registry,
+            Clock clock,
+            MeterRegistry meterRegistry) {
+        return new ReplicationServiceImpl(clusterMembers, readinessGate, registry, clock, meterRegistry);
     }
 
     @Bean

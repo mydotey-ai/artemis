@@ -112,13 +112,17 @@ class InstanceRegistryTest {
     // ---- heartbeat ----
 
     @Test
-    void should_renew_without_event_when_heartbeat_content_unchanged() {
+    void should_emit_renew_when_heartbeat_content_unchanged() {
         registry.register(KEY, List.of(instance("i1")));
         events.clear();
 
         registry.heartbeatUpsert(KEY, List.of(instance("i1")));
 
-        assertThat(events).isEmpty();
+        // 纯续约发 RENEW（集群模式扇出维持 peer 副本租约；单节点 no-op listener 吞掉）
+        assertThat(events).singleElement().satisfies(c -> {
+            assertThat(c.type()).isEqualTo(ChangeType.RENEW);
+            assertThat(c.instance().instanceId()).isEqualTo("i1");
+        });
     }
 
     @Test
@@ -128,10 +132,9 @@ class InstanceRegistryTest {
 
         registry.heartbeatUpsert(KEY, List.of(instance("i1"), instance("i2")));
 
-        assertThat(events).singleElement().satisfies(c -> {
-            assertThat(c.type()).isEqualTo(ChangeType.NEW);
-            assertThat(c.instance().instanceId()).isEqualTo("i2");
-        });
+        assertThat(events).hasSize(2);
+        assertThat(events).extracting(InstanceChange::type).containsExactly(ChangeType.RENEW, ChangeType.NEW);
+        assertThat(events.get(1).instance().instanceId()).isEqualTo("i2");
         assertThat(registry.snapshot(KEY))
                 .hasValueSatisfying(s -> assertThat(s.instances()).hasSize(2));
     }
@@ -154,12 +157,12 @@ class InstanceRegistryTest {
         registry.register(KEY, List.of(instance("i1"), instance("i2")));
         events.clear();
 
-        // 心跳只报部分实例：不做集合 diff，未上报实例仍在（等 TTL）
+        // 心跳只报部分实例：不做集合 diff，未上报实例仍在（等 TTL）；在场的纯续约发 RENEW
         registry.heartbeatUpsert(KEY, List.of(instance("i1")));
 
         assertThat(registry.snapshot(KEY))
                 .hasValueSatisfying(s -> assertThat(s.instances()).hasSize(2));
-        assertThat(events).isEmpty();
+        assertThat(events).singleElement().extracting(InstanceChange::type).isEqualTo(ChangeType.RENEW);
     }
 
     // ---- 租约与过期清理 ----
@@ -180,18 +183,16 @@ class InstanceRegistryTest {
     }
 
     @Test
-    void should_emit_delete_and_remove_when_lease_expired() {
+    void should_remove_without_event_when_lease_expired() {
         registry.register(KEY, List.of(instance("i1")));
         events.clear();
         clock.advance(Duration.ofSeconds(30));
 
         int evicted = registry.evictExpired();
 
+        // 原产品继承：TTL 清理本地删除、零事件（DELETE 不扇出——收不到续约的租约全集群各自过期）
         assertThat(evicted).isEqualTo(1);
-        assertThat(events).singleElement().satisfies(c -> {
-            assertThat(c.type()).isEqualTo(ChangeType.DELETE);
-            assertThat(c.instance().instanceId()).isEqualTo("i1");
-        });
+        assertThat(events).isEmpty();
         assertThat(registry.snapshot(KEY)).isEmpty();
     }
 
@@ -260,6 +261,58 @@ class InstanceRegistryTest {
         registry.heartbeatUpsert(KEY, List.of(instance("i1")));
 
         assertThat(registry.snapshot(KEY)).containsSame(before);
+    }
+
+    // ---- 复制写（phase-2 副本租约语义，原产品继承）----
+
+    @Test
+    void should_write_replica_without_change_event_when_replicate_applied() {
+        int applied = registry.applyReplicated(List.of(replicated(ChangeType.NEW, instance("i1"))));
+        registry.applyReplicated(List.of(replicated(ChangeType.UPDATE, instance("i1", 200))));
+
+        // 零事件（防回环，同 restore 不变量）；副本为真实租约且内容覆盖
+        assertThat(applied).isEqualTo(1);
+        assertThat(events).isEmpty();
+        assertThat(registry.snapshot(KEY)).hasValueSatisfying(s -> {
+            assertThat(s.instances()).hasSize(1);
+            assertThat(s.instances().get(0).weight()).isEqualTo(200);
+        });
+    }
+
+    @Test
+    void should_renew_replica_when_replicated_renew_hits() {
+        registry.applyReplicated(List.of(replicated(ChangeType.NEW, instance("i1"))));
+        clock.advance(Duration.ofSeconds(29)); // 副本租约 29s 前建立
+        registry.applyReplicated(List.of(replicated(ChangeType.RENEW, instance("i1"))));
+        clock.advance(Duration.ofSeconds(20)); // 距 RENEW 20s < TTL 30s
+
+        assertThat(registry.evictExpired()).isZero();
+        assertThat(registry.snapshot(KEY)).isPresent();
+    }
+
+    @Test
+    void should_upsert_replica_when_replicated_renew_absent() {
+        // 副本已被本地清理（分区恢复）：RENEW 到达 → 补注册重建，零事件
+        registry.applyReplicated(List.of(replicated(ChangeType.RENEW, instance("i1"))));
+
+        assertThat(registry.snapshot(KEY))
+                .hasValueSatisfying(s -> assertThat(s.instances())
+                        .extracting(Instance::instanceId)
+                        .containsExactly("i1"));
+        assertThat(events).isEmpty();
+    }
+
+    @Test
+    void should_apply_replicated_delete_idempotently() {
+        registry.applyReplicated(List.of(replicated(ChangeType.DELETE, instance("i1")))); // 缺席 no-op
+
+        assertThat(registry.snapshot(KEY)).isEmpty();
+
+        registry.applyReplicated(List.of(replicated(ChangeType.NEW, instance("i1"))));
+        registry.applyReplicated(List.of(replicated(ChangeType.DELETE, instance("i1")))); // 命中删除
+
+        assertThat(registry.snapshot(KEY)).isEmpty();
+        assertThat(events).isEmpty();
     }
 
     // ---- 全量快照读与回放写（phase-3）----
@@ -342,6 +395,11 @@ class InstanceRegistryTest {
     }
 
     // ---- 设施 ----
+
+    /** 入站复制事件构造（changeTimeMs 固定 0：源节点单调钟不可跨进程，D14）。 */
+    private static InstanceChange replicated(ChangeType type, Instance instance) {
+        return new InstanceChange(KEY, instance, type, 0L);
+    }
 
     private static Instance instance(String instanceId) {
         return instance(instanceId, 100);

@@ -54,6 +54,7 @@ enum ChangeType {
   CHANGE_TYPE_NEW = 2;
   CHANGE_TYPE_UPDATE = 3;
   CHANGE_TYPE_DELETE = 4;    // instance 至少携带 instance_id，其余字段无意义
+  CHANGE_TYPE_RENEW = 5;     // 纯续约（内容未变的心跳）：命中续约副本租约，缺席补注册重建（phase-2）
 }
 
 message InstanceChange {

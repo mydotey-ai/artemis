@@ -182,14 +182,13 @@ class RegistryGrpcIT {
     void should_evict_and_observe_when_ttl_elapses() {
         blocking.register(registerRequest("i1"));
         TestAwait.await("registered", () -> instanceCount() == 1);
+        events.clear();
 
         clock.advance(Duration.ofMillis(1500)); // 超过 TTL 1000ms
 
         TestAwait.await("expired instance evicted", () -> instanceCount() == 0);
-        assertThat(events).anySatisfy(change -> {
-            assertThat(change.type()).isEqualTo(ChangeType.DELETE);
-            assertThat(change.instance().instanceId()).isEqualTo("i1");
-        });
+        // 原产品继承（phase-2）：TTL 清理本地删除、零事件（DELETE 不扇出，各节点独立过期）
+        assertThat(events).isEmpty();
     }
 
     @Test

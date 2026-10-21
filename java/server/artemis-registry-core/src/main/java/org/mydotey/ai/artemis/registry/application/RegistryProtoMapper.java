@@ -1,6 +1,9 @@
 package org.mydotey.ai.artemis.registry.application;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.factory.Mappers;
@@ -332,6 +335,76 @@ public interface RegistryProtoMapper {
     }
 
     // ---- replication.v1：节点状态自报（toProto 手写，理由同上）----
+
+    /** 枚举整表手写：proto 常量带前缀与领域名不对应；UNRECOGNIZED → null（入站校验整批拒绝）。 */
+    default org.mydotey.ai.artemis.proto.replication.v1.ChangeType toProto(
+            org.mydotey.ai.artemis.registry.domain.ChangeType type) {
+        return switch (type) {
+            case NEW -> org.mydotey.ai.artemis.proto.replication.v1.ChangeType.CHANGE_TYPE_NEW;
+            case UPDATE -> org.mydotey.ai.artemis.proto.replication.v1.ChangeType.CHANGE_TYPE_UPDATE;
+            case DELETE -> org.mydotey.ai.artemis.proto.replication.v1.ChangeType.CHANGE_TYPE_DELETE;
+            case RENEW -> org.mydotey.ai.artemis.proto.replication.v1.ChangeType.CHANGE_TYPE_RENEW;
+        };
+    }
+
+    default org.mydotey.ai.artemis.registry.domain.ChangeType toDomain(
+            org.mydotey.ai.artemis.proto.replication.v1.ChangeType type) {
+        return switch (type) {
+            case CHANGE_TYPE_NEW -> org.mydotey.ai.artemis.registry.domain.ChangeType.NEW;
+            case CHANGE_TYPE_UPDATE -> org.mydotey.ai.artemis.registry.domain.ChangeType.UPDATE;
+            case CHANGE_TYPE_DELETE -> org.mydotey.ai.artemis.registry.domain.ChangeType.DELETE;
+            case CHANGE_TYPE_RENEW -> org.mydotey.ai.artemis.registry.domain.ChangeType.RENEW;
+            default -> null;
+        };
+    }
+
+    /** 入站批量：ServiceChange 按 key 展平；changeTimeMs 固定 0（源节点单调钟不可跨进程，D14）。 */
+    default org.mydotey.ai.artemis.registry.domain.ReplicationBatch toDomain(
+            org.mydotey.ai.artemis.proto.replication.v1.ReplicationBatch batch) {
+        if (batch == null) {
+            return null;
+        }
+        List<org.mydotey.ai.artemis.registry.domain.InstanceChange> changes = new ArrayList<>();
+        for (org.mydotey.ai.artemis.proto.replication.v1.ServiceChange service : batch.getServicesList()) {
+            for (org.mydotey.ai.artemis.proto.replication.v1.InstanceChange change : service.getChangesList()) {
+                changes.add(new org.mydotey.ai.artemis.registry.domain.InstanceChange(
+                        toDomain(service.getKey()), toDomain(change.getInstance()), toDomain(change.getType()), 0L));
+            }
+        }
+        return new org.mydotey.ai.artemis.registry.domain.ReplicationBatch(batch.getSourceNodeId(), changes);
+    }
+
+    /** 出站批量：按 key 分组聚合（产生序保持），组 ReplicateRequest（扇出投递用）。 */
+    default org.mydotey.ai.artemis.proto.replication.v1.ReplicateRequest toReplicateRequest(
+            org.mydotey.ai.artemis.registry.domain.ReplicationBatch batch) {
+        LinkedHashMap<
+                        org.mydotey.ai.artemis.registry.domain.ServiceKey,
+                        List<org.mydotey.ai.artemis.registry.domain.InstanceChange>>
+                byService = new LinkedHashMap<>();
+        for (org.mydotey.ai.artemis.registry.domain.InstanceChange change : batch.changes()) {
+            byService.computeIfAbsent(change.key(), key -> new ArrayList<>()).add(change);
+        }
+        org.mydotey.ai.artemis.proto.replication.v1.ReplicationBatch.Builder batchBuilder =
+                org.mydotey.ai.artemis.proto.replication.v1.ReplicationBatch.newBuilder()
+                        .setSourceNodeId(batch.sourceNodeId());
+        for (Map.Entry<
+                        org.mydotey.ai.artemis.registry.domain.ServiceKey,
+                        List<org.mydotey.ai.artemis.registry.domain.InstanceChange>>
+                entry : byService.entrySet()) {
+            org.mydotey.ai.artemis.proto.replication.v1.ServiceChange.Builder serviceBuilder =
+                    org.mydotey.ai.artemis.proto.replication.v1.ServiceChange.newBuilder()
+                            .setKey(toProto(entry.getKey()));
+            for (org.mydotey.ai.artemis.registry.domain.InstanceChange change : entry.getValue()) {
+                serviceBuilder.addChanges(org.mydotey.ai.artemis.proto.replication.v1.InstanceChange.newBuilder()
+                        .setInstance(toProto(change.instance()))
+                        .setType(toProto(change.type())));
+            }
+            batchBuilder.addServices(serviceBuilder);
+        }
+        return org.mydotey.ai.artemis.proto.replication.v1.ReplicateRequest.newBuilder()
+                .setBatch(batchBuilder)
+                .build();
+    }
 
     default org.mydotey.ai.artemis.proto.replication.v1.NodeStatus toProto(NodeStatus status) {
         return org.mydotey.ai.artemis.proto.replication.v1.NodeStatus.newBuilder()

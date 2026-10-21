@@ -148,7 +148,7 @@ class RegistryProtoMapperTest {
                 assertThat(domainClasses).isNotEmpty();
 
                 for (Class<?> clazz : domainClasses) {
-                    assertNoProto(clazz.getCanonicalName());
+                    assertNoProto(clazz.getCanonicalName() == null ? clazz.getName() : clazz.getCanonicalName());
                     for (var field : clazz.getDeclaredFields()) {
                         assertNoProto(field.getGenericType().getTypeName());
                     }

@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.9    更新时间: 2026-10-20
+版本: 1.10    更新时间: 2026-10-21
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -61,7 +61,7 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 
 - **注册表服务**：`registry.v1` 四操作（register 无条件覆盖 / deregister 意图幂等 / update 幂等 upsert）与心跳全量上报对账（逐实例续约 + 缺席自动注册 + 内容变化覆盖，不做集合 diff）落地；批量部分失败语义（逐实例 `INVALID_ARGUMENT` 明细，weight ≤ 0 归一 100）。
 - **租约与过期**：心跳续约租约，默认 TTL **30s**（原产品 20s），过期清理周期默认 **1s**；TTL 判定用**单调时间源**——系统校时（NTP 跳变）不影响过期正确性。
-- **接入**：gRPC 服务（Spring Boot 官方 starter 装配，默认端口 9090；心跳为 bidi-stream 逐请求 ack，`seq` 归属 + `server_time_ms` 服务器时间基准）；同 key 变更事件有序派生（为 v0.2 集群复制预留，当前进程内出口为 no-op）。
+- **接入**：gRPC 服务（Spring Boot 官方 starter 装配，默认端口 9090；心跳为 bidi-stream 逐请求 ack，`seq` 归属 + `server_time_ms` 服务器时间基准）；同 key 变更事件有序派生（v0.2 phase-2 起由变更事件扇出消费）。
 - **工程形态**：registry-core 按 DDD 四层组织（ADR-015：application / domain / infrastructure，gRPC 接入在 server 模块）；37 单测 + 6 服务级集成测试（进程内起真实 gRPC 服务端到端验证）。
 
 **phase-3（自我保护 + 服务端快照 + readiness 门控）已交付**：
@@ -120,10 +120,19 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **配置动态性**：自我保护窗口、清理/快照周期、认证开关与凭证、management 查询 deadline 支持运行期变更（SCF 监听/每次取值）；监听地址与集群拓扑等启动期属性变更需重启。
 - **工程形态**：双监听/认证隔离/内部查询迁移/3 节点进程内成员互见 IT；proto、架构、开发规范与 API 文档同步。
 
+**v0.2 phase-2（变更事件扇出）已交付**：
+
+- **副本租约语义（继承原产品）**：副本与事实源是同一种租约——心跳纯续约发 `RENEW` 批量扇出维持 peer 副本；TTL 过期清理本地各自发生、产生的 DELETE **不扇出**（删除不跨节点传播，收不到续约的租约全集群分别过期）；复制入站零事件（防回环）、`RENEW` 到达而本地副本已被清理时自动补注册重建（分区恢复路径）。多节点配置（`cluster.members` + `cluster.self`）时启用扇出；单节点零开销（事件出口为 no-op）。
+- **扇出管线**：变更事件（NEW/UPDATE/DELETE/RENEW）经全局有界队列 → 聚合线程按 service 聚合批量（同实例变更合并、产生序保持、单批上限拆分）→ 每 peer 独立有界队列串行投递；投递失败全抖动指数退避重发同批（保序）；**确定性失败**（批次非法整批拒绝、滚动升级窗口 `UNIMPLEMENTED`、凭证不匹配）丢批续投不阻塞队头。队列满丢弃（全局丢当条、peer 队列丢最旧）+ 计数，丢失由自愈链兜底（变更再扇出 / 客户端 TTL 轮换 / bootstrap）。
+- **复制配置**（`artemis.registry.replication.*`，SCF）：`queueCapacity`（全局事件队列，静态，默认 16384）、`peerQueueCapacity`（per-peer 批队列，静态，默认 4096）、`maxBatchChanges`（单批上限，动态，默认 1024）、`retryInitialMs`/`retryMaxMs`（退避基数/上限，动态，默认 1s/60s）、`sendTimeoutMs`（投递 deadline，动态，默认 5s）。
+- **复制指标**（`/actuator/prometheus`）：`artemis.registry.replication.batches.sent|failed|rejected|dropped`（tag `peer`，前二者为投递结果、rejected 为确定性失败丢批、dropped 为 peer 队列满丢最旧）、`events.dropped`（全局队列满）、入站侧 `batches.received` / `applied.changes`。
+- **工程形态**：副本租约语义与扇出编排单测 + 3 节点进程内 IT（任一节点写入全节点最终一致、RENEW 维持、猝死全清理、过期重建、缺席 peer 退避收敛、指标）；proto `CHANGE_TYPE_RENEW=5`（兼容追加）。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.10 | 2026-10-21 | v0.2 phase-2 交付：变更事件扇出（副本租约继承原产品：RENEW 续约复制、清理不扇出、缺席补注册）、扇出管线与退避重试、复制配置项与指标；修正 v0.1 phase-2 节事件出口表述 |
 | 1.9 | 2026-10-20 | v0.2 phase-1 交付：replication.v1、双 gRPC 监听与认证隔离、静态多节点成员/自身识别、配置动态性；当前版本转 v0.2 |
 | 1.8 | 2026-10-19 | phase-8 交付节：Spring Boot starter 自动装配、CI 流水线、多阶段 Docker 镜像；开发者入口补镜像构建命令 |
 | 1.7 | 2026-10-19 | phase-7 交付节：Java 8 注册侧 SDK（fire-and-forget、心跳自愈、生命周期、SCF 配置、Micrometer 指标）；新增 SDK API 文档 |
