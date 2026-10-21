@@ -27,7 +27,8 @@ import org.mydotey.ai.artemis.registry.domain.ServiceKey;
 class ReplicationServiceImplTest {
 
     private static final ServiceKey KEY = new ServiceKey("default", "order-service");
-    private static final ClusterMember SELF = new ClusterMember("node-a", new ClusterEndpoint("10.0.0.1", 9093));
+    private static final ClusterMember SELF =
+            new ClusterMember("node-a", new ClusterEndpoint("10.0.0.1", 9093), new ClusterEndpoint("10.0.0.1", 9090));
 
     private final List<InstanceChange> events = new ArrayList<>();
     private InstanceRegistry registry;
@@ -37,7 +38,12 @@ class ReplicationServiceImplTest {
     void setUp() {
         registry = new InstanceRegistry(TestProperties.empty(), new MutableClock(), events::add);
         service = new ReplicationServiceImpl(
-                members(), new ReadinessGate(), registry, Clock.systemUTC(), new SimpleMeterRegistry());
+                members(),
+                new ReadinessGate(),
+                nodeId -> org.mydotey.ai.artemis.registry.domain.NodeState.UNKNOWN,
+                registry,
+                Clock.systemUTC(),
+                new SimpleMeterRegistry());
     }
 
     @Test

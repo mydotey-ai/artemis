@@ -3,17 +3,21 @@ package org.mydotey.ai.artemis.registry.application;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
+import java.util.ArrayList;
 import java.util.List;
 import org.mydotey.ai.artemis.registry.domain.Ack;
 import org.mydotey.ai.artemis.registry.domain.ClusterMember;
+import org.mydotey.ai.artemis.registry.domain.ClusterMemberStatus;
 import org.mydotey.ai.artemis.registry.domain.ClusterMembers;
 import org.mydotey.ai.artemis.registry.domain.ErrorInfo;
 import org.mydotey.ai.artemis.registry.domain.InstanceChange;
 import org.mydotey.ai.artemis.registry.domain.InstanceRegistry;
 import org.mydotey.ai.artemis.registry.domain.NodeState;
 import org.mydotey.ai.artemis.registry.domain.NodeStatus;
+import org.mydotey.ai.artemis.registry.domain.PeerStatusView;
 import org.mydotey.ai.artemis.registry.domain.ReplicationBatch;
 import org.mydotey.ai.artemis.registry.domain.ResponseStatus;
+import org.mydotey.ai.artemis.registry.domain.ServiceInstances;
 
 /**
  * 节点状态自报：就绪门映射（未 ready → STARTING，ready → UP），启动时刻取装配层时钟。
@@ -24,6 +28,7 @@ public final class ReplicationServiceImpl implements ReplicationService {
 
     private final ClusterMembers clusterMembers;
     private final ReadinessGate readinessGate;
+    private final PeerStatusView peerStatusView;
     private final InstanceRegistry registry;
     private final long startedAtMs;
     private final Counter batchesReceived;
@@ -32,11 +37,13 @@ public final class ReplicationServiceImpl implements ReplicationService {
     public ReplicationServiceImpl(
             ClusterMembers clusterMembers,
             ReadinessGate readinessGate,
+            PeerStatusView peerStatusView,
             InstanceRegistry registry,
             Clock clock,
             MeterRegistry meterRegistry) {
         this.clusterMembers = clusterMembers;
         this.readinessGate = readinessGate;
+        this.peerStatusView = peerStatusView;
         this.registry = registry;
         this.startedAtMs = clock.millis();
         this.batchesReceived = Counter.builder("artemis.registry.replication.batches.received")
@@ -55,8 +62,21 @@ public final class ReplicationServiceImpl implements ReplicationService {
     }
 
     @Override
-    public List<ClusterMember> members() {
-        return clusterMembers.members();
+    public List<ClusterMemberStatus> clusterNodes() {
+        String selfNodeId = clusterMembers.self().map(ClusterMember::nodeId).orElse(null);
+        NodeState selfState = readinessGate.isReady() ? NodeState.UP : NodeState.STARTING;
+        List<ClusterMemberStatus> nodes =
+                new ArrayList<>(clusterMembers.members().size());
+        for (ClusterMember member : clusterMembers.members()) {
+            NodeState state = member.nodeId().equals(selfNodeId) ? selfState : peerStatusView.stateOf(member.nodeId());
+            nodes.add(new ClusterMemberStatus(member, state));
+        }
+        return List.copyOf(nodes);
+    }
+
+    @Override
+    public List<ServiceInstances> bootstrapSnapshot() {
+        return registry.snapshots();
     }
 
     @Override

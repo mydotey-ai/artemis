@@ -19,13 +19,17 @@ enum NodeState {
   NODE_STATE_DOWN = 4;       // 显式下线
 }
 
-// 静态成员的最小连接信息。对外（SDK/管理面）端点不在此契约，
-// 由节点状态 API（phase-3）按部署形态确定后追加字段（field number 只增）。
+// 静态成员端点 + 观测态。对外（SDK/管理面）端点由 phase-3 追加（field number 只增）。
 message ClusterMember {
   string node_id = 1;
   // IPv6 地址带方括号（可直接拼接 host:port）；域名/IPv4 原样
   string peer_host = 2;
   int32 peer_port = 3;
+  // 对外（SDK/管理面）gRPC 端点（phase-3；集群模式必填）
+  string external_host = 4;
+  int32 external_port = 5;
+  // 本节点视角的观测态：self = 就绪门；peer = 后台探测结果；未探测/超时/异常 = UNKNOWN
+  NodeState state = 6;
 }
 
 message NodeStatus {
@@ -43,7 +47,8 @@ message GetNodeStatusResponse {
 
 message GetNodeStatusResponseData {
   NodeStatus self = 1;
-  repeated ClusterMember members = 2;   // 静态成员表（不含探测态）
+  // 静态成员 + 本节点视角观测态（self 成员状态同 self.state；peer 状态来自后台探测）
+  repeated ClusterMember members = 2;
 }
 
 // ---- 增量变更批量投递 ----
@@ -99,6 +104,13 @@ message BootstrapResponse {
 message BootstrapResponseData {
   // 分片；空分片 + 流正常结束 = 空注册表。中断/失败由客户端整轮重来（全量覆盖幂等）。
   repeated artemis.common.v1.ServiceInstances services = 1;
+}
+
+// 对外节点状态 API（SDK 三级容灾的节点列表来源）：self = 自报就绪态，
+// members.state = 本节点后台探测的观测态；探测有周期窗口，客户端仍以失败/熔断兜底。
+// 只绑定外部端口、保留外部认证；readiness 门控按方法名豁免（排障/引导信息面）。
+service NodeStatusService {
+  rpc GetNodeStatus(GetNodeStatusRequest) returns (GetNodeStatusResponse);
 }
 
 service ReplicationService {

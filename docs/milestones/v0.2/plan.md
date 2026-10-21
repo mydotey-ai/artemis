@@ -1,6 +1,6 @@
 # v0.2 版本规划
 
-版本: 1.1    更新时间: 2026-10-21
+版本: 1.2    更新时间: 2026-10-21
 
 ## 目标
 
@@ -27,7 +27,7 @@ phase-1 说明：`replication.v1` 一次定稿四类报文——成员/节点状
 
 phase-2 说明：扇出实现挂在 v0.1 已预留的 `ChangeListener` 端口上（回调在聚合锁内，必须排队移交专属有界 executor，不在回调内做 IO）；增量报文按 service 聚合批量。副本租约语义继承原产品（phase-2 设计 review 定案）：纯续约发 RENEW 事件扇出维持 peer 副本（副本 = 真实租约，靠续约复制保活），TTL 清理本地各自发生、DELETE 不扇出，复制入站零事件防回环、RENEW 缺席补注册重建——稳态复制流量与实例数解耦（详见架构 §4.1）。复制指标按 [架构 §6](../../arch/artemis-next-architecture.md)「复制 v0.2」内建。
 
-phase-3 说明：启动数据源三分支在 v0.1 已实现 ②/③，本 phase 插入分支①（存在已就绪 peer → 全量同步成功才 ready；失败定期重试、保持 not ready、不降级本地快照）；`RegistryBootstrap` 的「重启优先从 peer 同步」与本 phase 一并落地。节点状态 API 同时作为 SDK 存活节点列表来源（phase-5 消费）。
+phase-3 说明：启动数据源三分支在 v0.1 已实现 ②/③，本 phase 插入分支①（存在已就绪 peer → 全量同步成功才 ready；集群模式异步执行、全抖动指数退避重试、每轮尝试全部 UP 候选、确认过数据源后不降级本地快照；not ready 期间 `Replicate`/`Bootstrap` 返回 UNAVAILABLE 且快照不落盘）；`RegistryBootstrap` 的「重启优先从 peer 同步」与本 phase 一并落地。成员配置扩展为三段式（`<id>@<peer>@<external>`）；节点状态 API 落 `replication.v1.NodeStatusService`（外部端口、认证保留、readiness 按方法豁免），由后台单线程调度 + 虚拟线程并发探测全部 peer 维护成员观测态（周期/超时动态可配，失败=UNKNOWN），同时作为 SDK 存活节点列表来源（phase-5 消费，优先 UP + 熔断兜底）。探测只服务 API/观测，不参与复制扇出门控。
 
 phase-4 说明：沿用 v0.1 的滑动窗口算法，判定粒度从全局改为按服务；保护态指标加 service 维度、经节点状态/状态 API 可查。`stale` 数据标记的消费方出口归 v0.3 discovery，本版只保证保护态可观测。
 
@@ -48,5 +48,6 @@ phase-6 说明：优雅停机 = 先把自身标记为下线（节点状态 API �
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.2 | 2026-10-21 | phase-3 设计定案：说明补异步 bootstrap/退避/全候选、三段式成员配置、对外节点状态 API 与后台并发探测（不参与扇出门控） |
 | 1.1 | 2026-10-21 | phase-2 副本租约语义 review 定案（继承原产品：续约复制/清理不扇出/缺席补注册），phase-2 说明与验收方式同步修订 |
 | 1.0 | 2026-10-20 | 版本启动，初始 phase 拆分（6 phase） |

@@ -9,6 +9,7 @@ import org.mapstruct.Mapping;
 import org.mapstruct.factory.Mappers;
 import org.mydotey.ai.artemis.registry.domain.Ack;
 import org.mydotey.ai.artemis.registry.domain.ClusterMember;
+import org.mydotey.ai.artemis.registry.domain.ClusterMemberStatus;
 import org.mydotey.ai.artemis.registry.domain.ConfigProperty;
 import org.mydotey.ai.artemis.registry.domain.DeregisterRequest;
 import org.mydotey.ai.artemis.registry.domain.DeregisterResponse;
@@ -414,11 +415,15 @@ public interface RegistryProtoMapper {
                 .build();
     }
 
-    default org.mydotey.ai.artemis.proto.replication.v1.ClusterMember toProto(ClusterMember member) {
+    default org.mydotey.ai.artemis.proto.replication.v1.ClusterMember toProto(ClusterMemberStatus status) {
+        ClusterMember member = status.member();
         return org.mydotey.ai.artemis.proto.replication.v1.ClusterMember.newBuilder()
                 .setNodeId(member.nodeId())
                 .setPeerHost(wireHost(member.peer().host()))
                 .setPeerPort(member.peer().port())
+                .setExternalHost(wireHost(member.external().host()))
+                .setExternalPort(member.external().port())
+                .setState(toProto(status.state()))
                 .build();
     }
 
@@ -435,6 +440,19 @@ public interface RegistryProtoMapper {
             case UP -> org.mydotey.ai.artemis.proto.replication.v1.NodeState.NODE_STATE_UP;
             case DOWN -> org.mydotey.ai.artemis.proto.replication.v1.NodeState.NODE_STATE_DOWN;
         };
+    }
+
+    default NodeState toDomain(org.mydotey.ai.artemis.proto.replication.v1.NodeState state) {
+        return switch (state) {
+            case NODE_STATE_UNSPECIFIED, NODE_STATE_UNKNOWN, UNRECOGNIZED -> NodeState.UNKNOWN;
+            case NODE_STATE_STARTING -> NodeState.STARTING;
+            case NODE_STATE_UP -> NodeState.UP;
+            case NODE_STATE_DOWN -> NodeState.DOWN;
+        };
+    }
+
+    default NodeStatus toDomain(org.mydotey.ai.artemis.proto.replication.v1.NodeStatus status) {
+        return new NodeStatus(status.getNodeId(), toDomain(status.getState()), status.getStartedAtMs());
     }
 
     default org.mydotey.ai.artemis.proto.common.v1.ResponseStatus successStatus() {

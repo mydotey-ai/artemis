@@ -6,7 +6,7 @@ phase 设计文档与测试文档在各自 phase 开工（① worktree 开工）
 |---|---|---|
 | phase-1-peer-protocol | [phase-1-peer-protocol.md](phase-1-peer-protocol.md) | [phase-1-peer-protocol-test.md](phase-1-peer-protocol-test.md) |
 | phase-2-replication-fanout | [phase-2-replication-fanout.md](phase-2-replication-fanout.md) | [phase-2-replication-fanout-test.md](phase-2-replication-fanout-test.md) |
-| phase-3-peer-bootstrap | — | — |
+| phase-3-peer-bootstrap | [phase-3-peer-bootstrap.md](phase-3-peer-bootstrap.md) | [phase-3-peer-bootstrap-test.md](phase-3-peer-bootstrap-test.md) |
 | phase-4-self-protection-2 | — | — |
 | phase-5-sdk-failover | — | — |
 | phase-6-graceful-shutdown | — | — |

@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.10    更新时间: 2026-10-21
+版本: 1.11    更新时间: 2026-10-21
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -116,7 +116,7 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 
 - **复制契约**：`replication.v1` 一次定稿成员/节点状态、增量变更批量投递（按 service 聚合，unary 响应即确认）、全量 bootstrap（server-stream 分片）；本 phase 实现 `GetNodeStatus`，`Replicate`/`Bootstrap` 在 phase-2/3 实现前返回 `UNIMPLEMENTED`。
 - **双 gRPC 监听**：外部端口仅承载 SDK；新增内部 peer 端口（默认 **9093**，固定端口，地址无默认值——未配置时绑所有网卡）。内部端口承载 peer 复制/节点状态与 management 只读查询，使用独立认证账户（默认关闭；启用后与外部账户互不通用）。关闭认证的部署需以网络策略隔离内部端口。
-- **静态多节点成员**：`artemis.registry.cluster.members=<node-id>@<host>:<port>,...`（支持括号 IPv6），`artemis.registry.cluster.self` 显式标识本节点；非法条目/重复 id/self 未命中启动失败。节点对外端点不进入成员配置（留待节点状态 API 版本）。
+- **静态多节点成员**：`artemis.registry.cluster.members=<node-id>@<host>:<port>,...`（支持括号 IPv6），`artemis.registry.cluster.self` 显式标识本节点；非法条目/重复 id/self 未命中启动失败。节点对外端点在 phase-3 扩展为三段式成员条目（见 phase-3 交付节）。
 - **配置动态性**：自我保护窗口、清理/快照周期、认证开关与凭证、management 查询 deadline 支持运行期变更（SCF 监听/每次取值）；监听地址与集群拓扑等启动期属性变更需重启。
 - **工程形态**：双监听/认证隔离/内部查询迁移/3 节点进程内成员互见 IT；proto、架构、开发规范与 API 文档同步。
 
@@ -128,10 +128,21 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **复制指标**（`/actuator/prometheus`）：`artemis.registry.replication.batches.sent|failed|rejected|dropped`（tag `peer`，前二者为投递结果、rejected 为确定性失败丢批、dropped 为 peer 队列满丢最旧）、`events.dropped`（全局队列满）、入站侧 `batches.received` / `applied.changes`。
 - **工程形态**：副本租约语义与扇出编排单测 + 3 节点进程内 IT（任一节点写入全节点最终一致、RENEW 维持、猝死全清理、过期重建、缺席 peer 退避收敛、指标）；proto `CHANGE_TYPE_RENEW=5`（兼容追加）。
 
+**v0.2 phase-3（peer 全量 bootstrap 与节点状态 API）已交付**：
+
+- **peer 全量 bootstrap**：新节点加入/重启时若存在已就绪（`UP`）peer，异步从候选 peer 拉取全量注册表（server-stream 分片，按序列化字节预算），校验/归一后**整体替换**（零事件、TTL 从应用起算）——同步成功才 ready。失败按全抖动指数退避重试（默认 1s→10s），每轮依次尝试全部 `UP` 候选；**一旦确认过数据源，后续 peer 全部不可达也保持 not ready、不降级本地快照**。无 `UP` peer 时回退本地有效快照，否则空表 ready（分支②/③）。
+- **not ready 语义**：外部写流量由 readiness 拦截；内部 `Replicate`/`Bootstrap` 返回 `UNAVAILABLE`（发送侧保序重试，避免覆盖全量同步、也禁止未就绪节点充当数据源）；快照调度器在 not ready 期间不落盘（防止空表覆盖可回退快照）。
+- **成员配置**：`<node-id>@<peer-host>:<peer-port>@<external-host>:<external-port>`（集群模式三段必填；host 支持括号 IPv6）。对外端点显式配置以支持多网卡/NAT/K8s，节点状态 API 原样返回。
+- **节点状态 API**：外部 gRPC `artemis.replication.v1.NodeStatusService/GetNodeStatus`（保留外部认证；readiness 按方法名豁免，便于观察 `STARTING`）。返回 `self` 就绪态 + 全部成员的 peer/external 端点与**观测态**；观测态由后台探测维护——默认每 **5s**（`probeIntervalMs`）用虚拟线程**并发探测全部 peer**，单 peer/整轮超时默认 **1s**（`probeTimeoutMs`），失败/超时/nodeId 不匹配 = `UNKNOWN`，每轮整体重建。探测只服务 API/观测，不参与复制扇出门控；SDK（phase-5）以该列表为候选地址来源，优先 `UP`、连接失败/熔断兜底。
+- **配置（SCF）**：`artemis.registry.cluster.probeIntervalMs`、`probeTimeoutMs`（动态）；`artemis.registry.bootstrap.retryInitialMs`、`retryMaxMs`、`statusTimeoutMs`、`timeoutMs`、`shardBytes`（动态）；`artemis.registry.bootstrap.maxInboundMessageBytes`（静态）。
+- **指标**：`artemis.registry.bootstrap.attempts|failures|synced.instances`、`artemis.registry.cluster.probe.rounds`、`artemis.registry.cluster.probe.failures{peer}`、`artemis.registry.cluster.peers.up`（经 `/actuator/prometheus`）。
+- **工程形态**：探测并发/超时/恢复、启动分支、整体替换、bootstrap 分片等单测；集群 IT 覆盖新节点加入全量同步、重启优先 peer、无 UP peer 回退快照、已就绪 peer 同步失败重试恢复、对外节点状态 API（含停节点标记 UNKNOWN）。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.11 | 2026-10-21 | v0.2 phase-3 交付：peer 全量 bootstrap（异步/退避/整体替换/not ready 语义）、三段式成员配置、对外节点状态 API 与后台并发探测、配置与指标；修正 phase-1 交付节对外端点表述 |
 | 1.10 | 2026-10-21 | v0.2 phase-2 交付：变更事件扇出（副本租约继承原产品：RENEW 续约复制、清理不扇出、缺席补注册）、扇出管线与退避重试、复制配置项与指标；修正 v0.1 phase-2 节事件出口表述 |
 | 1.9 | 2026-10-20 | v0.2 phase-1 交付：replication.v1、双 gRPC 监听与认证隔离、静态多节点成员/自身识别、配置动态性；当前版本转 v0.2 |
 | 1.8 | 2026-10-19 | phase-8 交付节：Spring Boot starter 自动装配、CI 流水线、多阶段 Docker 镜像；开发者入口补镜像构建命令 |

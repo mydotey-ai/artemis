@@ -363,6 +363,45 @@ class InstanceRegistryTest {
         assertThat(registry.snapshot(KEY)).isEmpty();
     }
 
+    @Test
+    void should_replace_all_and_remove_absent_services_without_events() {
+        ServiceKey stale = new ServiceKey("default", "stale-service");
+        registry.register(KEY, List.of(instance("old")));
+        registry.register(stale, List.of(instance("s1")));
+        events.clear();
+
+        registry.replaceAll(List.of(new ServiceInstances(KEY, List.of(instance("i1"), instance("i2")))));
+
+        assertThat(events).isEmpty(); // 启动期整体替换零事件（D4）
+        assertThat(registry.snapshot(KEY))
+                .hasValueSatisfying(s -> assertThat(s.instances())
+                        .extracting(Instance::instanceId)
+                        .containsExactlyInAnyOrder("i1", "i2"));
+        assertThat(registry.snapshot(stale)).isEmpty(); // 快照中缺席的 service 被移除
+        assertThat(registry.snapshots()).hasSize(1);
+    }
+
+    @Test
+    void should_clear_registry_when_replace_all_with_empty_snapshot() {
+        registry.register(KEY, List.of(instance("i1")));
+
+        registry.replaceAll(List.of());
+
+        assertThat(registry.snapshots()).isEmpty();
+        assertThat(registry.snapshot(KEY)).isEmpty();
+    }
+
+    @Test
+    void should_reset_lease_from_replace_all_time() {
+        clock.advance(Duration.ofSeconds(29));
+        registry.replaceAll(List.of(new ServiceInstances(KEY, List.of(instance("i1")))));
+        clock.advance(Duration.ofSeconds(29)); // 距替换 29s < TTL
+
+        assertThat(registry.evictExpired()).isZero();
+        clock.advance(Duration.ofSeconds(2));
+        assertThat(registry.evictExpired()).isEqualTo(1);
+    }
+
     // ---- 租约明细与 TTL 配置（内部只读查询）----
 
     @Test

@@ -30,8 +30,10 @@ import org.mydotey.ai.artemis.registry.domain.ServiceKey;
 class ReplicationFanoutTest {
 
     private static final ServiceKey KEY = new ServiceKey("default", "order-service");
-    private static final ClusterMember SELF = new ClusterMember("node-a", new ClusterEndpoint("127.0.0.1", 19093));
-    private static final ClusterMember PEER = new ClusterMember("node-b", new ClusterEndpoint("127.0.0.1", 19094));
+    private static final ClusterMember SELF = new ClusterMember(
+            "node-a", new ClusterEndpoint("127.0.0.1", 19093), new ClusterEndpoint("127.0.0.1", 19090));
+    private static final ClusterMember PEER = new ClusterMember(
+            "node-b", new ClusterEndpoint("127.0.0.1", 19094), new ClusterEndpoint("127.0.0.1", 19091));
 
     private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
     private final List<ReplicationFanout> fanouts = new CopyOnWriteArrayList<>();

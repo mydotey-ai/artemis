@@ -251,6 +251,18 @@ public final class InstanceRegistry {
     }
 
     /**
+     * 整体替换（启动期 peer 全量 bootstrap 专用，D4 零事件）：清空当前注册表后按 {@link #restore}
+     * 重建全部来量（续约时刻 = now）。快照中缺席的 service 与同 service 内缺席的实例一并消失。
+     *
+     * <p>只允许在节点 not ready 时调用——readiness 门控保证外部写流量为零、复制入站被拒绝，
+     * 因此不存在与替换并发的事件写者/读者。
+     */
+    public void replaceAll(List<ServiceInstances> incoming) {
+        services.clear();
+        restore(incoming);
+    }
+
+    /**
      * 复制写（peer 增量事件的应用入口，原产品继承的副本租约语义）：NEW/UPDATE 覆盖写真实租约；
      * RENEW 命中续约、缺席补注册重建（分区恢复路径）；DELETE 幂等移除。
      * **不派发事件**（防回环，同 {@link #restore} 零事件不变量）。返回实际应用的变更数。

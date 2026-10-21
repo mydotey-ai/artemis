@@ -213,6 +213,11 @@ class ReplicationFanoutIT {
         ConfigurableApplicationContext context =
                 new SpringApplicationBuilder(ArtemisRegistryServer.class).run(args.toArray(String[]::new));
         contexts.add(context);
+        // 集群模式启动数据源异步执行：等待 ready 再驱动写入/查询（外部写与查询均受 readiness 门控）
+        TestAwait.await(
+                "node-" + index + " ready",
+                () -> context.getBean(org.mydotey.ai.artemis.registry.application.ReadinessGate.class)
+                        .isReady());
         return context;
     }
 
@@ -223,7 +228,7 @@ class ReplicationFanoutIT {
     /** reservePorts 的偶数位作外部端口、奇数位作 peer 端口。 */
     private static String membersString(List<Integer> ports) {
         return IntStream.range(0, NODE_COUNT)
-                .mapToObj(i -> nodeId(i) + "@127.0.0.1:" + peerPort(ports, i))
+                .mapToObj(i -> nodeId(i) + "@127.0.0.1:" + peerPort(ports, i) + "@127.0.0.1:" + externalPort(ports, i))
                 .collect(Collectors.joining(","));
     }
 

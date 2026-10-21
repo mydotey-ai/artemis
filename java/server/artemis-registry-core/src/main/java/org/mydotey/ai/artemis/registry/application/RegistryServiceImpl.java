@@ -202,19 +202,35 @@ public final class RegistryServiceImpl implements RegistryService {
             return 0;
         }
         // 回放走与 register 相同的校验/归一门：可解析但语义损坏的条目不得直入注册表
-        ValidatedServices validated = validateServices(snapshot.services());
-        if (validated.status().ack() != Ack.SUCCESS) {
-            log.warn("registry snapshot contained invalid entries, dropped during restore");
-        }
-        List<ServiceInstances> services = validated.groups().stream()
-                .map(group -> new ServiceInstances(group.key(), group.instances()))
-                .toList();
+        List<ServiceInstances> services = validatedServices(snapshot.services(), "registry snapshot");
         registry.restore(services);
-        int restored = services.stream()
-                .mapToInt(service -> service.instances().size())
-                .sum();
+        int restored = instanceCount(services);
         log.info("restored {} instances from registry snapshot (timestamp {})", restored, snapshot.timestampMs());
         return restored;
+    }
+
+    @Override
+    public int applyBootstrap(List<ServiceInstances> services) {
+        List<ServiceInstances> valid = validatedServices(services, "peer bootstrap");
+        registry.replaceAll(valid);
+        int applied = instanceCount(valid);
+        log.info("applied {} instances from peer bootstrap", applied);
+        return applied;
+    }
+
+    /** 校验/归一 + 丢弃非法条目（回放与 peer bootstrap 共用单一口径）。 */
+    private List<ServiceInstances> validatedServices(List<ServiceInstances> services, String source) {
+        ValidatedServices validated = validateServices(services);
+        if (validated.status().ack() != Ack.SUCCESS) {
+            log.warn("{} contained invalid entries, dropped during apply", source);
+        }
+        return validated.groups().stream()
+                .map(group -> new ServiceInstances(group.key(), group.instances()))
+                .toList();
+    }
+
+    private static int instanceCount(List<ServiceInstances> services) {
+        return services.stream().mapToInt(service -> service.instances().size()).sum();
     }
 
     // ---- 校验与归一（§8：应用层一次完成）----

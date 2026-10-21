@@ -11,6 +11,7 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.mydotey.ai.artemis.common.auth.BasicAuth;
+import org.mydotey.ai.artemis.registry.domain.ClusterMembers;
 import org.mydotey.ai.artemis.registry.server.auth.PeerAuthConfig;
 import org.mydotey.ai.artemis.registry.server.grpc.BasicAuthServerInterceptor;
 import org.mydotey.ai.artemis.registry.server.grpc.ReadinessInterceptor;
@@ -74,10 +75,23 @@ public class PeerServerConfiguration {
         return new PeerAuthConfig(properties);
     }
 
-    /** 出站 peer 复制传输（领域端口实现）：per-peer 惰性 channel，关闭随 context 释放。 */
+    /** per-peer channel 池：复制投递与 bootstrap 探测/拉取共用，关闭随 context 释放。 */
     @Bean(destroyMethod = "close")
-    GrpcPeerReplicator grpcPeerReplicator(StringProperties properties, PeerAuthConfig peerAuthConfig) {
-        return new GrpcPeerReplicator(properties, peerAuthConfig);
+    PeerChannels peerChannels(StringProperties properties, PeerAuthConfig peerAuthConfig) {
+        return new PeerChannels(properties, peerAuthConfig);
+    }
+
+    /** 出站 peer 复制传输（领域端口实现）。 */
+    @Bean
+    GrpcPeerReplicator grpcPeerReplicator(StringProperties properties, PeerChannels peerChannels) {
+        return new GrpcPeerReplicator(properties, peerChannels);
+    }
+
+    /** 出站启动数据源（状态查询 + 全量 bootstrap，领域端口实现）。 */
+    @Bean
+    GrpcPeerBootstrapSource grpcPeerBootstrapSource(
+            StringProperties properties, PeerChannels peerChannels, ClusterMembers clusterMembers) {
+        return new GrpcPeerBootstrapSource(properties, peerChannels, clusterMembers);
     }
 
     /** 命名虚拟线程 executor（gRPC handler 规范，guidelines §4.2）；关闭时中断任务，不无限等待。 */

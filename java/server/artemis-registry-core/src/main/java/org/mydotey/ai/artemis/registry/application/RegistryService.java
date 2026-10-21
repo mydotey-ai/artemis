@@ -1,5 +1,6 @@
 package org.mydotey.ai.artemis.registry.application;
 
+import java.util.List;
 import java.util.Optional;
 import org.mydotey.ai.artemis.registry.domain.DeregisterRequest;
 import org.mydotey.ai.artemis.registry.domain.DeregisterResponse;
@@ -47,4 +48,11 @@ public interface RegistryService {
      * 无效快照（缺失/损坏/超期）丢弃 + WARN + 返回 0（空表启动，不拒绝启动、不影响 ready）。
      */
     int restoreFromSnapshot();
+
+    /**
+     * 启动期 peer 全量应用（分支①）：与快照回放同一校验/归一门 → 注册表整体替换
+     * （零事件，TTL 从应用起算；快照中缺席的 service 一并移除）。仅 not ready 时调用。
+     * 返回应用实例数。
+     */
+    int applyBootstrap(List<ServiceInstances> services);
 }

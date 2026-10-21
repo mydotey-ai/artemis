@@ -20,13 +20,21 @@ abstract class AbstractIntervalScheduler implements AutoCloseable {
     private final ScheduledExecutorService executor;
     private final Property<String, Long> interval;
     private final Runnable task;
+    /** 首轮延迟；&lt; 0 表示等一个周期（周期任务），0 表示立即（探测类任务）。 */
+    private final long initialDelayMs;
+
     private final AtomicBoolean started = new AtomicBoolean();
     private volatile ScheduledFuture<?> future;
     private long generation; // executor-confined
 
     AbstractIntervalScheduler(String threadName, Property<String, Long> interval, Runnable task) {
+        this(threadName, interval, -1, task);
+    }
+
+    AbstractIntervalScheduler(String threadName, Property<String, Long> interval, long initialDelayMs, Runnable task) {
         this.interval = interval;
         this.task = task;
+        this.initialDelayMs = initialDelayMs;
         this.executor = Executors.newSingleThreadScheduledExecutor(
                 Thread.ofPlatform().name(threadName).daemon(true).factory());
         interval.addChangeListener(event -> reschedule());
@@ -38,16 +46,20 @@ abstract class AbstractIntervalScheduler implements AutoCloseable {
         }
         executor.execute(() -> {
             long gen = ++generation;
-            scheduleNext(gen);
+            schedule(gen, initialDelayMs >= 0 ? initialDelayMs : interval.getValue());
         });
     }
 
     private void scheduleNext(long gen) {
+        schedule(gen, interval.getValue());
+    }
+
+    private void schedule(long gen, long delayMs) {
         if (!started.get() || gen != generation) {
             return;
         }
         try {
-            future = executor.schedule(() -> runRound(gen), interval.getValue(), TimeUnit.MILLISECONDS);
+            future = executor.schedule(() -> runRound(gen), delayMs, TimeUnit.MILLISECONDS);
         } catch (RejectedExecutionException ignored) {
             // 关闭中
         }
@@ -94,5 +106,9 @@ abstract class AbstractIntervalScheduler implements AutoCloseable {
             current.cancel(false);
         }
         executor.shutdown();
+        onClose();
     }
+
+    /** 子类释放额外资源（在调度线程关闭后调用）。 */
+    protected void onClose() {}
 }

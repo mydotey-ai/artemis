@@ -17,10 +17,13 @@ import org.mydotey.ai.artemis.registry.domain.ClusterMembers;
 import org.mydotey.ai.artemis.registry.domain.InstanceRegistry;
 import org.mydotey.ai.artemis.registry.domain.LeaseEvictionScheduler;
 import org.mydotey.ai.artemis.registry.domain.MonotonicClock;
+import org.mydotey.ai.artemis.registry.domain.PeerBootstrapSource;
 import org.mydotey.ai.artemis.registry.domain.PeerReplicator;
+import org.mydotey.ai.artemis.registry.domain.PeerStatusView;
 import org.mydotey.ai.artemis.registry.domain.RegistrySnapshotStore;
 import org.mydotey.ai.artemis.registry.domain.SelfProtection;
 import org.mydotey.ai.artemis.registry.domain.SnapshotScheduler;
+import org.mydotey.ai.artemis.registry.infrastructure.ClusterNodeStatusMonitor;
 import org.mydotey.ai.artemis.registry.infrastructure.FileRegistrySnapshotStore;
 import org.mydotey.ai.artemis.registry.infrastructure.ReplicationFanout;
 import org.mydotey.ai.artemis.registry.infrastructure.ScheduledLeaseEvictionScheduler;
@@ -137,14 +140,20 @@ public class RegistryConfiguration {
     }
 
     @Bean(initMethod = "start", destroyMethod = "close")
-    @DependsOn("registryBootstrap") // 首轮清理须在快照回放完成后启动（恢复中也由聚合锁串行，此为显式意图）
+    @DependsOn("registryBootstrap") // 启动编排 bean 先就绪（单节点同步回放完成 / 集群模式异步已提交）
     LeaseEvictionScheduler leaseEvictionScheduler(RegistryService registryService, StringProperties properties) {
         return new ScheduledLeaseEvictionScheduler(properties, registryService::evictExpired);
     }
 
+    /** not ready 期间不落盘：分支①重试期间的空表不得覆盖可用于后续回退的本地快照。 */
     @Bean(initMethod = "start", destroyMethod = "close")
-    SnapshotScheduler snapshotScheduler(RegistryService registryService, StringProperties properties) {
-        return new ScheduledSnapshotScheduler(properties, registryService::writeSnapshot);
+    SnapshotScheduler snapshotScheduler(
+            RegistryService registryService, StringProperties properties, ReadinessGate readinessGate) {
+        return new ScheduledSnapshotScheduler(properties, () -> {
+            if (readinessGate.isReady()) {
+                registryService.writeSnapshot();
+            }
+        });
     }
 
     @Bean
@@ -152,9 +161,31 @@ public class RegistryConfiguration {
         return new ReadinessGate();
     }
 
-    @Bean
-    RegistryBootstrap registryBootstrap(RegistryService registryService, ReadinessGate readinessGate) {
-        return new RegistryBootstrap(registryService, readinessGate);
+    @Bean(destroyMethod = "close")
+    RegistryBootstrap registryBootstrap(
+            RegistryService registryService,
+            ReadinessGate readinessGate,
+            ClusterMembers clusterMembers,
+            PeerBootstrapSource peerBootstrapSource,
+            StringProperties properties,
+            MeterRegistry meterRegistry) {
+        return new RegistryBootstrap(
+                registryService, readinessGate, clusterMembers, peerBootstrapSource, properties, meterRegistry);
+    }
+
+    /** 后台 peer 状态探测；单节点模式不启动调度（零开销）。 */
+    @Bean(destroyMethod = "close")
+    ClusterNodeStatusMonitor clusterNodeStatusMonitor(
+            StringProperties properties,
+            ClusterMembers clusterMembers,
+            PeerBootstrapSource peerBootstrapSource,
+            MeterRegistry meterRegistry) {
+        ClusterNodeStatusMonitor monitor =
+                new ClusterNodeStatusMonitor(properties, clusterMembers, peerBootstrapSource, meterRegistry);
+        if (clusterMembers.self().isPresent()) {
+            monitor.start();
+        }
+        return monitor;
     }
 
     @Bean
@@ -176,10 +207,12 @@ public class RegistryConfiguration {
     ReplicationService replicationService(
             ClusterMembers clusterMembers,
             ReadinessGate readinessGate,
+            PeerStatusView peerStatusView,
             InstanceRegistry registry,
             Clock clock,
             MeterRegistry meterRegistry) {
-        return new ReplicationServiceImpl(clusterMembers, readinessGate, registry, clock, meterRegistry);
+        return new ReplicationServiceImpl(
+                clusterMembers, readinessGate, peerStatusView, registry, clock, meterRegistry);
     }
 
     @Bean
@@ -188,8 +221,9 @@ public class RegistryConfiguration {
     }
 
     @Bean
-    ReplicationGrpcService replicationGrpcService(ReplicationProtoFacade facade) {
-        return new ReplicationGrpcService(facade);
+    ReplicationGrpcService replicationGrpcService(
+            ReplicationProtoFacade facade, ReadinessGate readinessGate, StringProperties properties) {
+        return new ReplicationGrpcService(facade, readinessGate, properties);
     }
 
     @Bean

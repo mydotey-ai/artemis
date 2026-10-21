@@ -16,6 +16,7 @@ import org.mydotey.ai.artemis.proto.replication.v1.GetNodeStatusRequest;
 import org.mydotey.ai.artemis.proto.replication.v1.GetNodeStatusResponse;
 import org.mydotey.ai.artemis.proto.replication.v1.NodeState;
 import org.mydotey.ai.artemis.proto.replication.v1.ReplicationServiceGrpc;
+import org.mydotey.ai.artemis.registry.TestAwait;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 
@@ -35,12 +36,15 @@ class ClusterMembershipIT {
 
     @Test
     void should_see_all_members_and_reach_each_peer_when_three_nodes_started() throws Exception {
-        List<Integer> peerPorts = reservePorts(NODE_COUNT);
+        List<Integer> ports = reservePorts(NODE_COUNT * 2);
+        List<Integer> peerPorts = IntStream.range(0, NODE_COUNT)
+                .mapToObj(i -> ports.get(i * 2 + 1))
+                .toList();
         String members = IntStream.range(0, NODE_COUNT)
-                .mapToObj(i -> nodeId(i) + "@127.0.0.1:" + peerPorts.get(i))
+                .mapToObj(i -> nodeId(i) + "@127.0.0.1:" + peerPorts.get(i) + "@127.0.0.1:" + ports.get(i * 2))
                 .collect(Collectors.joining(","));
         for (int i = 0; i < NODE_COUNT; i++) {
-            contexts.add(startNode(i, peerPorts.get(i), members));
+            contexts.add(startNode(i, ports.get(i * 2), peerPorts.get(i), members));
         }
 
         for (int i = 0; i < NODE_COUNT; i++) {
@@ -62,6 +66,11 @@ class ClusterMembershipIT {
                     .extracting(member -> member.getPeerHost() + ":" + member.getPeerPort())
                     .containsExactlyElementsOf(
                             peerPorts.stream().map(port -> "127.0.0.1:" + port).toList());
+            assertThat(response.getData().getMembersList())
+                    .extracting(member -> member.getExternalHost() + ":" + member.getExternalPort())
+                    .containsExactlyElementsOf(IntStream.range(0, NODE_COUNT)
+                            .mapToObj(j -> "127.0.0.1:" + ports.get(j * 2))
+                            .toList());
             for (var member : response.getData().getMembersList()) {
                 ManagedChannel memberChannel = channel(member.getPeerHost(), member.getPeerPort());
                 try {
@@ -79,17 +88,23 @@ class ClusterMembershipIT {
         }
     }
 
-    private ConfigurableApplicationContext startNode(int index, int peerPort, String members) {
-        return new SpringApplicationBuilder(ArtemisRegistryServer.class)
+    private ConfigurableApplicationContext startNode(int index, int externalPort, int peerPort, String members) {
+        ConfigurableApplicationContext context = new SpringApplicationBuilder(ArtemisRegistryServer.class)
                 .run(
                         "--spring.application.name=artemis-registry",
                         "--spring.main.web-application-type=none",
-                        "--spring.grpc.server.port=0",
+                        "--spring.grpc.server.port=" + externalPort,
                         "--artemis.registry.internal.port=" + peerPort,
                         "--artemis.registry.internal.address=127.0.0.1",
                         "--artemis.registry.cluster.members=" + members,
                         "--artemis.registry.cluster.self=" + nodeId(index),
                         "--artemis.registry.snapshot.path=" + tempDir.resolve("snapshot-" + index + ".bin"));
+        // 集群模式启动数据源异步：等 ready 后状态才是 UP
+        TestAwait.await(
+                "node-" + index + " ready",
+                () -> context.getBean(org.mydotey.ai.artemis.registry.application.ReadinessGate.class)
+                        .isReady());
+        return context;
     }
 
     private String nodeId(int index) {

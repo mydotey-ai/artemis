@@ -19,9 +19,9 @@ import org.mydotey.scf.type.string.StringToListConverter;
 /**
  * 领域端口 {@link ClusterMembers} 的静态配置实现（架构 §4.1：成员抽象接口先行为主）。
  *
- * <p>成员条目 {@code <node-id>@<host>:<port>}（逗号分隔，host 支持括号 IPv6）；
- * 自身身份显式配置 {@code artemis.registry.cluster.self}，替代按 URL 子串猜测本机。
- * 成员表非空时 self 必填且必须命中；成员表为空（单节点）时 self 必须缺省。
+ * <p>成员条目 {@code <node-id>@<peer-host>:<peer-port>@<external-host>:<external-port>}
+ * （逗号分隔，host 支持括号 IPv6）；自身身份显式配置 {@code artemis.registry.cluster.self}，
+ * 替代按 URL 子串猜测本机。成员表非空时 self 必填且必须命中；成员表为空（单节点）时 self 必须缺省。
  * 非法条目/重复 id/端口越界/self 不合法均启动失败（fail-fast）。
  */
 public final class StaticClusterMembers implements ClusterMembers {
@@ -42,7 +42,7 @@ public final class StaticClusterMembers implements ClusterMembers {
                         List.of(),
                         StringToListConverter.DEFAULT,
                         null,
-                        "static cluster members <node-id>@<host>:<port> list"),
+                        "static cluster members <node-id>@<peer-host>:<peer-port>@<external-host>:<external-port> list"),
                 ScfProperties.staticString(properties, KEY_SELF, "", "static self node id in cluster members"));
     }
 
@@ -92,19 +92,22 @@ public final class StaticClusterMembers implements ClusterMembers {
                 continue;
             }
             String value = raw.trim();
-            int at = value.indexOf('@');
-            if (at <= 0 || at != value.lastIndexOf('@') || at == value.length() - 1) {
-                throw new IllegalArgumentException(KEY_MEMBERS + " has invalid member: " + value);
+            String[] parts = value.split("@", -1);
+            if (parts.length != 3) {
+                throw new IllegalArgumentException(KEY_MEMBERS
+                        + " has invalid member (expected <id>@<peer-host>:<peer-port>@<external-host>:<external-port>): "
+                        + value);
             }
-            String nodeId = value.substring(0, at).trim();
-            ClusterEndpoint peer = parseEndpoint(value.substring(at + 1).trim());
+            String nodeId = parts[0].trim();
+            ClusterEndpoint peer = parseEndpoint(parts[1].trim());
+            ClusterEndpoint external = parseEndpoint(parts[2].trim());
             if (nodeId.isEmpty()) {
                 throw new IllegalArgumentException(KEY_MEMBERS + " has invalid member: " + value);
             }
             if (!nodeIds.add(nodeId)) {
                 throw new IllegalArgumentException(KEY_MEMBERS + " has duplicate node id: " + nodeId);
             }
-            members.add(new ClusterMember(nodeId, peer));
+            members.add(new ClusterMember(nodeId, peer, external));
         }
         return List.copyOf(members);
     }
