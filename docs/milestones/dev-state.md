@@ -35,7 +35,7 @@
 | 回归测试 | done | dev-test.sh all 全绿（第 2 轮） |
 | 验证（人工） | done | 6 项全部通过 |
 | 文档同步 | done | 产品/架构/plan/API 文档/契约/索引已同步 |
-| 完工 | in-progress | 待用户发起 /mydotey-ai:commit |
+| 完工 | done | squash 合并并推送 main（aa7f009）；worktree 分支保留 |
 
 步骤状态枚举：pending | in-progress | done | skipped。
 
