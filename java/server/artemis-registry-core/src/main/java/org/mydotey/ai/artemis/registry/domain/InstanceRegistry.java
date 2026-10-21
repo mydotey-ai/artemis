@@ -5,7 +5,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Predicate;
 import lombok.extern.slf4j.Slf4j;
 import org.mydotey.scf.Property;
 import org.mydotey.scf.facade.StringProperties;
@@ -150,11 +152,21 @@ public final class InstanceRegistry {
     // ponytail: 全表 O(服务数×实例数) 扫描，10 万实例按 1s 周期实测容量；成瓶颈改按到期时间分桶，
     // 或每 holder 维护 volatile 最早续约下界实现无锁跳过（消每秒持锁扫描对同 holder 心跳续约的排队尖刺）
     public int evictExpired() {
+        return evictExpired(service -> false);
+    }
+
+    /**
+     * 过期清理：保护态服务整组跳过（服务级权威；未达服务级门槛时由 SelfProtection 回落节点级）。
+     */
+    public int evictExpired(Predicate<ServiceKey> protectedService) {
         long now = monotonicClock.monoMillis();
         long ttlMs = leaseTtlMs.getValue();
         int evicted = 0;
         for (Map.Entry<ServiceKey, ServiceHolder> entry : services.entrySet()) {
             ServiceKey key = entry.getKey();
+            if (protectedService.test(key)) {
+                continue;
+            }
             ServiceHolder holder = entry.getValue();
             synchronized (holder) {
                 if (services.get(key) != holder) {
@@ -177,6 +189,11 @@ public final class InstanceRegistry {
             }
         }
         return evicted;
+    }
+
+    /** 存活服务键的弱一致只读视图（供自我保护窗口回收）。 */
+    public Set<ServiceKey> serviceKeys() {
+        return services.keySet();
     }
 
     /** 读快照：共享不可变引用，零克隆；未注册 key 返回 empty。 */

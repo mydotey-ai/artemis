@@ -16,12 +16,14 @@ import org.mydotey.ai.artemis.management.domain.Instance;
 import org.mydotey.ai.artemis.management.domain.LeaseStatus;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryException;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryPort;
+import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
 import org.mydotey.ai.artemis.management.domain.ServiceSummary;
 import org.mydotey.ai.artemis.proto.common.v1.Ack;
 import org.mydotey.ai.artemis.proto.common.v1.ResponseStatus;
 import org.mydotey.ai.artemis.proto.management.v1.GetConfigStatusRequest;
 import org.mydotey.ai.artemis.proto.management.v1.GetLeaseStatusRequest;
+import org.mydotey.ai.artemis.proto.management.v1.GetSelfProtectionStatusRequest;
 import org.mydotey.ai.artemis.proto.management.v1.GetServiceInstancesRequest;
 import org.mydotey.ai.artemis.proto.management.v1.ListServicesRequest;
 import org.mydotey.ai.artemis.proto.management.v1.RegistryQueryServiceGrpc;
@@ -107,6 +109,17 @@ public final class RegistryQueryGrpcClient implements RegistryQueryPort, AutoClo
                 .setService(nullToEmpty(service))
                 .build()));
         ensureSuccess(response.getStatus(), "GetLeaseStatus");
+        return mapper.toDomain(response.getData());
+    }
+
+    @Override
+    public SelfProtectionStatus selfProtectionStatus(String namespace, String service, boolean includeNormal) {
+        var response = call(() -> stub().getSelfProtectionStatus(GetSelfProtectionStatusRequest.newBuilder()
+                .setNamespace(nullToEmpty(namespace))
+                .setService(nullToEmpty(service))
+                .setIncludeNormal(includeNormal)
+                .build()));
+        ensureSuccess(response.getStatus(), "GetSelfProtectionStatus");
         return mapper.toDomain(response.getData());
     }
 

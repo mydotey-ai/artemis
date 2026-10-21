@@ -148,9 +148,13 @@ public final class RegistryServiceImpl implements RegistryService {
         int renewals = validated.groups().stream()
                 .mapToInt(group -> group.instances().size())
                 .sum();
-        protection.recordRenewals(renewals); // 有效心跳实例数聚合后单次累加（D1：仅心跳计入续约统计）
         heartbeatInstances.increment(renewals);
+        // 先应用租约再计保护统计：确保新服务窗口创建时租约已存在，避免回收轮误删
         validated.groups().forEach(group -> registry.heartbeatUpsert(group.key(), group.instances()));
+        validated
+                .groups()
+                .forEach(group ->
+                        protection.recordRenewals(group.key(), group.instances().size()));
         return new HeartbeatResponse(validated.status(), new HeartbeatResponseData(clock.millis(), request.seq()));
     }
 
@@ -161,10 +165,9 @@ public final class RegistryServiceImpl implements RegistryService {
 
     @Override
     public int evictExpired() {
-        if (protection.isProtected()) {
-            return 0; // 保护态整轮跳过（与原产品一致）；显式 deregister 不经此路径、天然不受保护
-        }
-        int evicted = registry.evictExpired();
+        // 先评估（显式保护状态的唯一写入口），再按服务级/节点级判定跳过过期清理
+        protection.evaluate(registry.serviceKeys());
+        int evicted = registry.evictExpired(protection::isProtected);
         evictions.increment(evicted);
         return evicted;
     }

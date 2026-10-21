@@ -7,6 +7,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mydotey.ai.artemis.registry.InMemorySnapshotStore;
@@ -140,44 +141,95 @@ class RegistryServiceImplTest {
         service.heartbeat(new HeartbeatRequest(
                 List.of(new ServiceInstances(KEY, List.of(instance("i1"), instance("i2")))), 1L));
 
-        assertThat(protection.stats().windowRenewals()).isEqualTo(2);
+        assertThat(renewals(KEY)).isEqualTo(2);
 
         // 显式操作非续约信号，不计入窗口
         service.register(new RegisterRequest(List.of(new ServiceInstances(KEY, List.of(instance("i3"))))));
         service.heartbeat(new HeartbeatRequest(
                 List.of(new ServiceInstances(KEY, List.of(instance("i1"), instance("i2")))), 2L));
-        assertThat(protection.stats().windowRenewals()).isEqualTo(4);
+        assertThat(renewals(KEY)).isEqualTo(4);
 
         service.deregister(
                 new DeregisterRequest(List.of(new org.mydotey.ai.artemis.registry.domain.InstanceKey(KEY, "i1"))));
-        assertThat(protection.stats().windowRenewals()).isEqualTo(4);
+        assertThat(renewals(KEY)).isEqualTo(4);
+    }
+
+    @Test
+    void should_count_heartbeat_renewals_per_service_when_multi_service_heartbeat() {
+        ServiceKey other = new ServiceKey("default", "payment-service");
+        service.heartbeat(new HeartbeatRequest(
+                List.of(
+                        new ServiceInstances(KEY, List.of(instance("i1"), instance("i2"))),
+                        new ServiceInstances(other, List.of(instance("p1")))),
+                1L));
+        protection.evaluate(Set.of(KEY, other));
+
+        assertThat(protection.statuses("default", "order-service", true).get(0).windowRenewals())
+                .isEqualTo(2);
+        assertThat(protection
+                        .statuses("default", "payment-service", true)
+                        .get(0)
+                        .windowRenewals())
+                .isEqualTo(1);
+        assertThat(protection.nodeStats().windowRenewals()).isEqualTo(3);
     }
 
     @Test
     void should_skip_eviction_when_protected() {
         // 心跳 100 达峰（≥ minCount 5）→ 静默 11s 滑出窗口 → 续约量 0 < 100×0.85 → 保护态
         service.heartbeat(new HeartbeatRequest(List.of(new ServiceInstances(KEY, List.of(instance("i1")))), 1L));
-        protection.recordRenewals(100);
+        protection.recordRenewals(KEY, 100);
         clock.advance(Duration.ofSeconds(11));
-        assertThat(protection.isProtected()).isTrue();
+        protection.evaluate(Set.of(KEY));
+        assertThat(protection.isProtected(KEY)).isTrue();
 
         clock.advance(Duration.ofSeconds(30)); // 距最后续约超 TTL
-        assertThat(service.evictExpired()).isZero(); // 保护态整轮跳过
+        assertThat(service.evictExpired()).isZero(); // 该服务保护态跳过过期清理
         assertThat(service.getInstances(KEY)).isPresent();
 
         // 退出保护（心跳恢复）后过期照常清理
-        protection.recordRenewals(90);
+        protection.recordRenewals(KEY, 90);
         clock.advance(Duration.ofSeconds(1));
         assertThat(service.evictExpired()).isEqualTo(1);
         assertThat(service.getInstances(KEY)).isEmpty();
     }
 
     @Test
+    void should_skip_only_protected_service_when_evicting() {
+        ServiceKey other = new ServiceKey("default", "payment-service");
+        ServiceKey keepAlive = new ServiceKey("default", "keep-alive");
+        service.heartbeat(new HeartbeatRequest(
+                List.of(
+                        new ServiceInstances(KEY, List.of(instance("i1"))),
+                        new ServiceInstances(other, List.of(instance("p1"))),
+                        new ServiceInstances(keepAlive, List.of(instance("k1")))),
+                1L));
+        protection.recordRenewals(KEY, 100); // 达服务级门槛
+        protection.recordRenewals(keepAlive, 1000); // 保持节点级健康
+
+        clock.advance(Duration.ofSeconds(11));
+        protection.recordRenewals(keepAlive, 1000);
+        protection.evaluate(Set.of(KEY, other, keepAlive));
+        assertThat(protection.isProtected(KEY)).isTrue();
+        assertThat(protection.isProtected(other)).isFalse(); // 峰值 2 < minCount，节点健康 → 不保护
+
+        clock.advance(Duration.ofSeconds(30));
+        service.heartbeat(new HeartbeatRequest(List.of(new ServiceInstances(keepAlive, List.of(instance("k1")))), 2L));
+        protection.recordRenewals(keepAlive, 1000);
+
+        assertThat(service.evictExpired()).isEqualTo(1); // 只摘除 other，KEY 保护、keepAlive 续约
+        assertThat(service.getInstances(KEY)).isPresent();
+        assertThat(service.getInstances(other)).isEmpty();
+        assertThat(service.getInstances(keepAlive)).isPresent();
+    }
+
+    @Test
     void should_allow_deregister_when_protected() {
         service.register(new RegisterRequest(List.of(new ServiceInstances(KEY, List.of(instance("i1"))))));
-        protection.recordRenewals(100);
+        protection.recordRenewals(KEY, 100);
         clock.advance(Duration.ofSeconds(11));
-        assertThat(protection.isProtected()).isTrue();
+        protection.evaluate(Set.of(KEY));
+        assertThat(protection.isProtected(KEY)).isTrue();
         events.clear();
 
         var response = service.deregister(
@@ -267,6 +319,11 @@ class RegistryServiceImplTest {
                         .properties(),
                 meters,
                 clock);
+    }
+
+    private long renewals(ServiceKey key) {
+        protection.evaluate(Set.of(key));
+        return protection.statuses(key.namespace(), key.service(), true).get(0).windowRenewals();
     }
 
     private static Instance instance(String instanceId) {

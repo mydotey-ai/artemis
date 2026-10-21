@@ -30,9 +30,11 @@ import org.mydotey.ai.artemis.registry.domain.RegisterRequest;
 import org.mydotey.ai.artemis.registry.domain.RegisterResponse;
 import org.mydotey.ai.artemis.registry.domain.RegisterResponseData;
 import org.mydotey.ai.artemis.registry.domain.ResponseStatus;
+import org.mydotey.ai.artemis.registry.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.registry.domain.ServiceInstanceErrors;
 import org.mydotey.ai.artemis.registry.domain.ServiceInstances;
 import org.mydotey.ai.artemis.registry.domain.ServiceKey;
+import org.mydotey.ai.artemis.registry.domain.ServiceProtectionStatus;
 import org.mydotey.ai.artemis.registry.domain.ServiceSummary;
 import org.mydotey.ai.artemis.registry.domain.UpdateRequest;
 import org.mydotey.ai.artemis.registry.domain.UpdateResponse;
@@ -313,6 +315,32 @@ public interface RegistryProtoMapper {
         return org.mydotey.ai.artemis.proto.management.v1.GetLeaseStatusResponse.newBuilder()
                 .setStatus(successStatus())
                 .setData(data.setTruncated(status.truncated()))
+                .build();
+    }
+
+    default org.mydotey.ai.artemis.proto.management.v1.GetSelfProtectionStatusResponse
+            toGetSelfProtectionStatusResponse(SelfProtectionStatus status) {
+        org.mydotey.ai.artemis.proto.management.v1.GetSelfProtectionStatusResponseData.Builder data =
+                org.mydotey.ai.artemis.proto.management.v1.GetSelfProtectionStatusResponseData.newBuilder()
+                        .setTrackedServices(status.trackedServices())
+                        .setProtectingServices(status.protectingServices())
+                        .setTruncated(status.truncated())
+                        .setNode(org.mydotey.ai.artemis.proto.management.v1.SelfProtectionStats.newBuilder()
+                                .setWindowRenewals(status.node().windowRenewals())
+                                .setMaxCount(status.node().maxCount())
+                                .setProtecting(status.node().protecting()));
+        for (ServiceProtectionStatus service : status.services()) {
+            data.addServices(org.mydotey.ai.artemis.proto.management.v1.ServiceSelfProtectionStatus.newBuilder()
+                    .setService(toProto(service.service()))
+                    .setWindowRenewals(service.windowRenewals())
+                    .setMaxCount(service.maxCount())
+                    .setNodeFallback(service.nodeFallback())
+                    .setProtecting(service.protecting())
+                    .setProtectingForMs(service.protectingForMs()));
+        }
+        return org.mydotey.ai.artemis.proto.management.v1.GetSelfProtectionStatusResponse.newBuilder()
+                .setStatus(successStatus())
+                .setData(data)
                 .build();
     }
 

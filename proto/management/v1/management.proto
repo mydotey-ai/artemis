@@ -76,6 +76,47 @@ message GetLeaseStatusResponseData {
   bool truncated = 3;
 }
 
+// ---- 自我保护 2.0 按服务状态（v0.2 phase-4，ADR-017）----
+
+message GetSelfProtectionStatusRequest {
+  // 可选过滤：空 = 全部
+  string namespace = 1;
+  string service = 2;
+  // 默认 false：未指定 service 时仅返回 PROTECTING 服务。
+  // 指定 namespace + service 时该服务总是返回（无本地窗口时零计数并按节点级兜底）；
+  // 仅指定 service 且无匹配本地窗口时返回空。
+  bool include_normal = 3;
+}
+
+message ServiceSelfProtectionStatus {
+  artemis.common.v1.ServiceKey service = 1;
+  int64 window_renewals = 2;   // 当前窗口只读求和
+  int64 max_count = 3;         // 历史峰值（可能已回落）
+  // 服务级未启用（无本地窗口或峰值未达 minCount）：过期清理取 node.protecting 判定
+  bool node_fallback = 6;
+  // 服务级显式状态：node_fallback=true 时实际保护判定 = node.protecting
+  bool protecting = 4;
+  // 服务级 PROTECTING 已持续时长（单调钟计算，跨进程不可比）；NORMAL 时为 0
+  int64 protecting_for_ms = 5;
+}
+
+message GetSelfProtectionStatusResponse {
+  artemis.common.v1.ResponseStatus status = 1;
+  GetSelfProtectionStatusResponseData data = 2;
+}
+
+message GetSelfProtectionStatusResponseData {
+  int64 tracked_services = 1;
+  // 服务级 PROTECTING 服务数（即默认 services 列表口径；节点级兜底的服务不计入）
+  int64 protecting_services = 2;
+  // 按 (namespace, service) 升序；默认仅 PROTECTING，include_normal 时含 NORMAL
+  repeated ServiceSelfProtectionStatus services = 3;
+  // 超过服务端单次返回上限（10000）时为 true
+  bool truncated = 4;
+  // 节点级窗口统计（v0.1 语义，用于区分节点级故障与单服务异常）
+  SelfProtectionStats node = 5;
+}
+
 message GetConfigStatusRequest {}
 
 message ConfigProperty {
@@ -103,4 +144,5 @@ service RegistryQueryService {
   rpc GetServiceInstances(GetServiceInstancesRequest) returns (GetServiceInstancesResponse);
   rpc GetLeaseStatus(GetLeaseStatusRequest) returns (GetLeaseStatusResponse);
   rpc GetConfigStatus(GetConfigStatusRequest) returns (GetConfigStatusResponse);
+  rpc GetSelfProtectionStatus(GetSelfProtectionStatusRequest) returns (GetSelfProtectionStatusResponse);
 }

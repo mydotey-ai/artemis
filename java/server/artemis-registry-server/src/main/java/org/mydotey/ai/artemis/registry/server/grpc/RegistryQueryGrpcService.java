@@ -7,6 +7,8 @@ import org.mydotey.ai.artemis.proto.management.v1.GetConfigStatusRequest;
 import org.mydotey.ai.artemis.proto.management.v1.GetConfigStatusResponse;
 import org.mydotey.ai.artemis.proto.management.v1.GetLeaseStatusRequest;
 import org.mydotey.ai.artemis.proto.management.v1.GetLeaseStatusResponse;
+import org.mydotey.ai.artemis.proto.management.v1.GetSelfProtectionStatusRequest;
+import org.mydotey.ai.artemis.proto.management.v1.GetSelfProtectionStatusResponse;
 import org.mydotey.ai.artemis.proto.management.v1.GetServiceInstancesRequest;
 import org.mydotey.ai.artemis.proto.management.v1.GetServiceInstancesResponse;
 import org.mydotey.ai.artemis.proto.management.v1.ListServicesRequest;
@@ -43,6 +45,12 @@ public final class RegistryQueryGrpcService extends RegistryQueryServiceGrpc.Reg
     @Override
     public void getLeaseStatus(GetLeaseStatusRequest request, StreamObserver<GetLeaseStatusResponse> responseObserver) {
         dispatch(responseObserver, () -> facade.getLeaseStatus(request));
+    }
+
+    @Override
+    public void getSelfProtectionStatus(
+            GetSelfProtectionStatusRequest request, StreamObserver<GetSelfProtectionStatusResponse> responseObserver) {
+        dispatch(responseObserver, () -> facade.getSelfProtectionStatus(request));
     }
 
     @Override

@@ -1,6 +1,6 @@
 # registry 内部只读查询 API
 
-版本: 1.2    更新时间: 2026-10-20
+版本: 1.3    更新时间: 2026-10-21
 
 > 本文定义 registry 提供给管理面的只读事实查询契约（management-service 消费、registry 实现，ADR-016）。**非 SDK 公开 API**：契约位于 `management.v1`（管理面组），client SDK 不生成；面向用户的 Admin HTTP API 属 management-service（phase-6）。
 
@@ -64,6 +64,35 @@
 
 大集群应按 namespace/service 过滤查询；无过滤时最多返回 10000 条（约 1 MB，低于 gRPC 默认 4 MiB 入站上限）。
 
+### 3.5 `GetSelfProtectionStatus`（v0.2 phase-4，ADR-017）
+
+`GetSelfProtectionStatusRequest { string namespace; string service; bool include_normal; }` → `GetSelfProtectionStatusResponse`
+
+自我保护 2.0 状态：节点级兜底窗口 + 按服务窗口。**`GetLeaseStatus.protection` 仍只返回节点级统计**，本方法是按服务排障的独立入口。
+
+| 请求字段 | 说明 |
+|---|---|
+| `namespace` | 可选过滤；空 = 全部 |
+| `service` | 可选过滤；指定 `namespace + service` 时该服务总是返回（NORMAL 也返回，无本地窗口时返回零计数条目） |
+| `include_normal` | 默认 `false`：未指定 `service` 时仅返回服务级 PROTECTING 条目；指定 `service` 时该字段不影响该服务返回 |
+
+响应 `data`：
+
+| 字段 | 说明 |
+|---|---|
+| `tracked_services` | 本节点有本地心跳窗口的服务数 |
+| `protecting_services` | 服务级 PROTECTING 服务数（与默认 `services` 列表同口径；节点级兜底服务不计入） |
+| `services[]` | 按 `(namespace, service)` 升序；默认仅 PROTECTING |
+| `services[].window_renewals` | 当前窗口续约量（查询时只读求和，不受清理周期影响） |
+| `services[].max_count` | 历史峰值（可能已按 `maxCountResetMs` 或窗口调参回落） |
+| `services[].node_fallback` | 服务级未启用（无本地窗口或峰值 < `minCount`），清理判定取 `node.protecting` |
+| `services[].protecting` | 服务级显式状态 |
+| `services[].protecting_for_ms` | 服务级 PROTECTING 持续时长（单调钟计算，跨进程不可比）；NORMAL 为 0 |
+| `truncated` | 条目超过单次上限（**10000**）时为 true |
+| `node` | 节点级窗口统计（`window_renewals`/`max_count`/`protecting`） |
+
+**有效保护判定**：`protecting || (node_fallback && node.protecting)`。无本地窗口（仅副本）或峰值未达 `minCount` 的小服务由节点级兜底；服务级达门槛后以服务级状态为准。
+
 ## 4. 错误语义
 
 | 场景 | 结果 |
@@ -83,6 +112,7 @@
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.3 | 2026-10-21 | v0.2 phase-4：新增 `GetSelfProtectionStatus`（按服务保护态、`node_fallback`、10000 条上限） |
 | 1.2 | 2026-10-20 | v0.2：认证开关/凭证动态化（支持运行期轮换） |
 | 1.1 | 2026-10-20 | v0.2：查询迁移到 registry 内部 peer 端口，独立内部认证且默认关闭 |
 | 1.0 | 2026-10-19 | 初版：registry 内部只读查询四条 RPC、脱敏、排序、上限与错误语义 |

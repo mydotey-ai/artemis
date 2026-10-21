@@ -1,6 +1,6 @@
 # 新一代 Artemis 架构设计
 
-版本: 1.29    更新时间: 2026-10-21
+版本: 1.30    更新时间: 2026-10-21
 
 > 本文是新一代 Artemis（重设计产品）的架构设计基线：总体架构、核心机制、技术栈策略与关键决策记录。产品定位与版本切分见 [产品规划与路线图](../product/artemis-next-roadmap.md)；设计输入来自 [原产品能力基线](../legacy/legacy-product-analysis.md)（§5 可继承资产 / §6 局限清单）与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -130,7 +130,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 - 服务端快照：内存注册表定期落盘（快照带落盘时间戳，重启只回放**时效内**快照，默认最长 1h，超期视为无效；时间戳超前 now 超过 1min 的时钟回拨宽容上限亦视为无效，防损坏/异常时钟使时效判定失效）；重启优先从已就绪 peer 全量同步，无已就绪 peer 回放本地有效快照——消除「全集群重启依赖客户端风暴重注册」的结构性缺口。
 - 消费方磁盘快照（发现侧 SDK，v0.3）：SDK 持久化最后已知服务列表，冷启动可回放、server 全挂时兜底。注册侧 SDK 不落盘：注册事实源是业务代码自身，重启重新注册 + 心跳幂等收敛天然自愈。
 
-**自我保护 2.0**：按服务粒度统计续约滑动窗口（替换全局单阈值）；保护态是一等显式状态——指标暴露、API 可查、经 discovery 下发数据带 `stale` 标记（消费方可感知降级）；阈值可配。
+**自我保护 2.0（两层判定，[ADR-017](../decisions/adr-017-self-protection-two-layer.md)）**：保留节点级全局滑动窗口作为网络分区/小服务/纯副本兜底；新增每服务窗口，服务峰值达 `minCount` 后服务级状态权威，否则回落节点级。保护态是一等显式状态——`NORMAL/PROTECTING` + `protectingSince`，由 1s 清理调度周期评估（唯一写入口），迁移计数/日志/指标可查；节点健康时服务窗口峰值 `maxCountResetMs` 未抬升即回落（限制单服务客户端迁移造成的永久保护），节点级保护中不回落。指标有界：节点级沿用 v0.1 gauge，服务级 `service.protection{namespace,service}` 仅保护中注册 + 保护中服务数/迁移计数。保护态经 management 状态 API（`GetSelfProtectionStatus`）可查，经 discovery 下发数据带 `stale` 标记（v0.3）；阈值可配。各节点独立判定，保护态不复制/不持久化，且不抑制复制（仅跳过本地过期清理）。
 
 **readiness 门控（继承）**：HTTP 出口为管理端口 `/actuator/health/readiness` 与外部 `/readyz`（未就绪 503）；启动数据源按优先级三分支——① **存在已就绪 peer**：直接从任一已就绪 peer 全量同步，同步成功即 ready（不设数据非空门槛，空数据 peer 也算同步成功），同步失败定期重试、保持不 ready、不降级本地快照（数据源存在时带旧数据服务是错误行为）；② **无已就绪 peer**：回放本地时效内快照（见持久化节，超期/损坏/缺失均视为无效）；③ **无有效快照**：空表直接 ready（心跳即注册，客户端自愈补齐）。不存在已就绪 peer（空集群/首个节点/全集群同时冷启动）不等待 peer——修复原产品双重冷启动死锁（无 UP peer 永不就绪 + `replicationInstanceCount > 0` 空数据门槛，legacy runtime §3.3）。集群模式分支①**异步执行**（不阻塞端口绑定，节点状态 API 可观察 STARTING）：首轮立即、失败按全抖动指数退避（1s→10s，修正原产品固定 1s 轮询），每轮依次尝试**全部** UP 候选；一旦确认过已就绪 peer，后续即使 peer 暂时全部不可达也**不降级本地快照**。not ready 期间：外部写流量由 readiness 拦截、`Replicate`/`Bootstrap` 返回 UNAVAILABLE（发送侧保序重试），且快照调度器不落盘（防止空表覆盖可回退快照）。**不继承 force 开关族**（force-up/force-down 6 键旁路，原产品死锁引导补丁，legacy §7.3–7.6 判为危险开关/口径分裂/DOWN 粘性缺陷簇，且发布样例常开致门控形同虚设）：死锁根因消除后引导必要性消失；唯一长等待场景（有已就绪 peer 但同步持续失败）的逃生路径为调整静态成员配置移除故障 peer（重启后按「无已就绪 peer」走 ②/③ 直接 ready，收进自洽的单节点语义，避免留在集群跳过同步造成的复制分叉）。
 
@@ -193,7 +193,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 | 认证 | v0.1 起默认开启（各服务本地单账户；v0.4 起由 management 统一账户接管），吸取 Nacos 3.0 才默认鉴权的教训；显式配置方可关闭（eval 场景） |
 | TLS | v1.0 支持（内外通道均可启），内网部署可配明文 |
 | RBAC | v1.0 |
-| metrics | Micrometer + Prometheus 格式，v0.1 第一天起按版本递补：心跳/租约/保护态 v0.1；复制 v0.2（`batches.sent/failed/rejected/dropped`、`batches.received`、`applied.changes`）+ bootstrap（`attempts/failures/synced.instances`）+ 节点探测（`cluster.probe.rounds/failures`、`cluster.peers.up`）；推送 v0.3 |
+| metrics | Micrometer + Prometheus 格式，v0.1 第一天起按版本递补：心跳/租约/节点级保护态 v0.1；复制 v0.2（`batches.sent/failed/rejected/dropped`、`batches.received`、`applied.changes`）+ bootstrap（`attempts/failures/synced.instances`）+ 节点探测（`cluster.probe.rounds/failures`、`cluster.peers.up`）+ 保护态 2.0（节点级 gauge 保留；`service.protection{namespace,service}` 仅保护中注册、`service.protection.count`、`service.protection.transitions{to}`）；推送 v0.3 |
 | 告警 | 走 Prometheus + Alertmanager 生态（不自建），关键告警规则（保护态触发、节点失联）随 v1.0 提供示例配置 |
 | log | 结构化 JSON，v0.1 第一天 |
 | trace | OpenTelemetry，v0.1 第一天 |
@@ -220,6 +220,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 | D14 | cluster 不进 ServiceKey（来源标识在投影边界注入） | [adr-014](../decisions/adr-014-cluster-out-of-service-key.md) |
 | D15 | DDD 四层（接入层 server 承载 / application / domain / infrastructure，领域为核心）+ 层间模型转换 | [adr-015](../decisions/adr-015-layered-model-inside-core.md) |
 | D16 | 管理面从 v0.1 独立交付（management-service 持有摘除记录；registry 只提供只读事实查询） | [adr-016](../decisions/adr-016-management-service-day-one.md) |
+| D17 | 自我保护 2.0：节点级兜底 + 服务级双层保护、显式状态与超时回落 | [adr-017](../decisions/adr-017-self-protection-two-layer.md) |
 
 ## 8. 与原产品的对照（资产继承与局限修复）
 
@@ -257,6 +258,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.30 | 2026-10-21 | v0.2 phase-4 设计定案（ADR-017）：§4.1 自我保护 2.0 改为节点级兜底 + 服务级双层、显式状态机/周期评估/超时回落、独立保护状态 API、保护态不抑制复制；§6 指标补保护态 2.0；§7 增 D17 |
 | 1.29 | 2026-10-21 | v0.2 phase-3 设计定案：§2.2 外部端口补对外节点状态 API（认证保留/readiness 按方法豁免）；§4.1 分支①异步/退避/尝试全部候选/不降级快照、未就绪拒绝 Replicate/Bootstrap 与快照落盘守卫；成员配置三段式（含对外端点）与后台并发探测（不参与扇出门控）；§6 指标补 bootstrap/探测 |
 | 1.28 | 2026-10-21 | v0.2 phase-2 设计定案（副本租约继承原产品）：§4.1 扇出节改写——续约复制维持副本、RENEW 事件、清理 DELETE 不扇出、入站零事件；「稳态心跳零复制流量」与「纯续约零事件」表述相应修订（RENEW 批量合并后流量与实例数解耦） |
 | 1.27 | 2026-10-20 | §2.2 内部端口：地址无默认值（未配置绑所有网卡）、端口必须固定（不支持 0） |

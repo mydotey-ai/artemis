@@ -7,7 +7,9 @@ import org.mydotey.ai.artemis.management.domain.InstanceStatus;
 import org.mydotey.ai.artemis.management.domain.LeaseDetail;
 import org.mydotey.ai.artemis.management.domain.LeaseStatus;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStats;
+import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
+import org.mydotey.ai.artemis.management.domain.ServiceProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceSummary;
 
 /**
@@ -54,6 +56,30 @@ public final class ManagementProtoMapper {
                         protection.getWindowRenewals(), protection.getMaxCount(), protection.getProtecting()),
                 leases,
                 data.getTruncated());
+    }
+
+    public SelfProtectionStatus toDomain(
+            org.mydotey.ai.artemis.proto.management.v1.GetSelfProtectionStatusResponseData data) {
+        List<ServiceProtectionStatus> services =
+                data.getServicesList().stream().map(this::toDomain).toList();
+        var node = data.getNode();
+        return new SelfProtectionStatus(
+                data.getTrackedServices(),
+                data.getProtectingServices(),
+                new SelfProtectionStats(node.getWindowRenewals(), node.getMaxCount(), node.getProtecting()),
+                services,
+                data.getTruncated());
+    }
+
+    private ServiceProtectionStatus toDomain(
+            org.mydotey.ai.artemis.proto.management.v1.ServiceSelfProtectionStatus status) {
+        return new ServiceProtectionStatus(
+                toDomain(status.getService()),
+                status.getWindowRenewals(),
+                status.getMaxCount(),
+                status.getNodeFallback(),
+                status.getProtecting(),
+                status.getProtectingForMs());
     }
 
     public ConfigProperty toDomain(org.mydotey.ai.artemis.proto.management.v1.ConfigProperty property) {

@@ -21,8 +21,11 @@ import org.mydotey.ai.artemis.registry.domain.RegisterRequest;
 import org.mydotey.ai.artemis.registry.domain.RegisterResponse;
 import org.mydotey.ai.artemis.registry.domain.RegisterResponseData;
 import org.mydotey.ai.artemis.registry.domain.ResponseStatus;
+import org.mydotey.ai.artemis.registry.domain.SelfProtectionStats;
+import org.mydotey.ai.artemis.registry.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.registry.domain.ServiceInstanceErrors;
 import org.mydotey.ai.artemis.registry.domain.ServiceKey;
+import org.mydotey.ai.artemis.registry.domain.ServiceProtectionStatus;
 
 /** mapper 往返与分层守护：dto（proto 生成消息）只出现在 server 接入层与 application 转换边界。 */
 class RegistryProtoMapperTest {
@@ -180,6 +183,33 @@ class RegistryProtoMapperTest {
                 throw new IllegalStateException(e);
             }
         }
+    }
+
+    @Test
+    void should_map_self_protection_status_to_proto() {
+        SelfProtectionStatus status = new SelfProtectionStatus(
+                2,
+                1,
+                new SelfProtectionStats(10, 100, false),
+                List.of(new ServiceProtectionStatus(
+                        new ServiceKey("default", "order-service"), 0, 100, false, true, 3_000)),
+                false);
+
+        var response = mapper.toGetSelfProtectionStatusResponse(status);
+
+        assertThat(response.getStatus().getAck()).isEqualTo(org.mydotey.ai.artemis.proto.common.v1.Ack.ACK_SUCCESS);
+        assertThat(response.getData().getTrackedServices()).isEqualTo(2);
+        assertThat(response.getData().getProtectingServices()).isEqualTo(1);
+        assertThat(response.getData().getNode().getWindowRenewals()).isEqualTo(10);
+        assertThat(response.getData().getNode().getMaxCount()).isEqualTo(100);
+        assertThat(response.getData().getServicesList()).singleElement().satisfies(item -> {
+            assertThat(item.getService().getNamespace()).isEqualTo("default");
+            assertThat(item.getService().getService()).isEqualTo("order-service");
+            assertThat(item.getNodeFallback()).isFalse();
+            assertThat(item.getProtecting()).isTrue();
+            assertThat(item.getProtectingForMs()).isEqualTo(3_000);
+            assertThat(item.getMaxCount()).isEqualTo(100);
+        });
     }
 
     // ---- 设施 ----

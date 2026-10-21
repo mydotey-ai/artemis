@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.11    更新时间: 2026-10-21
+版本: 1.12    更新时间: 2026-10-21
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -138,10 +138,20 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **指标**：`artemis.registry.bootstrap.attempts|failures|synced.instances`、`artemis.registry.cluster.probe.rounds`、`artemis.registry.cluster.probe.failures{peer}`、`artemis.registry.cluster.peers.up`（经 `/actuator/prometheus`）。
 - **工程形态**：探测并发/超时/恢复、启动分支、整体替换、bootstrap 分片等单测；集群 IT 覆盖新节点加入全量同步、重启优先 peer、无 UP peer 回退快照、已就绪 peer 同步失败重试恢复、对外节点状态 API（含停节点标记 UNKNOWN）。
 
+**v0.2 phase-4（自我保护 2.0：节点级兜底 + 服务级权威）已交付**：
+
+- **两层判定**：保留节点级全局窗口（原 10s/85%/下限 50 语义）作为网络分区/小服务/纯副本兜底；新增每服务窗口，服务峰值达 `minCount` 后服务级状态权威，否则回落节点级。过期清理按服务判定：保护中的服务保留租约，其余服务照常清理；显式 deregister 不受影响。
+- **显式状态与回落**：每窗口维护 `NORMAL/PROTECTING`、`protectingSince`、迁移计数与结构化日志；状态只由 1s 清理调度中的周期评估器写入。节点健康时服务峰值 `maxCountResetMs`（默认 10min）未抬升即回落，限制客户端迁移造成的永久保护；节点级保护中不回落。动态调整窗口时以新口径重建峰值基线，避免误触发。
+- **可观测（有界基数）**：节点级沿用 `artemis.registry.self.protection|renewals|max`；服务级 `artemis.registry.self.service.protection{namespace,service}` 仅在保护中注册，另有 `...count` 与 `...transitions{to=protecting|normal}`。服务级明细经 API 查询，不常驻指标。
+- **状态 API**：registry 内部 `management.v1.GetSelfProtectionStatus`（management 透传 `GET /admin/v1/status/protection`）默认只返回保护中服务，支持 namespace/service 过滤、10000 条上限、`node_fallback` 与节点级统计；指定 namespace+service 时该服务总是返回。`GetLeaseStatus` 保持节点级语义不变。
+- **集群语义**：各节点只按本地收到的心跳独立判定；保护态不复制、不持久化，也不抑制复制。3 节点进程内 IT 验证节点独立保护、指标标签与超时退出。
+- **工程形态**：registry-core 单测覆盖双层窗口/状态机/回落/指标/查询/回收竞态，registry-server 服务级与 3 节点集群 IT，management client/Admin 端点端到端；全量 `dev-test.sh all` 绿。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.12 | 2026-10-21 | v0.2 phase-4 交付：自我保护 2.0（节点级兜底 + 服务级权威、显式状态与超时回落）、有界指标、`GetSelfProtectionStatus` 与 Admin 状态端点、集群独立判定 |
 | 1.11 | 2026-10-21 | v0.2 phase-3 交付：peer 全量 bootstrap（异步/退避/整体替换/not ready 语义）、三段式成员配置、对外节点状态 API 与后台并发探测、配置与指标；修正 phase-1 交付节对外端点表述 |
 | 1.10 | 2026-10-21 | v0.2 phase-2 交付：变更事件扇出（副本租约继承原产品：RENEW 续约复制、清理不扇出、缺席补注册）、扇出管线与退避重试、复制配置项与指标；修正 v0.1 phase-2 节事件出口表述 |
 | 1.9 | 2026-10-20 | v0.2 phase-1 交付：replication.v1、双 gRPC 监听与认证隔离、静态多节点成员/自身识别、配置动态性；当前版本转 v0.2 |

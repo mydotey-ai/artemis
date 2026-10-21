@@ -18,13 +18,18 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mydotey.ai.artemis.common.auth.BasicAuth;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryException;
+import org.mydotey.ai.artemis.management.domain.SelfProtectionStats;
 import org.mydotey.ai.artemis.management.server.TestProperties;
 import org.mydotey.ai.artemis.proto.common.v1.Ack;
 import org.mydotey.ai.artemis.proto.common.v1.ErrorInfo;
 import org.mydotey.ai.artemis.proto.common.v1.ResponseStatus;
+import org.mydotey.ai.artemis.proto.management.v1.GetSelfProtectionStatusRequest;
+import org.mydotey.ai.artemis.proto.management.v1.GetSelfProtectionStatusResponse;
+import org.mydotey.ai.artemis.proto.management.v1.GetSelfProtectionStatusResponseData;
 import org.mydotey.ai.artemis.proto.management.v1.ListServicesRequest;
 import org.mydotey.ai.artemis.proto.management.v1.ListServicesResponse;
 import org.mydotey.ai.artemis.proto.management.v1.RegistryQueryServiceGrpc;
+import org.mydotey.ai.artemis.proto.management.v1.ServiceSelfProtectionStatus;
 
 class RegistryQueryGrpcClientTest {
 
@@ -32,6 +37,7 @@ class RegistryQueryGrpcClientTest {
             Metadata.Key.of(BasicAuth.HEADER, Metadata.ASCII_STRING_MARSHALLER);
 
     private final AtomicReference<String> authorization = new AtomicReference<>();
+    private final AtomicReference<GetSelfProtectionStatusRequest> protectionRequest = new AtomicReference<>();
     private Server server;
 
     @BeforeEach
@@ -47,6 +53,36 @@ class RegistryQueryGrpcClientTest {
                                         .setError(ErrorInfo.newBuilder()
                                                 .setCode("INVALID_ARGUMENT")
                                                 .setMessage("boom")))
+                                .build());
+                        observer.onCompleted();
+                    }
+
+                    @Override
+                    public void getSelfProtectionStatus(
+                            GetSelfProtectionStatusRequest request,
+                            StreamObserver<GetSelfProtectionStatusResponse> observer) {
+                        protectionRequest.set(request);
+                        observer.onNext(GetSelfProtectionStatusResponse.newBuilder()
+                                .setStatus(ResponseStatus.newBuilder().setAck(Ack.ACK_SUCCESS))
+                                .setData(GetSelfProtectionStatusResponseData.newBuilder()
+                                        .setTrackedServices(3)
+                                        .setProtectingServices(1)
+                                        .setNode(
+                                                org.mydotey.ai.artemis.proto.management.v1.SelfProtectionStats
+                                                        .newBuilder()
+                                                        .setWindowRenewals(10)
+                                                        .setMaxCount(100)
+                                                        .setProtecting(false))
+                                        .addServices(ServiceSelfProtectionStatus.newBuilder()
+                                                .setService(
+                                                        org.mydotey.ai.artemis.proto.common.v1.ServiceKey.newBuilder()
+                                                                .setNamespace("ns")
+                                                                .setService("svc"))
+                                                .setWindowRenewals(0)
+                                                .setMaxCount(100)
+                                                .setNodeFallback(false)
+                                                .setProtecting(true)
+                                                .setProtectingForMs(3_000)))
                                 .build());
                         observer.onCompleted();
                     }
@@ -77,6 +113,29 @@ class RegistryQueryGrpcClientTest {
                     .isInstanceOf(RegistryQueryException.class)
                     .satisfies(e -> org.assertj.core.api.Assertions.assertThat(((RegistryQueryException) e).code())
                             .isEqualTo(RegistryQueryException.REGISTRY_ERROR));
+        }
+    }
+
+    @Test
+    void should_send_filters_and_map_self_protection_status_when_requested() {
+        try (var client = new RegistryQueryGrpcClient(config("localhost:" + server.getPort(), 3_000))) {
+            var status = client.selfProtectionStatus("ns", "svc", true);
+
+            var request = protectionRequest.get();
+            assertThat(request.getNamespace()).isEqualTo("ns");
+            assertThat(request.getService()).isEqualTo("svc");
+            assertThat(request.getIncludeNormal()).isTrue();
+
+            assertThat(status.trackedServices()).isEqualTo(3);
+            assertThat(status.protectingServices()).isEqualTo(1);
+            assertThat(status.node()).isEqualTo(new SelfProtectionStats(10, 100, false));
+            assertThat(status.services()).singleElement().satisfies(item -> {
+                assertThat(item.service())
+                        .isEqualTo(new org.mydotey.ai.artemis.management.domain.ServiceKey("ns", "svc"));
+                assertThat(item.nodeFallback()).isFalse();
+                assertThat(item.protecting()).isTrue();
+                assertThat(item.protectingForMs()).isEqualTo(3_000);
+            });
         }
     }
 

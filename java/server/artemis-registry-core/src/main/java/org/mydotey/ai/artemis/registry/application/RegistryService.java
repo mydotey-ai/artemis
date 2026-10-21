@@ -35,7 +35,8 @@ public interface RegistryService {
 
     /**
      * 租约过期清理（同步单轮，返回摘除数）；由装配层注入的调度器周期触发。
-     * 保护态整轮跳过（返回 0，过期实例保留）——显式 deregister 不受保护。
+     * 先评估保护态，再逐服务判定：保护中的服务跳过过期清理，其余服务照常摘除。
+     * 显式 deregister 不受保护拦截。
      */
     int evictExpired();
 

@@ -9,8 +9,10 @@ import org.mydotey.ai.artemis.registry.domain.InstanceRegistry;
 import org.mydotey.ai.artemis.registry.domain.LeaseDetail;
 import org.mydotey.ai.artemis.registry.domain.LeaseStatus;
 import org.mydotey.ai.artemis.registry.domain.SelfProtection;
+import org.mydotey.ai.artemis.registry.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.registry.domain.ServiceInstances;
 import org.mydotey.ai.artemis.registry.domain.ServiceKey;
+import org.mydotey.ai.artemis.registry.domain.ServiceProtectionStatus;
 import org.mydotey.ai.artemis.registry.domain.ServiceSummary;
 import org.mydotey.scf.ConfigurationManager;
 import org.mydotey.scf.ConfigurationSource;
@@ -27,6 +29,8 @@ public final class RegistryQueryServiceImpl implements RegistryQueryService {
     private static final String MASKED = "******";
     /** 单次返回上限：约 1 MB，远低于 gRPC 默认 4 MiB 入站上限。 */
     private static final int MAX_LEASE_DETAILS = 10_000;
+
+    private static final int MAX_PROTECTION_STATUSES = 10_000;
 
     private static final List<String> SENSITIVE_MARKERS =
             List.of("password", "passwd", "pwd", "secret", "token", "credential", "apikey", "accesskey", "privatekey");
@@ -72,7 +76,20 @@ public final class RegistryQueryServiceImpl implements RegistryQueryService {
                 .toList();
         boolean truncated = all.size() > MAX_LEASE_DETAILS;
         List<LeaseDetail> leases = truncated ? all.subList(0, MAX_LEASE_DETAILS) : all;
-        return new LeaseStatus(protection.stats(), leases, truncated);
+        return new LeaseStatus(protection.nodeStats(), leases, truncated);
+    }
+
+    @Override
+    public SelfProtectionStatus selfProtectionStatus(String namespace, String service, boolean includeNormal) {
+        List<ServiceProtectionStatus> all = protection.statuses(namespace, service, includeNormal);
+        boolean truncated = all.size() > MAX_PROTECTION_STATUSES;
+        List<ServiceProtectionStatus> services = truncated ? all.subList(0, MAX_PROTECTION_STATUSES) : all;
+        return new SelfProtectionStatus(
+                protection.trackedServiceCount(),
+                protection.protectingServiceCount(),
+                protection.nodeStats(),
+                services,
+                truncated);
     }
 
     @Override

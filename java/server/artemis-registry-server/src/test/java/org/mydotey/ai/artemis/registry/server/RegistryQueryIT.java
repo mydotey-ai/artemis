@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
@@ -17,16 +18,20 @@ import org.mydotey.ai.artemis.proto.common.v1.ServiceInstances;
 import org.mydotey.ai.artemis.proto.common.v1.ServiceKey;
 import org.mydotey.ai.artemis.proto.management.v1.GetConfigStatusRequest;
 import org.mydotey.ai.artemis.proto.management.v1.GetLeaseStatusRequest;
+import org.mydotey.ai.artemis.proto.management.v1.GetSelfProtectionStatusRequest;
 import org.mydotey.ai.artemis.proto.management.v1.GetServiceInstancesRequest;
 import org.mydotey.ai.artemis.proto.management.v1.GetServiceInstancesResponse;
 import org.mydotey.ai.artemis.proto.management.v1.ListServicesRequest;
 import org.mydotey.ai.artemis.proto.management.v1.RegistryQueryServiceGrpc;
 import org.mydotey.ai.artemis.proto.registry.v1.DeregisterRequest;
+import org.mydotey.ai.artemis.proto.registry.v1.HeartbeatRequest;
 import org.mydotey.ai.artemis.proto.registry.v1.RegistryServiceGrpc;
 import org.mydotey.ai.artemis.registry.InMemorySnapshotStore;
 import org.mydotey.ai.artemis.registry.MutableClock;
 import org.mydotey.ai.artemis.registry.TestProperties;
+import org.mydotey.ai.artemis.registry.application.RegistryService;
 import org.mydotey.ai.artemis.registry.domain.RegistrySnapshotStore;
+import org.mydotey.ai.artemis.registry.domain.SelfProtection;
 import org.mydotey.scf.facade.StringProperties;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -47,12 +52,19 @@ class RegistryQueryIT {
 
     private static final String NAMESPACE = "query-it";
     private static final String SERVICE = "order-service";
+    private static final String PROTECTION_NAMESPACE = "query-protection";
 
     @Autowired
     private Map<String, GrpcServerLifecycle> lifecycles;
 
     @Autowired
     private MutableClock clock;
+
+    @Autowired
+    private SelfProtection selfProtection;
+
+    @Autowired
+    private RegistryService registryService;
 
     private ManagedChannel externalChannel;
     private ManagedChannel internalChannel;
@@ -71,14 +83,17 @@ class RegistryQueryIT {
         // 内部认证默认关闭：查询走内部端口且无需凭证
         query = RegistryQueryServiceGrpc.newBlockingStub(internalChannel);
         clock.reset();
+        selfProtection.reset();
         registry.deregister(DeregisterRequest.newBuilder()
                 .addInstances(instanceKey("i1"))
                 .addInstances(instanceKey("i2"))
                 .build());
+        cleanupProtectionInstances();
     }
 
     @AfterEach
     void tearDown() throws InterruptedException {
+        cleanupProtectionInstances();
         externalChannel.shutdown().awaitTermination(5, TimeUnit.SECONDS);
         internalChannel.shutdown().awaitTermination(5, TimeUnit.SECONDS);
     }
@@ -143,6 +158,40 @@ class RegistryQueryIT {
     }
 
     @Test
+    void should_report_per_service_protection_when_querying() throws Exception {
+        ServiceKey a = protectionKey("svc-a");
+        ServiceKey b = protectionKey("svc-b");
+        ServiceKey keepAlive = protectionKey("keep-alive");
+        heartbeatMany(a, List.of("a1", "a2"), 1L); // 峰值 2，达到 minCount=2
+        heartbeatMany(b, List.of("b1"), 1L); // 峰值 1，未达服务级门槛
+
+        // 窗口 1s 滑出、TTL 1s 到期；高续约 keep-alive 保持节点级健康
+        clock.advance(Duration.ofMillis(1_100));
+        heartbeatMany(
+                keepAlive,
+                java.util.stream.IntStream.range(0, 100).mapToObj(i -> "k" + i).toList(),
+                2L);
+        registryService.evictExpired();
+
+        var response = query.getSelfProtectionStatus(GetSelfProtectionStatusRequest.newBuilder()
+                .setNamespace(PROTECTION_NAMESPACE)
+                .build());
+
+        assertThat(response.getStatus().getAck()).isEqualTo(Ack.ACK_SUCCESS);
+        assertThat(response.getData().getProtectingServices()).isEqualTo(1);
+        assertThat(response.getData().getServicesList()).singleElement().satisfies(item -> {
+            assertThat(item.getService().getService()).isEqualTo("svc-a");
+            assertThat(item.getNodeFallback()).isFalse();
+            assertThat(item.getProtecting()).isTrue();
+        });
+        assertThat(response.getData().getNode().getProtecting()).isFalse();
+
+        // A 服务级保护保留，B 未达门槛且节点健康 → 正常过期
+        assertThat(instances(a)).hasSize(2);
+        assertThat(instances(b)).isEmpty();
+    }
+
+    @Test
     void should_mask_password_when_query_config_status() {
         var response = query.getConfigStatus(GetConfigStatusRequest.getDefaultInstance());
 
@@ -181,6 +230,54 @@ class RegistryQueryIT {
                 .build();
     }
 
+    private static ServiceKey protectionKey(String service) {
+        return ServiceKey.newBuilder()
+                .setNamespace(PROTECTION_NAMESPACE)
+                .setService(service)
+                .build();
+    }
+
+    private void heartbeatMany(ServiceKey key, List<String> instanceIds, long seq) throws InterruptedException {
+        ServiceInstances.Builder services = ServiceInstances.newBuilder().setKey(key);
+        for (String instanceId : instanceIds) {
+            services.addInstances(Instance.newBuilder()
+                    .setInstanceId(instanceId)
+                    .setHost("10.0.0.1")
+                    .setPort(8080)
+                    .setStatus(InstanceStatus.INSTANCE_STATUS_UP)
+                    .setWeight(100));
+        }
+        Heartbeats.collect(
+                externalChannel,
+                HeartbeatRequest.newBuilder().addServices(services).setSeq(seq).build());
+    }
+
+    /** 清理保护用例命名空间：该 namespace 的租约续约时间可能因 clock.reset() 落在未来，不能等 TTL。 */
+    private void cleanupProtectionInstances() {
+        deregister(protectionKey("svc-a"), "a1", "a2");
+        deregister(protectionKey("svc-b"), "b1");
+        deregister(
+                protectionKey("keep-alive"),
+                java.util.stream.IntStream.range(0, 100).mapToObj(i -> "k" + i).toArray(String[]::new));
+    }
+
+    private void deregister(ServiceKey key, String... instanceIds) {
+        DeregisterRequest.Builder request = DeregisterRequest.newBuilder();
+        for (String instanceId : instanceIds) {
+            request.addInstances(org.mydotey.ai.artemis.proto.common.v1.InstanceKey.newBuilder()
+                    .setService(key)
+                    .setInstanceId(instanceId));
+        }
+        registry.deregister(request.build());
+    }
+
+    private List<Instance> instances(ServiceKey key) {
+        return query.getServiceInstances(
+                        GetServiceInstancesRequest.newBuilder().setKey(key).build())
+                .getData()
+                .getInstancesList();
+    }
+
     private static ServiceKey serviceKey() {
         return ServiceKey.newBuilder()
                 .setNamespace(NAMESPACE)
@@ -211,7 +308,13 @@ class RegistryQueryIT {
                             "artemis.registry.lease.ttlMs",
                             "1000",
                             "artemis.registry.internal.port",
-                            String.valueOf(PEER_PORT)))
+                            String.valueOf(PEER_PORT),
+                            "artemis.registry.selfProtection.windowSeconds",
+                            "1",
+                            "artemis.registry.selfProtection.minCount",
+                            "2",
+                            "artemis.registry.selfProtection.maxCountResetMs",
+                            "60000"))
                     .properties();
         }
 

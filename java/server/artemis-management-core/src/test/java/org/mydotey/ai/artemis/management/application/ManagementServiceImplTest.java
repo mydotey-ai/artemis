@@ -17,7 +17,9 @@ import org.mydotey.ai.artemis.management.domain.LeaseDetail;
 import org.mydotey.ai.artemis.management.domain.LeaseStatus;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryPort;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStats;
+import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
+import org.mydotey.ai.artemis.management.domain.ServiceProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceSummary;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryEjectionStore;
 
@@ -147,6 +149,19 @@ class ManagementServiceImplTest {
     }
 
     @Test
+    void should_passthrough_self_protection_status_when_requested() {
+        SelfProtectionStatus status = new SelfProtectionStatus(
+                1,
+                1,
+                new SelfProtectionStats(10, 100, false),
+                List.of(new ServiceProtectionStatus(SERVICE, 0, 100, false, true, 1_000)),
+                false);
+        registry.selfProtectionStatus = status;
+
+        assertThat(service.selfProtectionStatus("ns", "svc", true)).isSameAs(status);
+    }
+
+    @Test
     void should_passthrough_config_status_when_requested() {
         List<ConfigProperty> properties = List.of(new ConfigProperty("k", "v", "src", true, "d", "doc"));
         registry.properties = properties;
@@ -163,6 +178,8 @@ class ManagementServiceImplTest {
         private final List<ServiceSummary> services = new ArrayList<>();
         private final Map<ServiceKey, List<Instance>> instances = new HashMap<>();
         private LeaseStatus leaseStatus = new LeaseStatus(new SelfProtectionStats(0, 0, false), List.of(), false);
+        private SelfProtectionStatus selfProtectionStatus =
+                new SelfProtectionStatus(0, 0, new SelfProtectionStats(0, 0, false), List.of(), false);
         private List<ConfigProperty> properties = List.of();
         private int calls;
 
@@ -182,6 +199,12 @@ class ManagementServiceImplTest {
         public LeaseStatus leaseStatus(String namespace, String service) {
             calls++;
             return leaseStatus;
+        }
+
+        @Override
+        public SelfProtectionStatus selfProtectionStatus(String namespace, String service, boolean includeNormal) {
+            calls++;
+            return selfProtectionStatus;
         }
 
         @Override

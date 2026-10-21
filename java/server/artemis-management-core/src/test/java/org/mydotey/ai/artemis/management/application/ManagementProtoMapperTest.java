@@ -8,8 +8,10 @@ import org.mydotey.ai.artemis.management.domain.ServiceKey;
 import org.mydotey.ai.artemis.proto.common.v1.Instance;
 import org.mydotey.ai.artemis.proto.management.v1.ConfigProperty;
 import org.mydotey.ai.artemis.proto.management.v1.GetLeaseStatusResponseData;
+import org.mydotey.ai.artemis.proto.management.v1.GetSelfProtectionStatusResponseData;
 import org.mydotey.ai.artemis.proto.management.v1.LeaseDetail;
 import org.mydotey.ai.artemis.proto.management.v1.SelfProtectionStats;
+import org.mydotey.ai.artemis.proto.management.v1.ServiceSelfProtectionStatus;
 
 class ManagementProtoMapperTest {
 
@@ -47,6 +49,41 @@ class ManagementProtoMapperTest {
 
         assertThat(proto.getNamespace()).isEqualTo("ns");
         assertThat(proto.getService()).isEqualTo("svc");
+    }
+
+    @Test
+    void should_map_self_protection_status_when_converting_proto() {
+        GetSelfProtectionStatusResponseData data = GetSelfProtectionStatusResponseData.newBuilder()
+                .setTrackedServices(2)
+                .setProtectingServices(1)
+                .setTruncated(true)
+                .setNode(SelfProtectionStats.newBuilder()
+                        .setWindowRenewals(10)
+                        .setMaxCount(100)
+                        .setProtecting(false))
+                .addServices(ServiceSelfProtectionStatus.newBuilder()
+                        .setService(org.mydotey.ai.artemis.proto.common.v1.ServiceKey.newBuilder()
+                                .setNamespace("ns")
+                                .setService("svc"))
+                        .setWindowRenewals(0)
+                        .setMaxCount(100)
+                        .setNodeFallback(false)
+                        .setProtecting(true)
+                        .setProtectingForMs(3_000))
+                .build();
+
+        var status = mapper.toDomain(data);
+
+        assertThat(status.trackedServices()).isEqualTo(2);
+        assertThat(status.protectingServices()).isEqualTo(1);
+        assertThat(status.truncated()).isTrue();
+        assertThat(status.node().windowRenewals()).isEqualTo(10);
+        assertThat(status.services()).singleElement().satisfies(item -> {
+            assertThat(item.service()).isEqualTo(new ServiceKey("ns", "svc"));
+            assertThat(item.nodeFallback()).isFalse();
+            assertThat(item.protecting()).isTrue();
+            assertThat(item.protectingForMs()).isEqualTo(3_000);
+        });
     }
 
     @Test

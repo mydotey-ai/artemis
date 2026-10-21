@@ -7,6 +7,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,6 +21,7 @@ import org.mydotey.ai.artemis.registry.domain.InstanceStatus;
 import org.mydotey.ai.artemis.registry.domain.LeaseDetail;
 import org.mydotey.ai.artemis.registry.domain.LeaseStatus;
 import org.mydotey.ai.artemis.registry.domain.SelfProtection;
+import org.mydotey.ai.artemis.registry.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.registry.domain.ServiceKey;
 import org.mydotey.ai.artemis.registry.domain.ServiceSummary;
 import org.mydotey.scf.facade.StringProperties;
@@ -100,13 +102,79 @@ class RegistryQueryServiceImplTest {
     }
 
     @Test
-    void should_include_protection_stats_when_lease_status() {
-        protection.recordRenewals(120);
+    void should_include_node_protection_stats_when_lease_status() {
+        protection.recordRenewals(KEY, 120);
+        protection.evaluate(Set.of(KEY));
 
         LeaseStatus status = service.leaseStatus(null, null);
 
         assertThat(status.protection().windowRenewals()).isEqualTo(120);
         assertThat(status.protection().maxCount()).isEqualTo(120);
+    }
+
+    @Test
+    void should_return_only_protecting_services_by_default() {
+        ServiceKey other = new ServiceKey("default", "svc-b");
+        protection.recordRenewals(KEY, 100);
+        protection.recordRenewals(other, 100);
+        protection.evaluate(Set.of(KEY, other));
+
+        clock.advance(Duration.ofSeconds(11));
+        protection.recordRenewals(other, 90);
+        protection.evaluate(Set.of(KEY, other));
+
+        SelfProtectionStatus status = service.selfProtectionStatus(null, null, false);
+
+        assertThat(status.trackedServices()).isEqualTo(2);
+        assertThat(status.protectingServices()).isEqualTo(1);
+        assertThat(status.services()).singleElement().satisfies(item -> {
+            assertThat(item.service()).isEqualTo(KEY);
+            assertThat(item.protecting()).isTrue();
+        });
+        assertThat(status.node().protecting()).isTrue();
+        assertThat(status.truncated()).isFalse();
+    }
+
+    @Test
+    void should_include_normal_when_requested() {
+        ServiceKey other = new ServiceKey("default", "svc-b");
+        protection.recordRenewals(KEY, 100);
+        protection.recordRenewals(other, 100);
+        protection.evaluate(Set.of(KEY, other));
+        clock.advance(Duration.ofSeconds(11));
+        protection.recordRenewals(other, 90);
+        protection.evaluate(Set.of(KEY, other));
+
+        assertThat(service.selfProtectionStatus(null, null, true).services())
+                .extracting(item -> item.service().service())
+                .containsExactly("order-service", "svc-b");
+    }
+
+    @Test
+    void should_return_service_status_when_filtered_even_if_normal() {
+        protection.recordRenewals(KEY, 100);
+        protection.evaluate(Set.of(KEY));
+
+        SelfProtectionStatus status = service.selfProtectionStatus("default", "order-service", false);
+
+        assertThat(status.services()).singleElement().satisfies(item -> {
+            assertThat(item.service()).isEqualTo(KEY);
+            assertThat(item.protecting()).isFalse();
+        });
+    }
+
+    @Test
+    void should_truncate_protection_status_when_limit_exceeded() {
+        List<ServiceKey> keys = IntStream.range(0, 10_001)
+                .mapToObj(i -> new ServiceKey("ns", "svc-" + i))
+                .toList();
+        keys.forEach(key -> protection.recordRenewals(key, 1));
+        protection.evaluate(Set.copyOf(keys));
+
+        SelfProtectionStatus status = service.selfProtectionStatus(null, null, true);
+
+        assertThat(status.truncated()).isTrue();
+        assertThat(status.services()).hasSize(10_000);
     }
 
     @Test

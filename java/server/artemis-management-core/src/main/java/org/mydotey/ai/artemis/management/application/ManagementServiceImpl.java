@@ -13,6 +13,7 @@ import org.mydotey.ai.artemis.management.domain.Instance;
 import org.mydotey.ai.artemis.management.domain.InstanceKey;
 import org.mydotey.ai.artemis.management.domain.LeaseStatus;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryPort;
+import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
 import org.mydotey.ai.artemis.management.domain.ServiceSummary;
 
@@ -81,6 +82,11 @@ public final class ManagementServiceImpl implements ManagementService {
     @Override
     public LeaseStatus leaseStatus(String namespace, String service) {
         return registry.leaseStatus(namespace, service);
+    }
+
+    @Override
+    public SelfProtectionStatus selfProtectionStatus(String namespace, String service, boolean includeNormal) {
+        return registry.selfProtectionStatus(namespace, service, includeNormal);
     }
 
     @Override

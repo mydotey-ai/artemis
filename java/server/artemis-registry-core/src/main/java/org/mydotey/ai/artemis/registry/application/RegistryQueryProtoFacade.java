@@ -4,6 +4,8 @@ import org.mydotey.ai.artemis.proto.management.v1.GetConfigStatusRequest;
 import org.mydotey.ai.artemis.proto.management.v1.GetConfigStatusResponse;
 import org.mydotey.ai.artemis.proto.management.v1.GetLeaseStatusRequest;
 import org.mydotey.ai.artemis.proto.management.v1.GetLeaseStatusResponse;
+import org.mydotey.ai.artemis.proto.management.v1.GetSelfProtectionStatusRequest;
+import org.mydotey.ai.artemis.proto.management.v1.GetSelfProtectionStatusResponse;
 import org.mydotey.ai.artemis.proto.management.v1.GetServiceInstancesRequest;
 import org.mydotey.ai.artemis.proto.management.v1.GetServiceInstancesResponse;
 import org.mydotey.ai.artemis.proto.management.v1.GetServiceInstancesResponseData;
@@ -45,6 +47,11 @@ public final class RegistryQueryProtoFacade {
 
     public GetConfigStatusResponse getConfigStatus(GetConfigStatusRequest request) {
         return mapper.toGetConfigStatusResponse(service.configStatus());
+    }
+
+    public GetSelfProtectionStatusResponse getSelfProtectionStatus(GetSelfProtectionStatusRequest request) {
+        return mapper.toGetSelfProtectionStatusResponse(
+                service.selfProtectionStatus(request.getNamespace(), request.getService(), request.getIncludeNormal()));
     }
 
     private static boolean isBlank(String value) {

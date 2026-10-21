@@ -3,6 +3,7 @@ package org.mydotey.ai.artemis.management.application;
 import java.util.List;
 import org.mydotey.ai.artemis.management.domain.ConfigProperty;
 import org.mydotey.ai.artemis.management.domain.LeaseStatus;
+import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
 
 /**
@@ -19,6 +20,8 @@ public interface ManagementService {
     void recover(ServiceKey key, String instanceId);
 
     LeaseStatus leaseStatus(String namespace, String service);
+
+    SelfProtectionStatus selfProtectionStatus(String namespace, String service, boolean includeNormal);
 
     List<ConfigProperty> configStatus();
 }

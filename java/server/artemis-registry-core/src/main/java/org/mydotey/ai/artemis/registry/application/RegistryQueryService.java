@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Optional;
 import org.mydotey.ai.artemis.registry.domain.ConfigProperty;
 import org.mydotey.ai.artemis.registry.domain.LeaseStatus;
+import org.mydotey.ai.artemis.registry.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.registry.domain.ServiceInstances;
 import org.mydotey.ai.artemis.registry.domain.ServiceKey;
 import org.mydotey.ai.artemis.registry.domain.ServiceSummary;
@@ -21,10 +22,16 @@ public interface RegistryQueryService {
     Optional<ServiceInstances> getInstances(ServiceKey key);
 
     /**
-     * 自我保护统计 + 租约明细（namespace/service 均可选，空 = 全部）。
+     * 租约明细 + 节点级保护统计（namespace/service 均可选，空 = 全部）。
      * 结果按 (namespace, service, instanceId) 排序；超过单次上限时截断并标记 truncated。
      */
     LeaseStatus leaseStatus(String namespace, String service);
+
+    /**
+     * 自我保护状态：节点级统计 + 按服务明细（namespace/service 均可选）。
+     * 未指定 service 时默认仅返回保护中服务；指定 service 时无论状态均返回。
+     */
+    SelfProtectionStatus selfProtectionStatus(String namespace, String service, boolean includeNormal);
 
     /** 已创建配置项 + 来源；敏感值已脱敏。 */
     List<ConfigProperty> configStatus();

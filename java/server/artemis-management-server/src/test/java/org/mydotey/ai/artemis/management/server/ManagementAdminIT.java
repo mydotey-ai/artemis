@@ -6,12 +6,14 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Metadata;
 import io.grpc.stub.MetadataUtils;
+import io.grpc.stub.StreamObserver;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.StreamSupport;
 import org.junit.jupiter.api.AfterAll;
@@ -29,6 +31,8 @@ import org.mydotey.ai.artemis.proto.management.v1.GetServiceInstancesRequest;
 import org.mydotey.ai.artemis.proto.management.v1.ListServicesRequest;
 import org.mydotey.ai.artemis.proto.management.v1.RegistryQueryServiceGrpc;
 import org.mydotey.ai.artemis.proto.registry.v1.DeregisterRequest;
+import org.mydotey.ai.artemis.proto.registry.v1.HeartbeatRequest;
+import org.mydotey.ai.artemis.proto.registry.v1.HeartbeatResponse;
 import org.mydotey.ai.artemis.proto.registry.v1.RegisterRequest;
 import org.mydotey.ai.artemis.proto.registry.v1.RegistryServiceGrpc;
 import org.mydotey.ai.artemis.registry.server.ArtemisRegistryServer;
@@ -235,6 +239,32 @@ class ManagementAdminIT {
     }
 
     @Test
+    void should_expose_self_protection_status_when_status_api_called() throws Exception {
+        register("i1");
+        heartbeat("i1");
+
+        // includeNormal=true：正常服务也返回（服务窗口峰值 1 < minCount → 节点级兜底）
+        JsonNode all = json(get("/admin/v1/status/protection?namespace=" + NAMESPACE + "&includeNormal=true", true));
+        JsonNode service = StreamSupport.stream(all.get("services").spliterator(), false)
+                .filter(item ->
+                        SERVICE.equals(item.get("service").get("service").asText()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(service.get("nodeFallback").asBoolean()).isTrue();
+        assertThat(service.get("protecting").asBoolean()).isFalse();
+        assertThat(all.get("node")).isNotNull();
+
+        // 默认仅保护中服务：该服务正常 → 空列表
+        JsonNode defaultOnly = json(get("/admin/v1/status/protection?namespace=" + NAMESPACE, true));
+        assertThat(defaultOnly.get("services").size()).isZero();
+
+        // 指定 namespace + service 时总是返回
+        JsonNode filtered =
+                json(get("/admin/v1/status/protection?namespace=" + NAMESPACE + "&service=" + SERVICE, true));
+        assertThat(filtered.get("services").size()).isEqualTo(1);
+    }
+
+    @Test
     void should_mask_sensitive_config_when_config_status_api_called() throws Exception {
         JsonNode config = json(get("/admin/v1/status/config", true));
 
@@ -258,6 +288,41 @@ class ManagementAdminIT {
                     .setWeight(100));
         }
         registry.register(RegisterRequest.newBuilder().addServices(services).build());
+    }
+
+    private void heartbeat(String... instanceIds) throws InterruptedException {
+        ServiceInstances.Builder services = ServiceInstances.newBuilder().setKey(serviceKey());
+        for (String instanceId : instanceIds) {
+            services.addInstances(Instance.newBuilder()
+                    .setInstanceId(instanceId)
+                    .setHost("10.0.0.1")
+                    .setPort(8080)
+                    .setStatus(InstanceStatus.INSTANCE_STATUS_UP)
+                    .setWeight(100));
+        }
+        Metadata headers = new Metadata();
+        headers.put(Metadata.Key.of(BasicAuth.HEADER, Metadata.ASCII_STRING_MARSHALLER), AUTH);
+        CountDownLatch acked = new CountDownLatch(1);
+        StreamObserver<HeartbeatRequest> stream = RegistryServiceGrpc.newStub(externalChannel)
+                .withInterceptors(MetadataUtils.newAttachHeadersInterceptor(headers))
+                .heartbeat(new StreamObserver<HeartbeatResponse>() {
+                    @Override
+                    public void onNext(HeartbeatResponse response) {
+                        acked.countDown();
+                    }
+
+                    @Override
+                    public void onError(Throwable error) {
+                        acked.countDown();
+                    }
+
+                    @Override
+                    public void onCompleted() {}
+                });
+        stream.onNext(
+                HeartbeatRequest.newBuilder().addServices(services).setSeq(1).build());
+        stream.onCompleted();
+        assertThat(acked.await(5, TimeUnit.SECONDS)).isTrue();
     }
 
     private HttpResponse<String> get(String path, boolean authenticated) throws Exception {

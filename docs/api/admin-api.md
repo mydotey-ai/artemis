@@ -1,6 +1,6 @@
 # management-service Admin 与状态 API
 
-版本: 1.3    更新时间: 2026-10-20
+版本: 1.4    更新时间: 2026-10-21
 
 > 本文定义 management-service 对外 HTTP API（v0.1 内存态管理面）：实例管理 Admin API 与 registry 状态排障面。有效视图 = registry 只读事实 + management 摘除记录（ADR-016）；registry 不感知摘除。内部 gRPC 查询契约见 [registry-query-api.md](registry-query-api.md)。
 
@@ -163,6 +163,35 @@ Base path：`/admin/v1`
 
 - 返回 **registry** 的配置项；敏感 key（password/passwd/pwd/secret/token/credential/apikey/accesskey/privatekey）的 `value` 与 `defaultValue` 固定 `******`。
 
+### 5.3 自我保护 `GET /admin/v1/status/protection?namespace={ns}&service={svc}&includeNormal={bool}`
+
+数据来自 registry `GetSelfProtectionStatus`（ADR-017），不缓存、不聚合。
+
+```json
+{
+  "trackedServices": 3,
+  "protectingServices": 1,
+  "services": [
+    {
+      "service": {"namespace": "default", "service": "order-service"},
+      "windowRenewals": 0,
+      "maxCount": 100,
+      "nodeFallback": false,
+      "protecting": true,
+      "protectingForMs": 12000
+    }
+  ],
+  "truncated": false,
+  "node": {"windowRenewals": 10, "maxCount": 100, "protecting": false}
+}
+```
+
+- `includeNormal` 默认 `false`：未指定 `service` 时仅返回服务级保护中条目；指定 `namespace + service` 时该服务总是返回（即使 NORMAL 或无本地窗口）。
+- `protecting` 是服务级状态；`nodeFallback=true` 表示服务级未启用（无本地窗口或峰值未达 `minCount`），有效判定为 `protecting || (nodeFallback && node.protecting)`。
+- `protectingForMs` 为服务级保护持续时长（单调钟计算，跨进程不可比）；NORMAL 为 0。
+- 单次最多 10000 条；超限 `truncated=true`。`node` 为节点级窗口统计，用于区分节点级故障与单服务异常。
+- `/admin/v1/status/leases` 的 `protection` 字段保持节点级语义不变。
+
 ## 6. 错误语义
 
 错误体：
@@ -194,6 +223,7 @@ management 启动不依赖 registry 可用；registry 故障时管理面仍可�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.4 | 2026-10-21 | v0.2 phase-4：新增 `GET /admin/v1/status/protection`（按服务保护态与节点级统计） |
 | 1.3 | 2026-10-20 | v0.2：上游单一 endpoint（无默认值）；凭证与 timeout 动态化 |
 | 1.2 | 2026-10-20 | v0.2：上游地址/端口分离（已废弃，回归单一 endpoint） |
 | 1.1 | 2026-10-20 | v0.2：上游 registry 只读查询改连内部 peer 端口 |
