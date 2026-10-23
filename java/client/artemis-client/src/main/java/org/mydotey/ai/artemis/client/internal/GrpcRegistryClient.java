@@ -35,11 +35,17 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * gRPC 传输：channel 管理（选址/换址）+ Basic 认证 + unary 显式操作与心跳流 stub。
- * 地址与凭证为 SCF 配置且**使用时重读**（重连换址、凭证变更运行时生效）；创建期校验必配项 fail-fast。
+ * gRPC 传输：channel 管理（经 {@link ServerAddressProvider} 选址/换址）+ Basic 认证 + unary 显式操作
+ * 与心跳流 stub。凭证为 SCF 配置且**使用时重读**（凭证变更运行时生效）。
+ * 地址由 provider 供给（节点列表选址、熔断降权）；channel 断开时记住地址，重建选址排除之
+ * （重连/TTL 轮换换址），冷启动不排除。传输成败上报 provider（熔断计数）**仅由心跳引擎
+ * {@link #onTransportFailed()}/{@link #onTransportSucceeded()} 驱动（单线程，归因无竞态）；
+ * unary 不参与熔断计数——ops 线程与轮换并发时地址归因存在竞态窗，且 unary 失败已驱动重试与
+ * 心跳补投，节点故障由心跳断流路径上报.
  * unary 带 5s deadline、失败不抛异常：返回 {@link ReportOutcome}——瞬态传输失败（UNAVAILABLE/
- * DEADLINE_EXCEEDED）为 RETRIABLE，由调用方按配置有界重试；业务拒绝（ACK_FAIL）与非瞬态失败
- * 为 REJECTED（重试无意义）。每次尝试的失败细节 DEBUG（重试期间不刷 WARN），结论性 WARN 归编排层。
+ * DEADLINE_EXCEEDED、节点列表未就绪）为 RETRIABLE，由调用方按配置有界重试；业务拒绝（ACK_FAIL）
+ * 与非瞬态失败为 REJECTED（重试无意义）。每次尝试的失败细节 DEBUG（重试期间不刷 WARN），结论性
+ * WARN 归编排层。
  */
 final class GrpcRegistryClient {
 
@@ -52,28 +58,25 @@ final class GrpcRegistryClient {
 
     private static final Logger LOG = LoggerFactory.getLogger(GrpcRegistryClient.class);
 
-    static final String KEY_AUTH_USERNAME = "artemis.client.auth.username";
-    static final String KEY_AUTH_PASSWORD = "artemis.client.auth.password";
-
     private static final long DEADLINE_MS = 5_000;
 
     private final ServerAddressProvider addressProvider;
     private final ClientInterceptor authInterceptor;
 
     private volatile ManagedChannel channel;
+    private volatile String currentAddress;
+    /** 刚断开的地址：重建 channel 时选址排除（换址）；建立后清空。 */
+    private volatile String lastDisconnectedAddress;
+
     private volatile boolean closed;
 
-    GrpcRegistryClient(StringProperties properties) {
-        // 创建期校验（构造即触发）：必配项缺失/非法 fail-fast；select 重读配置（无静态固化）
-        this.addressProvider = new ConfigAddressProvider(ConfigAddressProvider.property(properties));
-        addressProvider.select();
-        Property<String, String> username = ClientProperties.stringProperty(
-                properties, KEY_AUTH_USERNAME, null, "auth username (both set = Basic auth, absent = no header)");
-        Property<String, String> password = ClientProperties.stringProperty(
-                properties, KEY_AUTH_PASSWORD, null, "auth password (both set = Basic auth, absent = no header)");
+    GrpcRegistryClient(ServerAddressProvider addressProvider, StringProperties properties) {
+        this.addressProvider = addressProvider;
+        Property<String, String> username = ClientProperties.authUsername(properties);
+        Property<String, String> password = ClientProperties.authPassword(properties);
         // 凭证默认空：未配置不发认证头，认证裁决归服务端（显式配置方可认证，与服务端对称）；
         // 每次请求重读（变更运行时生效）；半配置（只配一项）几乎必是失误，WARN 提示
-        if (isNonBlank(username.getValue()) != isNonBlank(password.getValue())) {
+        if (ClientProperties.isNonBlank(username.getValue()) != ClientProperties.isNonBlank(password.getValue())) {
             LOG.warn("artemis.client.auth.username/password must be set together; authentication header not sent");
         }
         this.authInterceptor = authInterceptor(username, password);
@@ -90,7 +93,7 @@ final class GrpcRegistryClient {
                     public void start(Listener<RespT> listener, Metadata headers) {
                         String usernameValue = username.getValue();
                         String passwordValue = password.getValue();
-                        if (isNonBlank(usernameValue) && isNonBlank(passwordValue)) {
+                        if (ClientProperties.isNonBlank(usernameValue) && ClientProperties.isNonBlank(passwordValue)) {
                             headers.put(
                                     Metadata.Key.of(ClientBasicAuth.HEADER, Metadata.ASCII_STRING_MARSHALLER),
                                     ClientBasicAuth.headerValue(usernameValue, passwordValue));
@@ -102,23 +105,36 @@ final class GrpcRegistryClient {
         };
     }
 
-    private static boolean isNonBlank(String value) {
-        return value != null && !value.trim().isEmpty();
-    }
-
     /** 当前 channel（无则按选址建立；认证 interceptor 挂 channel 级，全部 RPC 覆盖）。close 后不再建立。 */
     ManagedChannel channel() {
+        return channel(null);
+    }
+
+    /**
+     * channel 获取：无/已关闭则重建（选址排除 {@code lastDisconnectedAddress}）；forcedExclude 非空
+     * （TTL 轮换）时**强制重新选址排除之**——不复用活 channel，保证轮换必换址（同址为唯一候选时除外，
+     * 直接复用重开流即完成对当前节点对账）。被替换的活 channel 异步 shutdown（不泄漏：其上的旧流由
+     * generation 机制作废，shutdown 触发的 onError 被判为陈旧回调）。
+     */
+    private ManagedChannel channel(String forcedExclude) {
         ManagedChannel current = channel;
-        if (current == null || current.isShutdown()) {
+        if (forcedExclude != null || current == null || current.isShutdown()) {
+            ManagedChannel replaced = null;
             synchronized (this) {
                 if (closed) {
                     throw new IllegalStateException("registry client closed");
                 }
                 current = channel;
-                if (current == null || current.isShutdown()) {
+                if (forcedExclude != null || current == null || current.isShutdown()) {
+                    String exclude = forcedExclude != null ? forcedExclude : lastDisconnectedAddress;
+                    String address = addressProvider.select(exclude);
+                    if (current != null && !current.isShutdown() && address.equals(currentAddress)) {
+                        return current; // 唯一候选回到当前地址：复用活 channel 重开流（对账语义保留）
+                    }
                     // keepAlive：半开连接（NAT 静默丢包）由 TCP keepalive 探测兜底；
                     // ack 看门狗（HeartbeatChannel）是应用层的第一道检测
-                    current = ManagedChannelBuilder.forTarget(addressProvider.select())
+                    replaced = current;
+                    current = ManagedChannelBuilder.forTarget(address)
                             .usePlaintext()
                             .keepAliveTime(30, TimeUnit.SECONDS)
                             .keepAliveTimeout(10, TimeUnit.SECONDS)
@@ -126,22 +142,40 @@ final class GrpcRegistryClient {
                             .intercept(authInterceptor)
                             .build();
                     channel = current;
+                    currentAddress = address;
+                    lastDisconnectedAddress = null;
                 }
+            }
+            if (replaced != null) {
+                replaced.shutdown(); // 被替换的活 channel 关闭（锁外，异步不阻塞）
             }
         }
         return current;
     }
 
-    /** 换址重建 channel（断流重连路径，调度线程调用）：异步 shutdown 不等待，不阻塞心跳调度。 */
+    /** 换址重建 channel（断流重连/TTL 轮换路径，调度线程调用）：异步 shutdown 不等待，不阻塞心跳调度。 */
     void resetChannel() {
         ManagedChannel old;
         synchronized (this) {
             old = channel;
             channel = null;
+            if (currentAddress != null) {
+                lastDisconnectedAddress = currentAddress; // 重建选址排除刚断开的地址（换址）
+            }
         }
         if (old != null) {
             old.shutdown();
         }
+    }
+
+    /** 传输失败上报（心跳断流/看门狗超时）：计入节点连续失败（达阈值熔断 + 触发重寻址）。 */
+    void onTransportFailed() {
+        addressProvider.markFailed(currentAddress);
+    }
+
+    /** 传输成功上报（心跳 ack）：清零节点失败计数并解除熔断。 */
+    void onTransportSucceeded() {
+        addressProvider.markSucceeded(currentAddress);
     }
 
     ReportOutcome reportRegister(ServiceId service, ServiceInstance instance) {
@@ -154,8 +188,7 @@ final class GrpcRegistryClient {
         } catch (StatusRuntimeException e) {
             return transportOutcome("register", instance, e);
         } catch (RuntimeException e) {
-            LOG.debug("register report failed for {}", instance, e);
-            return ReportOutcome.REJECTED;
+            return unexpectedOutcome("register", instance, e);
         }
     }
 
@@ -169,8 +202,7 @@ final class GrpcRegistryClient {
         } catch (StatusRuntimeException e) {
             return transportOutcome("update", instance, e);
         } catch (RuntimeException e) {
-            LOG.debug("update report failed for {}", instance, e);
-            return ReportOutcome.REJECTED;
+            return unexpectedOutcome("update", instance, e);
         }
     }
 
@@ -192,12 +224,11 @@ final class GrpcRegistryClient {
         } catch (StatusRuntimeException e) {
             return transportOutcome("deregister", instances, e);
         } catch (RuntimeException e) {
-            LOG.debug("deregister report failed for {}", instances, e);
-            return ReportOutcome.REJECTED;
+            return unexpectedOutcome("deregister", instances, e);
         }
     }
 
-    /** 瞬态传输失败（UNAVAILABLE/DEADLINE_EXCEEDED）可重试；其余（UNAUTHENTICATED 等配置性失败）终态。 */
+    /** 瞬态传输失败（UNAVAILABLE/DEADLINE_EXCEEDED）可重试（不计节点失败——熔断仅由心跳引擎上报，见类 javadoc）；其余（UNAUTHENTICATED 等配置性失败）终态。 */
     private static ReportOutcome transportOutcome(String operation, Object target, StatusRuntimeException e) {
         io.grpc.Status.Code code = e.getStatus().getCode();
         LOG.debug(
@@ -211,9 +242,26 @@ final class GrpcRegistryClient {
                 : ReportOutcome.REJECTED;
     }
 
+    /** 非 gRPC 异常：节点列表未就绪（前置寻址中）为瞬态可重试；其余终态（重试无意义）。 */
+    private ReportOutcome unexpectedOutcome(String operation, Object target, RuntimeException e) {
+        LOG.debug("{} report failed for {}", operation, target, e);
+        return e instanceof NoAddressException ? ReportOutcome.RETRIABLE : ReportOutcome.REJECTED;
+    }
+
+    /** 当前连接地址（TTL 轮换取「上一个地址」作强制排除用）。 */
+    String currentAddress() {
+        return currentAddress;
+    }
+
     /** 开心跳 bidi 流；返回的 request observer 供调度线程发送。 */
     StreamObserver<HeartbeatRequest> openHeartbeatStream(StreamObserver<HeartbeatResponse> responseObserver) {
         return RegistryServiceGrpc.newStub(channel()).heartbeat(responseObserver);
+    }
+
+    /** 开心跳 bidi 流（TTL 轮换）：强制排除 forcedExclude 重新选址，不复用活 channel。 */
+    StreamObserver<HeartbeatRequest> openHeartbeatStream(
+            StreamObserver<HeartbeatResponse> responseObserver, String forcedExclude) {
+        return RegistryServiceGrpc.newStub(channel(forcedExclude)).heartbeat(responseObserver);
     }
 
     void close() {

@@ -1,13 +1,22 @@
-package org.mydotey.ai.artemis.client;
+package org.mydotey.ai.artemis.client.internal;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.micrometer.core.instrument.Metrics;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mydotey.ai.artemis.client.ArtemisClient;
+import org.mydotey.ai.artemis.client.FakeRegistryServer;
+import org.mydotey.ai.artemis.client.InstanceId;
+import org.mydotey.ai.artemis.client.ServiceId;
+import org.mydotey.ai.artemis.client.ServiceInstance;
+import org.mydotey.ai.artemis.client.TestAwait;
 import org.mydotey.ai.artemis.proto.common.v1.Instance;
 import org.mydotey.ai.artemis.proto.common.v1.ServiceInstances;
 import org.mydotey.ai.artemis.proto.registry.v1.HeartbeatRequest;
@@ -28,8 +37,7 @@ class DefaultArtemisClientTest {
         System.setProperty("artemis.client.reconnect.maxDelayMs", "2000");
         server = new FakeRegistryServer();
         server.start();
-        System.setProperty("artemis.client.serverAddresses", server.address());
-        client = ArtemisClients.newClient();
+        client = newClient(Metrics.globalRegistry, fixedFetcher(server.address()));
     }
 
     @AfterEach
@@ -41,7 +49,29 @@ class DefaultArtemisClientTest {
         System.clearProperty("artemis.client.heartbeat.intervalMs");
         System.clearProperty("artemis.client.reconnect.baseDelayMs");
         System.clearProperty("artemis.client.reconnect.maxDelayMs");
-        System.clearProperty("artemis.client.serverAddresses");
+    }
+
+    /** 测试构造：注入 fake 寻址传输（节点列表直供，绕过 HTTP 发现）。 */
+    private static ArtemisClient newClient(
+            io.micrometer.core.instrument.MeterRegistry registry, NodeListFetcher fetcher) {
+        return new DefaultArtemisClient(systemProperties(), registry, fetcher);
+    }
+
+    private static NodeListFetcher fixedFetcher(final String... addresses) {
+        return new NodeListFetcher() {
+            @Override
+            public List<NodeEndpoint> fetch() {
+                return endpoints(addresses);
+            }
+        };
+    }
+
+    private static List<NodeEndpoint> endpoints(String... addresses) {
+        List<NodeEndpoint> endpoints = new ArrayList<>();
+        for (String address : addresses) {
+            endpoints.add(new NodeEndpoint(address, NodeEndpoint.PRIORITY_UP));
+        }
+        return endpoints;
     }
 
     private static ServiceInstance instance(String instanceId, String host) {
@@ -100,7 +130,7 @@ class DefaultArtemisClientTest {
         System.setProperty("artemis.client.operation.retryIntervalMs", "100");
         io.micrometer.core.instrument.simple.SimpleMeterRegistry meters =
                 new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
-        ArtemisClient retryingClient = ArtemisClients.newClient(systemProperties(), meters);
+        ArtemisClient retryingClient = newClient(meters, fixedFetcher(server.address()));
         try {
             retryingClient.start();
             server.rejectAll = true; // UNAVAILABLE：瞬态可重试
@@ -200,7 +230,7 @@ class DefaultArtemisClientTest {
     void should_sendBasicAuthHeader_when_credentialsConfigured() {
         System.setProperty("artemis.client.auth.username", "artemis");
         System.setProperty("artemis.client.auth.password", "secret");
-        ArtemisClient authenticated = ArtemisClients.newClient();
+        ArtemisClient authenticated = newClient(Metrics.globalRegistry, fixedFetcher(server.address()));
         try {
             authenticated.start();
             authenticated.register(instance("i-1"));
@@ -247,6 +277,110 @@ class DefaultArtemisClientTest {
         TimeUnit.MILLISECONDS.sleep(700); // > 心跳间隔 500ms，此后不应再有心跳
         assertThat(server.heartbeatRequests.size()).isEqualTo(heartbeatsAtClose);
         assertThatThrownBy(() -> client.register(instance("i-3"))).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void should_failoverToOtherNode_when_currentNodeDies() throws Exception {
+        FakeRegistryServer backup = new FakeRegistryServer();
+        backup.start();
+        ArtemisClient failoverClient = null;
+        try {
+            failoverClient = newClient(Metrics.globalRegistry, fixedFetcher(server.address(), backup.address()));
+            failoverClient.start();
+            failoverClient.register(instance("i-1"));
+
+            // 先等任一节点收到心跳（列表就绪 + 开流），再定格当前连接节点并杀掉
+            TestAwait.await(
+                    "connected via heartbeat",
+                    8000,
+                    () -> !server.heartbeatRequests.isEmpty() || !backup.heartbeatRequests.isEmpty());
+            final FakeRegistryServer connected = server.heartbeatRequests.isEmpty() ? backup : server;
+            final FakeRegistryServer survivor = connected == server ? backup : server;
+            int connectedCount = connected.heartbeatRequests.size();
+            TestAwait.await("connection stable", 3000, () -> connected.heartbeatRequests.size() > connectedCount);
+            connected.stop();
+
+            // 无感换址：心跳落到存活节点并携带实例（杀节点后 select 排除断址 + 熔断兜底）
+            TestAwait.await(
+                    "heartbeat fails over to survivor with instance",
+                    8000,
+                    () -> survivor.heartbeatRequests.stream().anyMatch(r -> containsInstance(r, "i-1")));
+        } finally {
+            if (failoverClient != null) {
+                failoverClient.close();
+            }
+            backup.stop();
+        }
+    }
+
+    @Test
+    void should_becomeAvailable_when_bootstrapPending() throws Exception {
+        // 冷启动寻址未就绪（列表不可得）：操作不抛、心跳退避自愈；列表就绪后自动恢复上报
+        final java.util.concurrent.atomic.AtomicReference<List<NodeEndpoint>> available =
+                new java.util.concurrent.atomic.AtomicReference<>(new ArrayList<NodeEndpoint>());
+        ArtemisClient pendingClient = newClient(Metrics.globalRegistry, new NodeListFetcher() {
+            @Override
+            public List<NodeEndpoint> fetch() {
+                List<NodeEndpoint> current = available.get();
+                if (current.isEmpty()) {
+                    throw new IllegalStateException("bootstrap not ready");
+                }
+                return current;
+            }
+        });
+        try {
+            pendingClient.start();
+            pendingClient.register(instance("i-1"));
+            assertThatCode(() -> pendingClient.register(instance("i-2"))).doesNotThrowAnyException();
+
+            Thread.sleep(300); // 退避中保持无列表（寻址失败、无选址）
+            assertThat(server.heartbeatRequests).isEmpty();
+
+            available.set(endpoints(server.address())); // 寻址成功
+            TestAwait.await(
+                    "heartbeat recovers after bootstrap",
+                    5000,
+                    () -> server.heartbeatRequests.stream().anyMatch(r -> containsInstance(r, "i-1")));
+        } finally {
+            pendingClient.close();
+        }
+    }
+
+    @Test
+    void should_failoverToReadyNode_when_currentNodeRefuses() throws Exception {
+        // 节点活但开流即拒（UNAVAILABLE，服务端未就绪语义）：连续失败熔断 + 立即重寻址，换址收敛到就绪节点
+        FakeRegistryServer refusing = new FakeRegistryServer();
+        refusing.rejectHeartbeatOpen = true;
+        refusing.start();
+        FakeRegistryServer ready = new FakeRegistryServer();
+        ready.start();
+        final java.util.concurrent.atomic.AtomicInteger fetchCount = new java.util.concurrent.atomic.AtomicInteger();
+        ArtemisClient failoverClient = null;
+        try {
+            failoverClient = newClient(Metrics.globalRegistry, new NodeListFetcher() {
+                @Override
+                public List<NodeEndpoint> fetch() {
+                    // 首轮只见拒绝节点（强制起点），其后寻址刷新（熔断触发 refreshNow）扩为双节点
+                    return fetchCount.incrementAndGet() == 1
+                            ? endpoints(refusing.address())
+                            : endpoints(refusing.address(), ready.address());
+                }
+            });
+            failoverClient.start();
+            failoverClient.register(instance("i-1"));
+
+            TestAwait.await(
+                    "heartbeat converges to ready node with instance",
+                    8000,
+                    () -> ready.heartbeatRequests.stream().anyMatch(r -> containsInstance(r, "i-1")));
+            assertThat(refusing.heartbeatRequests).isEmpty(); // 拒绝节点从未成功开流
+        } finally {
+            if (failoverClient != null) {
+                failoverClient.close();
+            }
+            refusing.stop();
+            ready.stop();
+        }
     }
 
     private static boolean containsInstance(HeartbeatRequest request, String instanceId) {

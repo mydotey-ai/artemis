@@ -7,7 +7,6 @@ import io.micrometer.core.instrument.MeterRegistry;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -29,7 +28,10 @@ import org.slf4j.LoggerFactory;
  * 断流 = 指数退避重连（随机抖动防同步风暴），重连开流成功立即补一跳（服务端 upsert 自愈）；
  * 退避计数只在收到新流 ack 后归零——本地建流成功不代表服务端可达。
  * ack 看门狗感知半开连接（NAT 静默丢包时 onError 不会到来）：超过 ackTimeout 未收 ack 即判流失效。
- * 调度器单线程 lazy 创建（未 start 的 client 不占线程）；心跳与重连任务串行执行无竞态。
+ * 连接 TTL 轮换（ADR-006 分布式对账）：流建立时生成轮换 deadline（ttl × [0.8, 1.2) 抖动，防集群同步
+ * 轮换雪崩），周期 tick 检查到期 → 主动废弃当前流与 channel、立即重连换址（无退避、不计失败），
+ * 开流全量上报即修复新节点的丢失事件残留。
+ * 调度器单线程 lazy 创建（未 start 的 client 不占线程）；心跳、重连与轮换任务串行执行无竞态。
  */
 final class HeartbeatChannel {
 
@@ -39,11 +41,13 @@ final class HeartbeatChannel {
     static final String KEY_ACK_TIMEOUT_MS = "artemis.client.heartbeat.ackTimeoutMs";
     static final String KEY_RECONNECT_BASE_MS = "artemis.client.reconnect.baseDelayMs";
     static final String KEY_RECONNECT_MAX_MS = "artemis.client.reconnect.maxDelayMs";
+    static final String KEY_TTL_MS = "artemis.client.registry.connection.ttlMs";
 
     private static final long DEFAULT_INTERVAL_MS = 5_000;
     private static final long DEFAULT_ACK_TIMEOUT_MS = 30_000;
     private static final long DEFAULT_RECONNECT_BASE_MS = 1_000;
     private static final long DEFAULT_RECONNECT_MAX_MS = 30_000;
+    private static final long DEFAULT_TTL_MS = 600_000;
     private static final int MAX_PENDING_TASKS = 64;
 
     private final GrpcRegistryClient grpcClient;
@@ -51,6 +55,7 @@ final class HeartbeatChannel {
     private final MeterRegistry registry;
     private final Counter heartbeatFailure;
     private final Counter reconnectCounter;
+    private final Counter rotationCounter;
     private final Gauge connectedGauge;
     /** 连接态 gauge 载体（0/1）——强引用防 Micrometer 弱引用回收。 */
     private final AtomicLong connected = new AtomicLong();
@@ -66,11 +71,14 @@ final class HeartbeatChannel {
     private final Property<String, Long> ackTimeoutMs;
     private final Property<String, Long> reconnectBaseMs;
     private final Property<String, Long> reconnectMaxMs;
+    private final Property<String, Long> ttlMs;
 
     private volatile BoundedScheduledExecutor scheduler;
     private volatile StreamObserver<HeartbeatRequest> requestObserver;
     /** 流代数：陈旧流的迟到回调（onError/onCompleted）不得拆毁新流。 */
     private volatile int generation;
+    /** 当前连接的轮换 deadline（毫秒墙钟；0 = 禁用/未设）。 */
+    private volatile long rotationDeadline;
 
     private volatile long lastAckSeq = -1;
     /** 最近一次 ack 的墙钟毫秒（开流时置为当前时间作为宽限起点）。 */
@@ -89,6 +97,7 @@ final class HeartbeatChannel {
         this.registry = registry;
         this.heartbeatFailure = registry.counter("artemis.client.heartbeat.failure", "client", clientId);
         this.reconnectCounter = registry.counter("artemis.client.reconnect", "client", clientId);
+        this.rotationCounter = registry.counter("artemis.client.rotation", "client", clientId);
         this.connectedGauge = Gauge.builder("artemis.client.connected", connected, AtomicLong::doubleValue)
                 .tag("client", clientId)
                 .register(registry);
@@ -100,6 +109,7 @@ final class HeartbeatChannel {
                 KEY_RECONNECT_BASE_MS, new RangeValueConfig<>(DEFAULT_RECONNECT_BASE_MS, 100L, 60_000L));
         this.reconnectMaxMs = properties.getLongProperty(
                 KEY_RECONNECT_MAX_MS, new RangeValueConfig<>(DEFAULT_RECONNECT_MAX_MS, 1_000L, 300_000L));
+        this.ttlMs = properties.getLongProperty(KEY_TTL_MS, new RangeValueConfig<>(DEFAULT_TTL_MS, 0L, 86_400_000L));
     }
 
     /** 启动：立即开流 + 首跳，周期心跳自开流起自续。 */
@@ -108,7 +118,8 @@ final class HeartbeatChannel {
             throw new IllegalStateException("heartbeat channel closed");
         }
         if (scheduler == null) {
-            scheduler = new BoundedScheduledExecutor("heartbeat", 1, MAX_PENDING_TASKS, new NamedDaemonThreadFactory());
+            scheduler = new BoundedScheduledExecutor(
+                    "heartbeat", 1, MAX_PENDING_TASKS, new NamedDaemonThreadFactory("artemis-client-heartbeat"));
         }
         scheduler.schedule(
                 new Runnable() {
@@ -209,7 +220,9 @@ final class HeartbeatChannel {
         try {
             if (!closed) {
                 checkAckLiveness();
-                send();
+                if (!maybeRotate()) { // 轮换路径 openStreamAndSend 末尾已补跳，本 tick 不再 send（防双跳）
+                    send();
+                }
             }
         } catch (RuntimeException e) {
             // 心跳构建/发送的意外异常不得杀死调度链（scheduleAtFixedRate 抛错即停的教训）
@@ -222,6 +235,33 @@ final class HeartbeatChannel {
                 scheduleTick();
             }
         }
+    }
+
+    /** 连接 TTL 到期 → 主动轮换（无退避、不计失败、不进熔断——健康换址，ADR-006 对账）。返回 true = 已轮换（开流补跳完成）。 */
+    private boolean maybeRotate() {
+        long deadline = rotationDeadline;
+        if (requestObserver == null || deadline <= 0 || System.currentTimeMillis() < deadline) {
+            return false;
+        }
+        LOG.info("connection ttl reached, rotating to another node for reconciliation");
+        rotationCounter.increment();
+        String previous = grpcClient.currentAddress();
+        StreamObserver<HeartbeatRequest> oldStream = requestObserver;
+        requestObserver = null;
+        connected.set(0);
+        rotationDeadline = 0;
+        generation++; // 先作废旧代数：onCompleted 触发的流关闭回调（onCompleted/onError）不得触发 markBroken
+        if (oldStream != null) {
+            try {
+                oldStream.onCompleted(); // 优雅半关旧流（服务端即时感知，不残留半死流）
+            } catch (RuntimeException e) {
+                LOG.debug("old heartbeat stream close on rotation: {}", e.getMessage());
+            }
+        }
+        // 强制换址：select 排除当前地址且不复用活 channel（同址为唯一候选时复用重开流，对账语义保留）；
+        // openStreamAndSend 视为非重连（无退避计数），开流失败照常走重连退避链自愈
+        openStreamAndSend(previous);
+        return true;
     }
 
     /** 半开连接看门狗：超过 ackTimeout 无 ack（含开流宽限期）即判流失效并重连。 */
@@ -254,6 +294,11 @@ final class HeartbeatChannel {
     }
 
     private void openStreamAndSend() {
+        openStreamAndSend(null);
+    }
+
+    /** forcedExclude 非空（TTL 轮换）时强制换址开流。 */
+    private void openStreamAndSend(String forcedExclude) {
         if (closed) {
             return;
         }
@@ -274,6 +319,7 @@ final class HeartbeatChannel {
                     lastAckSeq = response.getData().getSeq();
                     lastAckMillis = System.currentTimeMillis();
                     reconnectAttempt.set(0); // 服务端确认可达后才归零退避计数
+                    grpcClient.onTransportSucceeded(); // 清零节点失败计数并解除熔断
                 }
             }
 
@@ -296,16 +342,20 @@ final class HeartbeatChannel {
             }
         };
         try {
-            requestObserver = grpcClient.openHeartbeatStream(responseObserver);
+            requestObserver = forcedExclude != null
+                    ? grpcClient.openHeartbeatStream(responseObserver, forcedExclude)
+                    : grpcClient.openHeartbeatStream(responseObserver);
         } catch (RuntimeException e) {
             LOG.debug("heartbeat stream open failed: {}", e.getMessage());
             requestObserver = null;
             heartbeatFailure.increment();
+            grpcClient.onTransportFailed();
             scheduleReconnect();
             return;
         }
         lastAckMillis = System.currentTimeMillis(); // ack 宽限起点（半开连接检测起点）
         connected.set(1);
+        rotationDeadline = nextRotationDeadline();
         if (reconnecting) {
             LOG.info("heartbeat stream reconnected");
             reconnectCounter.increment();
@@ -314,9 +364,21 @@ final class HeartbeatChannel {
         ensurePeriodic();
     }
 
+    /** 轮换 deadline = now + ttl × [0.8, 1.2)（抖动防集群同步轮换雪崩）；ttl ≤ 0 禁用。 */
+    private long nextRotationDeadline() {
+        long ttl = ttlMs.getValue();
+        if (ttl <= 0) {
+            return 0;
+        }
+        double jitter = 0.8 + 0.4 * ThreadLocalRandom.current().nextDouble();
+        return System.currentTimeMillis() + (long) (ttl * jitter);
+    }
+
     private void markBroken() {
+        generation++; // 作废在途回调：watchdog 先判死时旧流迟到的 onError/onCompleted 不得二次 markBroken（重复计失败）
         requestObserver = null;
         connected.set(0);
+        grpcClient.onTransportFailed(); // 计入节点连续失败（达阈值熔断 + 触发重寻址）
         scheduleReconnect();
     }
 
@@ -370,16 +432,5 @@ final class HeartbeatChannel {
     /** 快照供给（本地实例集 → 心跳全量结构）。 */
     interface Supplier {
         Map<ServiceId, List<ServiceInstance>> get();
-    }
-
-    private static final class NamedDaemonThreadFactory implements ThreadFactory {
-        private int count;
-
-        @Override
-        public Thread newThread(Runnable runnable) {
-            Thread thread = new Thread(runnable, "artemis-client-heartbeat-" + (++count));
-            thread.setDaemon(true);
-            return thread;
-        }
     }
 }

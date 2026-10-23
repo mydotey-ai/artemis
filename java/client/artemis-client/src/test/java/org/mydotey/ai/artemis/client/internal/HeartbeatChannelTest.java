@@ -11,11 +11,12 @@ import org.mydotey.ai.artemis.client.TestAwait;
 import org.mydotey.ai.artemis.proto.registry.v1.HeartbeatRequest;
 import org.mydotey.scf.facade.StringProperties;
 
-/** 心跳引擎内核：seq/ack、立即首跳、断流重连、多址换址、ack 丢失不阻塞（直接构造 internal 组件）。 */
+/** 心跳引擎内核：seq/ack、立即首跳、断流重连、多址换址、TTL 轮换、ack 丢失不阻塞（直接构造 internal 组件）。 */
 class HeartbeatChannelTest {
 
     private FakeRegistryServer server;
     private HeartbeatChannel channel;
+    private FailoverAddressProvider addressProvider;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -24,7 +25,9 @@ class HeartbeatChannelTest {
         System.setProperty("artemis.client.reconnect.maxDelayMs", "2000");
         server = new FakeRegistryServer();
         server.start();
-        System.setProperty("artemis.client.serverAddresses", server.address());
+        addressProvider = new FailoverAddressProvider(
+                systemProperties(), io.micrometer.core.instrument.Metrics.globalRegistry, "test-client");
+        updateNodes(server.address());
     }
 
     @AfterEach
@@ -36,11 +39,18 @@ class HeartbeatChannelTest {
         System.clearProperty("artemis.client.heartbeat.intervalMs");
         System.clearProperty("artemis.client.reconnect.baseDelayMs");
         System.clearProperty("artemis.client.reconnect.maxDelayMs");
-        System.clearProperty("artemis.client.serverAddresses");
+    }
+
+    private void updateNodes(String... addresses) {
+        java.util.List<NodeEndpoint> endpoints = new java.util.ArrayList<>();
+        for (String address : addresses) {
+            endpoints.add(new NodeEndpoint(address, NodeEndpoint.PRIORITY_UP));
+        }
+        addressProvider.updateNodes(endpoints);
     }
 
     private HeartbeatChannel startChannel() {
-        GrpcRegistryClient grpc = new GrpcRegistryClient(systemProperties());
+        GrpcRegistryClient grpc = new GrpcRegistryClient(addressProvider, systemProperties());
         channel = new HeartbeatChannel(
                 grpc,
                 new HeartbeatChannel.Supplier() {
@@ -113,7 +123,7 @@ class HeartbeatChannelTest {
         FakeRegistryServer backup = new FakeRegistryServer();
         backup.start();
         try {
-            System.setProperty("artemis.client.serverAddresses", server.address() + "," + backup.address());
+            updateNodes(server.address(), backup.address());
             startChannel();
             TestAwait.await(
                     "heartbeat arrives at one of the servers",
@@ -130,6 +140,25 @@ class HeartbeatChannelTest {
                     5000,
                     () -> server.heartbeatRequests.size() + backup.heartbeatRequests.size() > totalAtBreak + 1);
         } finally {
+            backup.stop();
+        }
+    }
+
+    @Test
+    void should_rotateConnection_when_ttlReached() throws Exception {
+        FakeRegistryServer backup = new FakeRegistryServer();
+        backup.start();
+        System.setProperty("artemis.client.registry.connection.ttlMs", "300");
+        try {
+            updateNodes(server.address(), backup.address());
+            startChannel();
+            // TTL 到期主动轮换（无退避）：心跳流在两节点间轮转，两端均收到心跳
+            TestAwait.await(
+                    "heartbeats arrive at both servers via ttl rotation",
+                    5000,
+                    () -> !server.heartbeatRequests.isEmpty() && !backup.heartbeatRequests.isEmpty());
+        } finally {
+            System.clearProperty("artemis.client.registry.connection.ttlMs");
             backup.stop();
         }
     }

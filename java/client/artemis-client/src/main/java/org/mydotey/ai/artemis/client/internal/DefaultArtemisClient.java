@@ -9,7 +9,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -24,11 +23,15 @@ import org.slf4j.LoggerFactory;
 
 /**
  * SDK 默认实现（internal，经 {@code ArtemisClients.newClient(...)} 构造，勿直接使用）：
- * fire-and-forget 操作——本地集更新同步必成，上报异步（单线程有界 ops executor）；瞬态传输失败按配置
- * 有界重试（{@code artemis.client.operation.retryTimes/retryIntervalMs}），重试耗尽或终态拒绝：
+ * 三级地址容灾装配（FailoverAddressProvider 选址 + NodeListRefresher 前置寻址刷新 +
+ * HttpNodeListFetcher HTTP 发现传输）+ fire-and-forget 操作——本地集更新同步必成，上报异步
+ * （单线程有界 ops executor）；瞬态传输失败按配置有界重试
+ * （{@code artemis.client.operation.retryTimes/retryIntervalMs}），重试耗尽或终态拒绝：
  * WARN + metrics 计数 + 即时心跳补投（register/update）/ TTL 收敛（deregister），不向用户传导成败。
  * 重试前**重读本地集当前状态**：期间被注销则放弃、被更新则上报新值（防陈旧重放）。
- * close 顺序固定：停心跳 → 停上报队列并等待在途任务（有界）→ 全量注销 → 关传输。
+ * start 先寻址（异步立即，心跳开流自愈等列表就绪）再启心跳；熔断触发重寻址经
+ * provider.setCircuitListener(refresher::refreshNow) 闭环。
+ * close 顺序固定：停心跳 → 停寻址 → 停上报队列并等待在途任务（有界）→ 全量注销 → 关传输。
  */
 public final class DefaultArtemisClient implements ArtemisClient {
 
@@ -53,6 +56,7 @@ public final class DefaultArtemisClient implements ArtemisClient {
     private final LocalInstanceStore store = new LocalInstanceStore();
     private final GrpcRegistryClient grpcClient;
     private final HeartbeatChannel heartbeat;
+    private final NodeListRefresher nodeListRefresher;
     private final MeterRegistry registry;
     private final String clientId;
     private final Gauge instancesGauge;
@@ -67,13 +71,19 @@ public final class DefaultArtemisClient implements ArtemisClient {
     private final AtomicReference<State> state = new AtomicReference<>(State.NEW);
 
     public DefaultArtemisClient(StringProperties properties, MeterRegistry meterRegistry) {
+        this(properties, meterRegistry, new HttpNodeListFetcher(properties));
+    }
+
+    /** 测试注入寻址传输端口（fake fetcher 驱动端到端 SDK 行为）。 */
+    DefaultArtemisClient(StringProperties properties, MeterRegistry meterRegistry, NodeListFetcher fetcher) {
         this.registry = meterRegistry;
         this.clientId = "client-" + CLIENT_IDS.incrementAndGet();
         this.retryTimes =
                 properties.getIntProperty(KEY_RETRY_TIMES, new RangeValueConfig<>(DEFAULT_RETRY_TIMES, 0, 10));
         this.retryIntervalMs = properties.getLongProperty(
                 KEY_RETRY_INTERVAL_MS, new RangeValueConfig<>(DEFAULT_RETRY_INTERVAL_MS, 100L, 10_000L));
-        this.grpcClient = new GrpcRegistryClient(properties);
+        FailoverAddressProvider addressProvider = new FailoverAddressProvider(properties, this.registry, clientId);
+        this.grpcClient = new GrpcRegistryClient(addressProvider, properties);
         this.heartbeat = new HeartbeatChannel(
                 grpcClient,
                 new HeartbeatChannel.Supplier() {
@@ -85,11 +95,20 @@ public final class DefaultArtemisClient implements ArtemisClient {
                 properties,
                 this.registry,
                 clientId);
+        this.nodeListRefresher = new NodeListRefresher(fetcher, addressProvider, properties, this.registry, clientId);
+        // 熔断触发 → 立即重新前置寻址（refresher 构造后注入，解构造环）
+        addressProvider.setCircuitListener(new Runnable() {
+            @Override
+            public void run() {
+                nodeListRefresher.refreshNow();
+            }
+        });
         // client tag 区分多 client（Micrometer 同名同 tag 首注册胜出）；close 时移除
         this.instancesGauge = Gauge.builder("artemis.client.instances", store, LocalInstanceStore::instanceCount)
                 .tag("client", clientId)
                 .register(registry);
-        this.ops = new BoundedScheduledExecutor("ops", 1, MAX_PENDING_TASKS, new NamedOpsThreadFactory());
+        this.ops = new BoundedScheduledExecutor(
+                "ops", 1, MAX_PENDING_TASKS, new NamedDaemonThreadFactory("artemis-client-ops"));
     }
 
     @Override
@@ -98,6 +117,7 @@ public final class DefaultArtemisClient implements ArtemisClient {
             throw new IllegalStateException("client already started or closed");
         }
         LOG.info("artemis client started ({})", clientId);
+        nodeListRefresher.start(); // 立即寻址；心跳开流在列表就绪前按瞬态失败退避自愈
         heartbeat.start();
     }
 
@@ -130,8 +150,9 @@ public final class DefaultArtemisClient implements ArtemisClient {
         if (previous == State.CLOSED) {
             return; // 幂等
         }
-        // 屏障顺序：停心跳 → 等在途上报结束（register 完成后才发注销，防迟到的 register 复活实例）
+        // 屏障顺序：停心跳 → 停寻址 → 等在途上报结束（register 完成后才发注销，防迟到的 register 复活实例）
         heartbeat.close();
+        nodeListRefresher.close();
         ops.shutdown();
         try {
             if (!ops.awaitTermination(CLOSE_AWAIT_MS, TimeUnit.MILLISECONDS)) {
@@ -286,17 +307,6 @@ public final class DefaultArtemisClient implements ArtemisClient {
         }
         if (current == State.CLOSED) {
             throw new IllegalStateException("client closed (" + operation + ")");
-        }
-    }
-
-    private static final class NamedOpsThreadFactory implements ThreadFactory {
-        private int count;
-
-        @Override
-        public Thread newThread(Runnable runnable) {
-            Thread thread = new Thread(runnable, "artemis-client-ops-" + (++count));
-            thread.setDaemon(true);
-            return thread;
         }
     }
 }

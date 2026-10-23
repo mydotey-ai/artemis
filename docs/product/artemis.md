@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.12    更新时间: 2026-10-21
+版本: 1.13    更新时间: 2026-10-23
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -100,7 +100,7 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 
 - **公开 API**：`ArtemisClient`（`start`/`register`/`update`/`deregister`/`close`）+ 不可变值类型 `ServiceId`/`InstanceId`/`ServiceInstance`/`InstanceStatus`；入口 `ArtemisClients.newClient(...)`（无 builder）。完整用法见 [sdk-java.md](../api/sdk-java.md)。
 - **操作语义**：fire-and-forget——本地集同步更新后异步上报，失败内部重试 + 心跳自愈，调用方不处理操作结果；重试前重读本地集，防陈旧状态重放。
-- **心跳与容错**：gRPC bidi 流全量上报（默认 5s），seq/ack、指数退避重连、ack 看门狗与 keepAlive 感知半开连接；三级地址容灾骨架（配置地址列表随机选址，运行时断流换址）。
+- **心跳与容错**：gRPC bidi 流全量上报（默认 5s），seq/ack、指数退避重连、ack 看门狗与 keepAlive 感知半开连接；地址经前置寻址发现管线（v0.2 phase-5 升级为三级容灾 + TTL 轮换，见下）。
 - **生命周期**：`start`/`close` 幂等；close 先停心跳、等待在途上报，再全量注销——优雅下线实例即刻消失；零非 daemon 线程遗留。
 - **配置**：全部经 SCF `artemis.client.*`（地址/凭证/重试/心跳/重连），环境变量容器友好映射；注册侧不做磁盘快照（崩溃后业务重新注册 + 心跳幂等收敛）。
 - **可观测**：Micrometer 指标（操作失败/耗时、心跳失败、重连、连接态、本地实例数，带 client 标签），缺省挂 `Metrics.globalRegistry`，starter 将自动接 Boot `MeterRegistry`。
@@ -138,6 +138,14 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **指标**：`artemis.registry.bootstrap.attempts|failures|synced.instances`、`artemis.registry.cluster.probe.rounds`、`artemis.registry.cluster.probe.failures{peer}`、`artemis.registry.cluster.peers.up`（经 `/actuator/prometheus`）。
 - **工程形态**：探测并发/超时/恢复、启动分支、整体替换、bootstrap 分片等单测；集群 IT 覆盖新节点加入全量同步、重启优先 peer、无 UP peer 回退快照、已就绪 peer 同步失败重试恢复、对外节点状态 API（含停节点标记 UNKNOWN）。
 
+**v0.2 phase-5（SDK 三级地址容灾与连接 TTL 轮换）已交付**：
+
+- **三级地址管线**：配置 url（`artemis.client.registry.addresses`，生产配域名/LB）→ HTTP 前置寻址 `GET /cluster/nodes`（Basic 认证，protobuf bytes，稳态 5min 刷新）取得节点列表 → 选址池按观测态优先级随机（`UP` > `UNKNOWN`/`STARTING` > `DOWN`，状态只作优先级不作排除）。拉取失败保留旧列表（不清空）、指数退避重试；未就绪节点寻址应答 503（SDK 重试其它 url / 单域名退避重试原址）。
+- **熔断换址**：断流/开流失败/ack 超时计入当前地址连续失败（仅心跳引擎驱动，归因无竞态），达阈值（默认 3）熔断并立即重新前置寻址；全部熔断仍全量随机（降权不清零）。当前节点死亡无感换址，心跳全量上报使新节点 upsert 自愈——业务实例不过期。
+- **连接 TTL 轮换**（ADR-006 分布式对账）：心跳流按 TTL（默认 10min ± 20% 抖动）主动换址重建，开流全量上报修复新节点丢失的事件残留；健康换址不计失败不进熔断。
+- **配置与可观测**：`registry.connection.ttlMs`、`registry.address.refreshIntervalMs/retryBaseMs/retryMaxMs/circuitThreshold/circuitOpenMs`（均动态可调）；指标 `rotation`、`address.circuit.opened{address}`、`nodelist.refresh{outcome}`。
+- **工程形态**：client 44 单测（选址/熔断/寻址/轮换压测）+ registry-server `SdkFailoverIT`/`ClusterNodesHttpIT`（3 节点真实集群 + 真实 SDK 端到端容灾）；API 文档（sdk-java / node-status-api）同步。
+
 **v0.2 phase-4（自我保护 2.0：节点级兜底 + 服务级权威）已交付**：
 
 - **两层判定**：保留节点级全局窗口（原 10s/85%/下限 50 语义）作为网络分区/小服务/纯副本兜底；新增每服务窗口，服务峰值达 `minCount` 后服务级状态权威，否则回落节点级。过期清理按服务判定：保护中的服务保留租约，其余服务照常清理；显式 deregister 不受影响。
@@ -151,6 +159,7 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.13 | 2026-10-23 | v0.2 phase-5 交付：SDK 三级地址容灾（HTTP 前置寻址 + 观测态优先级选址 + 熔断换址）与连接 TTL 轮换；`GET /cluster/nodes` 发现端点（未就绪 503）；SDK 配置键与指标递补 |
 | 1.12 | 2026-10-21 | v0.2 phase-4 交付：自我保护 2.0（节点级兜底 + 服务级权威、显式状态与超时回落）、有界指标、`GetSelfProtectionStatus` 与 Admin 状态端点、集群独立判定 |
 | 1.11 | 2026-10-21 | v0.2 phase-3 交付：peer 全量 bootstrap（异步/退避/整体替换/not ready 语义）、三段式成员配置、对外节点状态 API 与后台并发探测、配置与指标；修正 phase-1 交付节对外端点表述 |
 | 1.10 | 2026-10-21 | v0.2 phase-2 交付：变更事件扇出（副本租约继承原产品：RENEW 续约复制、清理不扇出、缺席补注册）、扇出管线与退避重试、复制配置项与指标；修正 v0.1 phase-2 节事件出口表述 |

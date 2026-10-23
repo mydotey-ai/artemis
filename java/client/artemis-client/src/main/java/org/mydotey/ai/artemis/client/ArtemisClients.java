@@ -17,7 +17,7 @@ import org.mydotey.scf.facade.StringProperties;
  * 地址/凭证/心跳/重连/重试键定义与默认值见各消费类；地址与凭证**使用时读取**（未静态固化）。
  * 运行时变更的生效时机由配置源语义决定：文件源重载/自定义源 raiseChangeEvent 后生效；
  * 缺省系统属性/环境变量为启动期源（不产生变更事件）。必配项
- * {@code artemis.client.serverAddresses} 缺失时创建即 fail-fast。
+ * {@code artemis.client.registry.addresses} 缺失时创建即 fail-fast。
  *
  * <p>可观测（Micrometer 库模式，技术选型 #34）：{@code newClient(properties, meterRegistry)}
  * 注入宿主 registry；未注入挂 {@link Metrics#globalRegistry}（宿主 {@code Metrics.addRegistry}
@@ -49,7 +49,7 @@ public final class ArtemisClients {
 
     private static StringProperties defaultProperties() {
         Map<Integer, ConfigurationSource> sources = new LinkedHashMap<>();
-        // 容器友好映射：artemis.client.serverAddresses → ARTEMIS_CLIENT_SERVERADDRESSES
+        // 容器友好映射：artemis.client.registry.addresses → ARTEMIS_CLIENT_REGISTRY_ADDRESSES
         sources.put(2, new RelaxedEnvironmentConfigurationSource());
         sources.put(3, SimpleConfigurationSources.newSystemPropertiesSource());
         ConfigurationManager manager = ConfigurationManagers.newManager(MANAGER_NAME, sources);

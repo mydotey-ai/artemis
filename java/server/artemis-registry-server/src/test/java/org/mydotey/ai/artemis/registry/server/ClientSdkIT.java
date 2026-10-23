@@ -26,29 +26,43 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
-import org.springframework.grpc.server.lifecycle.GrpcServerLifecycle;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 
 /**
  * SDK 端到端集成测试：artemis-client（release=8，JDK 25 JVM 正常加载；Java 8 兼容由 client
  * 单测覆盖）驱动进程内真实 registry 服务——注册可见性、心跳续约、update 覆盖、close 优雅下线、
- * 认证拒绝。心跳间隔经系统属性压到 500ms（SDK builder 缺省配置源含系统属性）；
+ * 认证拒绝。SDK 经 HTTP 前置寻址（单节点 = 1 成员集群，端口预分配固定：peer + external gRPC +
+ * 外部 HTTP），心跳间隔经系统属性压到 500ms（SDK builder 缺省配置源含系统属性）；
  * 服务端 TTL 压到 1s（测试装配），续约用例以虚拟时钟推进区分「有无续约」。
  */
-@SpringBootTest(properties = {"spring.grpc.server.port=0", "server.port=0", "management.server.port=0"})
+@SpringBootTest(
+        properties = {"management.server.port=0"},
+        webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT)
 class ClientSdkIT {
 
-    /** 产品内部端口不接受 0：测试启动前预分配固定端口。 */
+    /** 端口不接受 0：测试启动前预分配固定端口（SDK 前置寻址经 HTTP 端口发现 gRPC 端点）。 */
     private static final int PEER_PORT = TestGrpcPorts.freePort();
+
+    private static final int EXTERNAL_GRPC_PORT = TestGrpcPorts.freePort();
+
+    private static final int HTTP_PORT = TestGrpcPorts.freePort();
+
+    private static final String MEMBER = "node-0@127.0.0.1:" + PEER_PORT + "@127.0.0.1:" + EXTERNAL_GRPC_PORT;
+
+    /** 预分配端口是运行期值：经 DynamicPropertySource 注入（注解属性须编译期常量）。 */
+    @DynamicPropertySource
+    static void dynamicProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.grpc.server.port", () -> EXTERNAL_GRPC_PORT);
+        registry.add("server.port", () -> HTTP_PORT);
+        registry.add("artemis.registry.cluster.members", () -> MEMBER);
+        registry.add("artemis.registry.cluster.self", () -> "node-0");
+    }
 
     private static final ServiceId ORDER =
             ServiceId.newBuilder().namespace("default").service("order-service").build();
 
     private static final ServiceKey DOMAIN_KEY = new ServiceKey("default", "order-service");
-
-    @Autowired
-    private Map<String, GrpcServerLifecycle> lifecycles;
-
-    private int port;
 
     @Autowired
     private RegistryService registryService;
@@ -60,13 +74,12 @@ class ClientSdkIT {
 
     @BeforeEach
     void setUp() {
-        port = TestGrpcPorts.external(lifecycles);
         System.setProperty("artemis.client.heartbeat.intervalMs", "500");
         // context 跨用例缓存：时钟归零、清残留实例，保证用例独立
         clock.reset();
         registryService.deregister(
                 new DeregisterRequest(List.of(new InstanceKey(DOMAIN_KEY, "i-1"), new InstanceKey(DOMAIN_KEY, "i-2"))));
-        System.setProperty("artemis.client.serverAddresses", "localhost:" + port);
+        System.setProperty("artemis.client.registry.addresses", "http://127.0.0.1:" + HTTP_PORT);
         System.setProperty("artemis.client.auth.username", "artemis");
         System.setProperty("artemis.client.auth.password", "artemis");
         client = ArtemisClients.newClient();
@@ -78,7 +91,7 @@ class ClientSdkIT {
             client.close();
         }
         System.clearProperty("artemis.client.heartbeat.intervalMs");
-        System.clearProperty("artemis.client.serverAddresses");
+        System.clearProperty("artemis.client.registry.addresses");
         System.clearProperty("artemis.client.auth.username");
         System.clearProperty("artemis.client.auth.password");
     }
@@ -193,7 +206,11 @@ class ClientSdkIT {
                             "artemis.registry.lease.ttlMs",
                             "1000",
                             "artemis.registry.internal.port",
-                            String.valueOf(PEER_PORT)))
+                            String.valueOf(PEER_PORT),
+                            "artemis.registry.cluster.members",
+                            MEMBER,
+                            "artemis.registry.cluster.self",
+                            "node-0"))
                     .properties();
         }
 

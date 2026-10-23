@@ -25,7 +25,7 @@ import org.springframework.util.StreamUtils;
 
 class ArtemisClientAutoConfigurationTest {
 
-    private static final String ADDRESS = "artemis.client.serverAddresses=127.0.0.1:1";
+    private static final String ADDRESS = "artemis.client.registry.addresses=http://127.0.0.1:1";
 
     private final ApplicationContextRunner runner =
             new ApplicationContextRunner().withUserConfiguration(ArtemisClientAutoConfiguration.class);
@@ -74,9 +74,11 @@ class ArtemisClientAutoConfigurationTest {
 
     @Test
     void should_fail_fast_when_server_addresses_missing() {
-        runner.run(context -> assertThat(context.getStartupFailure())
-                .hasRootCauseInstanceOf(IllegalArgumentException.class)
-                .hasRootCauseMessage("artemis.client.serverAddresses must be set (comma separated host:port)"));
+        runner.run(
+                context -> assertThat(context.getStartupFailure())
+                        .hasRootCauseInstanceOf(IllegalArgumentException.class)
+                        .hasRootCauseMessage(
+                                "artemis.client.registry.addresses must be set to valid http(s) url(s), e.g. http://artemis.example.com (missing or invalid — check WARN log for rejected values)"));
     }
 
     @Test
@@ -115,17 +117,21 @@ class ArtemisClientAutoConfigurationTest {
 
     @Test
     void should_resolve_relaxed_key_variants() {
-        assertThat(sourceValue("artemis.client.server-addresses", "kebab")).isEqualTo("kebab");
-        assertThat(sourceValue("ARTEMIS_CLIENT_SERVER_ADDRESSES", "sdk-env")).isEqualTo("sdk-env");
-        assertThat(sourceValue("artemis.client.server_addresses", "snake")).isEqualTo("snake");
+        // camel 段键的 kebab/snake 变体 + 点分层键的大写蛇形环境变量变体
+        assertThat(sourceValue("artemis.client.heartbeat.interval-ms", "kebab", "artemis.client.heartbeat.intervalMs"))
+                .isEqualTo("kebab");
+        assertThat(sourceValue("ARTEMIS_CLIENT_HEARTBEAT_INTERVAL_MS", "snake", "artemis.client.heartbeat.intervalMs"))
+                .isEqualTo("snake");
+        assertThat(sourceValue("ARTEMIS_CLIENT_REGISTRY_ADDRESSES", "env", "artemis.client.registry.addresses"))
+                .isEqualTo("env");
     }
 
-    private static Object sourceValue(String variant, String value) {
+    private static Object sourceValue(String variant, String value, String canonicalKey) {
         Map<String, Object> values = Collections.<String, Object>singletonMap(variant, value);
         StandardEnvironment environment = new StandardEnvironment();
         environment.getPropertySources().addFirst(new MapPropertySource("test", values));
         // 同包可见：直接验证 source 的键名归一化
-        return new SpringEnvironmentConfigurationSource(environment).getPropertyValue("artemis.client.serverAddresses");
+        return new SpringEnvironmentConfigurationSource(environment).getPropertyValue(canonicalKey);
     }
 
     private static ServiceInstance instance() {

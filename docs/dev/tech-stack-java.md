@@ -1,6 +1,6 @@
 # Java 技术选型
 
-版本: 1.22    更新时间: 2026-10-20
+版本: 1.23    更新时间: 2026-10-22
 
 > 本文是新一代 Artemis Java 实现的技术选型基线：语言与运行时、工程结构、全量技术组件清单与依赖冲突策略。设计依据为[架构设计](../arch/artemis-next-architecture.md)（§3 技术栈策略、§7 关键决策 D8），开发规范见[Java 开发规范](coding-guidelines-java.md)。Rust 实现（v1.x 混合集群）直接消费仓库顶层 `proto/` 契约目录（见[proto 契约规范](proto-contract.md)），不受本文 Java 组件约束。
 
@@ -60,10 +60,10 @@ Java 各消费模块从仓库顶层 `proto/`（组织与治理见[proto 契约�
 | artemis-registry-core | registry.v1 + replication.v1（management.v1 经 artemis-common 共享） | 4.x | Java 25 |
 | artemis-discovery-core | discovery.v1 | 4.x | Java 25 |
 | artemis-management-core | （无自生成组；management.v1 经 artemis-common 共享） | 4.x | Java 25 |
-| artemis-client | common.v1 + registry.v1 + discovery.v1 | **3.25.x** | Java 8 |
+| artemis-client | common.v1 + registry.v1 + replication.v1 + discovery.v1 | **3.25.x** | Java 8 |
 | Rust registry（v1.x） | common.v1 + registry.v1 + replication.v1 + projection.v1 + management.v1（只读查询实现） | prost/tonic 构建锁定（v1.x 定基线） | — |
 
-**服务端 common.v1、projection.v1 与 management.v1 统一生成于 artemis-common**（common 定案 2026-10-11；projection 2026-10-12；management 2026-10-19）：被多端消费的消息在服务端只生成一份，各 core 经 Maven 依赖共用——单 artifact 单 FQCN，服务端模块间可直接传递。projection.v1 归 artemis-common 是因 registry-core 与 discovery-core 均消费（分发流服务端与投影消费端）；management.v1 归入是因 registry-core 实现只读查询 service、management-core 作为客户端调用，双端自生成会在 v0.4 三服务 all-in-one 同 JVM classpath 加载序碰撞。client 独立于服务端（enforcer 禁依赖 + protoc/runtime 分叉），自生成 common+registry+discovery，不生成 management.v1。其余各组仍在多模块各自生成（如 registry.v1 见服务端与 client，同 FQCN 异 artifact），跨模块只走 wire（开发规范 §1）。
+**服务端 common.v1、projection.v1 与 management.v1 统一生成于 artemis-common**（common 定案 2026-10-11；projection 2026-10-12；management 2026-10-19）：被多端消费的消息在服务端只生成一份，各 core 经 Maven 依赖共用——单 artifact 单 FQCN，服务端模块间可直接传递。projection.v1 归 artemis-common 是因 registry-core 与 discovery-core 均消费（分发流服务端与投影消费端）；management.v1 归入是因 registry-core 实现只读查询 service、management-core 作为客户端调用，双端自生成会在 v0.4 三服务 all-in-one 同 JVM classpath 加载序碰撞。client 独立于服务端（enforcer 禁依赖 + protoc/runtime 分叉），自生成 common+registry+replication+discovery（replication.v1 为 v0.2 phase-5 SDK 前置寻址消费 GetNodeStatusResponse 消息类，不消费 gRPC stub），不生成 management.v1。其余各组仍在多模块各自生成（如 registry.v1 见服务端与 client，同 FQCN 异 artifact），跨模块只走 wire（开发规范 §1）。
 
 要点：
 
@@ -191,6 +191,7 @@ shaded 版将 netty 重打包进 `io.grpc.netty.shaded.*` 命名空间，与宿�
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
 | 1.22 | 2026-10-20 | v0.2 phase-1：§4.7 补双监听装配纪律（factory 不作 bean、全量 BindableService 发现需 service filter）、测试端口解析；`@LocalGrpcServerPort` 在双 server 下不适用 |
+| 1.23 | 2026-10-22 | v0.2 phase-5 设计定案：client 生成矩阵扩 replication.v1（SDK 前置寻址消费 GetNodeStatusResponse 消息类，HTTP 端点响应解析） |
 | 1.21 | 2026-10-19 | v0.1 phase-8 设计定案：组件总表新增 #35 Spring Boot 2.x starter 基线（2.7.18，Java 8 兼容，client 线自钉不 import BOM） |
 | 1.20 | 2026-10-19 | v0.1 phase-7 设计 review 定案：组件总表新增 #34 Micrometer（client 库模式，SDK 可观测标准端口，替换自建 ClientMetrics）；#17/#30 同步 |
 | 1.19 | 2026-10-19 | management.v1 生成矩阵调整：统一生成于 artemis-common（registry 实现只读查询 / management 消费，registry-core 与 management-core 不再自生成） |

@@ -25,7 +25,7 @@ import org.mydotey.ai.artemis.proto.registry.v1.UpdateResponse;
 
 /**
  * 进程内可编程假 registry 服务：记录全部请求与认证头，默认成功 ack、心跳 echo seq；
- * 支持服务端主动断流与拒绝模式（UNAVAILABLE）。
+ * 支持服务端主动断流与拒绝模式（unary 全拒 / 心跳开流即拒，均 UNAVAILABLE）。
  */
 public final class FakeRegistryServer {
 
@@ -36,6 +36,7 @@ public final class FakeRegistryServer {
     public final List<String> authorizationHeaders = new CopyOnWriteArrayList<String>();
 
     public volatile boolean rejectAll;
+    public volatile boolean rejectHeartbeatOpen;
     public volatile boolean failHeartbeatEcho;
 
     private volatile StreamObserver<HeartbeatResponse> heartbeatResponder;
@@ -98,6 +99,22 @@ public final class FakeRegistryServer {
                     @Override
                     public StreamObserver<HeartbeatRequest> heartbeat(
                             final StreamObserver<HeartbeatResponse> observer) {
+                        if (rejectHeartbeatOpen) {
+                            // 开流即拒（UNAVAILABLE）：模拟服务端 readiness 拦截——节点活但不接流
+                            observer.onError(Status.UNAVAILABLE
+                                    .withDescription("fake not ready")
+                                    .asException());
+                            return new StreamObserver<HeartbeatRequest>() {
+                                @Override
+                                public void onNext(HeartbeatRequest request) {}
+
+                                @Override
+                                public void onError(Throwable error) {}
+
+                                @Override
+                                public void onCompleted() {}
+                            };
+                        }
                         heartbeatResponder = observer;
                         StreamObserver<HeartbeatRequest> inbound = new StreamObserver<HeartbeatRequest>() {
                             @Override

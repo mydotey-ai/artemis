@@ -23,7 +23,7 @@ import org.springframework.core.env.Environment;
  * （不复制 client 的键定义，也不引 {@code @ConfigurationProperties}——自定义配置的 SCF 单一来源纪律），
  * 生命周期随容器：{@code initMethod=start} / {@code destroyMethod=close}。
  *
- * <p>不按 {@code serverAddresses} 是否存在做条件：starter 被显式引入即表达注册意图，必配项缺失在
+ * <p>不按 {@code registry.addresses} 是否存在做条件：starter 被显式引入即表达注册意图，必配项缺失在
  * 启动期 fail-fast（client 现有语义），避免「静默不注册」。{@code artemis.client.enabled=false} 显式关闭；
  * 宿主定义自己的 {@link ArtemisClient} 时自动装配让位。
  */

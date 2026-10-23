@@ -9,7 +9,7 @@ import org.mydotey.scf.source.stringproperty.StringPropertyConfigurationSource;
  * SCF 内置 env source 按 key 精确匹配，点号键在容器/K8s 环境不可设置，SDK 缺省装配用本类替代
  * （与服务端 artemis-common 同名实现同构；client 不依赖服务端模块故自备）。
  *
- * <p>例：{@code artemis.client.serverAddresses} → {@code ARTEMIS_CLIENT_SERVER_ADDRESSES}。
+ * <p>例：{@code artemis.client.registry.addresses} → {@code ARTEMIS_CLIENT_REGISTRY_ADDRESSES}。
  */
 public final class RelaxedEnvironmentConfigurationSource
         extends StringPropertyConfigurationSource<ConfigurationSourceConfig> {

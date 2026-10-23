@@ -14,7 +14,12 @@ public final class TestAwait {
     private TestAwait() {}
 
     public static void await(String what, BooleanSupplier condition) {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        await(what, 10_000, condition);
+    }
+
+    /** 显式超时（毫秒）：集群 IT 高负载场景放宽观察窗口。 */
+    public static void await(String what, long timeoutMs, BooleanSupplier condition) {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
         while (!condition.getAsBoolean()) {
             if (System.nanoTime() > deadline) {
                 fail("timeout waiting: %s", what);

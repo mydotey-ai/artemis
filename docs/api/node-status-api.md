@@ -1,10 +1,12 @@
 # 节点状态 API
 
-版本: 1.0    更新时间: 2026-10-21
+版本: 1.1    更新时间: 2026-10-23
 
-> 本文描述 registry 对外（SDK / 运维）的节点状态 gRPC API：本节点就绪态、静态成员列表、成员对外端点与后台探测观测态。契约本体见 `proto/replication/v1/replication.proto`；内部 peer 使用的 `ReplicationService.GetNodeStatus` 同构但只绑定内部端口，不在本文范围。
+> 本文描述 registry 对外（SDK / 运维）的节点状态 API：本节点就绪态、静态成员列表、成员对外端点与后台探测观测态。gRPC（运维/观测）与 HTTP `GET /cluster/nodes`（SDK 前置寻址，v0.2 phase-5）同源同构。契约本体见 `proto/replication/v1/replication.proto`；内部 peer 使用的 `ReplicationService.GetNodeStatus` 同构但只绑定内部端口，不在本文范围。
 
 ## 1. 传输与安全
+
+### 1.1 gRPC（观测 / 运维）
 
 | 项 | 说明 |
 |---|---|
@@ -13,6 +15,15 @@
 | 认证 | 外部认证（`artemis.registry.auth.*`，默认开启）；未认证返回 `UNAUTHENTICATED` |
 | readiness | **按方法名豁免**：节点未就绪时也可调用（返回 `self.state = STARTING`），用于排障与引导；其余外部写 rpc 仍被 readiness 拦截 |
 | 单节点模式 | `self.node_id` 为空、`members` 为空；SDK 使用配置引导地址，不依赖本 API |
+
+### 1.2 HTTP `GET /cluster/nodes`（SDK 前置寻址）
+
+| 项 | 说明 |
+|---|---|
+| 服务端 | registry 外部 HTTP 辅助端口（Spring `server.port`，默认 `8080`） |
+| 方法 | `GET /cluster/nodes`，响应体 = `GetNodeStatusResponse` **protobuf bytes**（`Content-Type: application/x-protobuf`），与 gRPC 观测 API 同源组装 |
+| 认证 | 同外部 Basic 认证（HTTP 通道过滤器生效）；未认证 `401` |
+| readiness | **不豁免**：未就绪节点不作寻址应答者，返回 `503`——SDK 按 url 列表重试其它地址（单地址=域名/LB 退避重试原址），不被引导到未就绪节点；观测面豁免（§1.1）与寻址数据面门控刻意不同 |
 
 ## 2. 契约
 
@@ -93,4 +104,5 @@ message ClusterMember {
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-23 | v0.2 phase-5：新增 HTTP `GET /cluster/nodes` 前置寻址端点（同源 protobuf bytes、Basic 认证、readiness 不豁免未就绪 503） |
 | 1.0 | 2026-10-21 | 初版：v0.2 phase-3 对外节点状态 API（成员/观测态、认证与 readiness 豁免、探测语义） |
