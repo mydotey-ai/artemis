@@ -33,3 +33,50 @@ service DiscoveryQueryService {
   // 查询当前投影。未就绪（首轮 bootstrap 未完成）UNAVAILABLE——空数据不作真相返回。
   rpc Query(QueryRequest) returns (QueryResponse);
 }
+
+// ---- 订阅推送（SDK → discovery，架构 §2.2 外部端口；v0.3 phase-3，ADR-019）----
+
+// 实例变更（视图语义）。与 projection.v1 同构：该组是 registry→discovery 内部契约，
+// 组间不横向 import（proto-contract §1 import 只向 common）；两处 proto 各自映射到
+// discovery-core domain 同一模型（语义单一来源）。
+enum ChangeType {
+  CHANGE_TYPE_UNSPECIFIED = 0;
+  CHANGE_TYPE_UNKNOWN = 1;   // 本地映射目标
+  CHANGE_TYPE_NEW = 2;
+  CHANGE_TYPE_UPDATE = 3;
+  CHANGE_TYPE_DELETE = 4;    // instance 至少携带 instance_id，其余字段无意义
+}
+
+message InstanceChange {
+  artemis.common.v1.Instance instance = 1;
+  ChangeType type = 2;
+}
+
+// 单服务变更：key 下的变更保持产生序
+message ServiceChange {
+  artemis.common.v1.ServiceKey key = 1;
+  repeated InstanceChange changes = 2;
+}
+
+message SubscribeRequest {
+  repeated artemis.common.v1.ServiceKey services = 1;  // 空 = 全部服务（语义同 QueryRequest）
+  map<string, string> labels = 2;                      // 实例级过滤（语义同 QueryRequest）
+}
+
+// 流事件：单 service 视图变更 + 来源 cluster（cluster 归因是多集群聚合的确定需求，
+// phase-5「可按 cluster 过滤」；per-service 分条下事件与 cluster 一一对应）。
+// 首条两字段均未设 = 订阅建立确认（对齐 projection.v1 Watch 空批先例）；确认后逐
+// service 推送命中基线（全 NEW），稳态推增量变更。
+message SubscriptionEvent {
+  string cluster = 1;         // 来源 cluster（投影边界注入，ADR-014）
+  ServiceChange service = 2;  // 单 service 视图语义变更
+}
+
+service DiscoverySubscriptionService {
+  // 订阅推送（推拉结合之「推」，ADR-019）：一流多目标，单流内按产生序有序；
+  // 上游（registry）断连重连对订阅方透明——覆盖差异以 diff 增量续推，流不断。
+  // at-most-once：慢消费者（isReady 背压）由服务端断流，消费方重订阅重新基线
+  // （幂等自愈）；增量丢失检测归 hash 对账（phase-4）与兜底轮询（SDK）。
+  // 未就绪 UNAVAILABLE（readiness 拦截器，语义同 Query）。
+  rpc Subscribe(SubscribeRequest) returns (stream SubscriptionEvent);
+}

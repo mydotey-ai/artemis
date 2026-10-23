@@ -46,6 +46,18 @@ public final class ProjectionRegistry {
         return Set.copyOf(clusters.keySet());
     }
 
+    /** 单条目读（订阅扇出旧值 lookup，D-S4）：无条目返回 null，无锁持引用。 */
+    public ServiceInstances service(String cluster, ServiceKey key) {
+        ClusterProjection projection = clusters.get(cluster);
+        return projection == null ? null : projection.table.get(key);
+    }
+
+    /** 全条目读（重连覆盖 diff 的旧投影 T0，D-S7）：无锁持引用快照。 */
+    public List<ServiceInstances> services(String cluster) {
+        ClusterProjection projection = clusters.get(cluster);
+        return projection == null ? List.of() : List.copyOf(projection.table.values());
+    }
+
     private ClusterProjection projection(String cluster) {
         return clusters.computeIfAbsent(cluster, ignored -> new ClusterProjection());
     }

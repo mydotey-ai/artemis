@@ -28,6 +28,7 @@ import org.mydotey.ai.artemis.discovery.domain.ProjectionWatch;
 import org.mydotey.ai.artemis.discovery.domain.ServiceChange;
 import org.mydotey.ai.artemis.discovery.domain.ServiceInstances;
 import org.mydotey.ai.artemis.discovery.domain.ServiceKey;
+import org.mydotey.ai.artemis.discovery.domain.SubscriptionManager;
 import org.mydotey.ai.artemis.discovery.domain.UpstreamState;
 
 class ProjectionSynchronizerTest {
@@ -49,7 +50,12 @@ class ProjectionSynchronizerTest {
 
     private void startSynchronizer(Map<String, String> config) {
         synchronizer = new ProjectionSynchronizer(
-                new TestProperties(config).properties(), source, registry, CLUSTER, new ProjectionSyncListener() {
+                new TestProperties(config).properties(),
+                source,
+                registry,
+                new SubscriptionManager(registry),
+                CLUSTER,
+                new ProjectionSyncListener() {
                     @Override
                     public void onSynced() {
                         events.add("synced");

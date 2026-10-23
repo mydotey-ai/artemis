@@ -1,6 +1,6 @@
 # v0.3 版本规划
 
-版本: 1.1    更新时间: 2026-10-23
+版本: 1.3    更新时间: 2026-10-23
 
 ## 目标
 
@@ -8,7 +8,7 @@
 
 **验收要点**：推送亚秒可见、断连自愈、多集群 union 查询、all-in-one 单包起。
 
-设计不在本版展开（projection/discovery 契约形状、投影模型、推送/轮询时序、SDK 缓存与换址策略等由各 phase ③ 设计定稿）；架构基线见 [架构设计](../../arch/artemis-next-architecture.md) §2.1–§2.2 与 §4.2，关键决策见 [ADR-002](../../decisions/adr-002-discovery-no-cluster.md)（discovery 不组集群）、[ADR-007](../../decisions/adr-007-snapshot-push-unit.md)（推送单元 = service 实例集快照）、[ADR-013](../../decisions/adr-013-group-as-instance-metadata.md)（分组不进数据模型）、[ADR-014](../../decisions/adr-014-cluster-out-of-service-key.md)（cluster 在投影边界注入）。
+设计不在本版展开（projection/discovery 契约形状、投影模型、推送/轮询时序、SDK 缓存与换址策略等由各 phase ③ 设计定稿）；架构基线见 [架构设计](../../arch/artemis-next-architecture.md) §2.1–§2.2 与 §4.2，关键决策见 [ADR-002](../../decisions/adr-002-discovery-no-cluster.md)（discovery 不组集群）、[ADR-019](../../decisions/adr-019-hybrid-push-pull-subscription.md)（订阅推送推拉结合：增量流 + hash 对账；快照单元 ADR-007 语义保留）、[ADR-013](../../decisions/adr-013-group-as-instance-metadata.md)（分组不进数据模型）、[ADR-014](../../decisions/adr-014-cluster-out-of-service-key.md)（cluster 在投影边界注入）。
 
 ## phase 清单
 
@@ -18,8 +18,8 @@
 |---|---|---|---|
 | phase-1-projection-source | `projection.v1` 契约定稿 + registry 侧数据分发（全量 bootstrap + 变更流），承载于内部 peer 端口 | 3 | 契约评审；进程内 registry + 测试订阅者 IT：bootstrap 全量与分片、增量事件流、断流重连 re-bootstrap；未就绪拒绝（单测） |
 | phase-2-discovery-projection | discovery 投影内核：`(cluster, namespace, service)` 模型 + 单集群 bootstrap/变更流消费 + 重连全量覆盖 + 查询 API | 2 | 单测：投影增删改/重连覆盖幂等；IT：registry 写入后 discovery 查询亚秒可见 |
-| phase-3-subscription-push | `discovery.v1` 订阅契约 + 推送（service 实例集快照原子覆盖、一流多目标、有界队列）+ 推送指标 | 2 | IT：订阅推送亚秒可见、快照原子/幂等、慢消费者不阻塞他流；指标可抓取 |
-| phase-4-fallback-freshness | 三层兜底轮询（空服务 60s 主动拉、15min 全量刷新、推送失败收敛）+ 新鲜度标记（上游断连） | 2 | 单测：轮询定时与触发条件；IT：断流后推送/轮询自愈、断连标记可见 |
+| phase-3-subscription-push | `discovery.v1` 订阅契约 + 增量推送（视图语义变更批、一流多目标、快照基线）+ 推送指标 | 2 | IT：增量推送亚秒可见、首推基线/labels 视图语义正确、上游覆盖断流重订阅、慢消费者不阻塞他流；指标可抓取 |
+| phase-4-fallback-freshness | hash 对账 API（per-service checksum 表拉取，增量丢失显式检测）+ 三层兜底轮询契约面（空服务 60s 主动拉、15min 全量刷新、推送失败收敛）+ 新鲜度标记（上游断连） | 2 | 单测：checksum 计算/缓存一致性；IT：篡改本地视图后对账触发全量拉、断流后推送/轮询自愈、断连标记可见 |
 | phase-5-multi-cluster | 1..N registry 集群订阅、独立上游状态、查询并集 + 选择器过滤（cluster/namespace） | 2 | IT：多集群 union 查询、按 cluster 过滤、单源故障不影响他源 |
 | phase-6-ejection-filter | management 摘除规则订阅流（`management.v1` 扩展）+ discovery 过滤器链 SPI + 摘除过滤 + fail-open/最后已知规则 | 3 | IT：摘除后查询与推送视图被过滤、management 不可用沿用最后规则、恢复后收敛 |
 | phase-7-discovery-admin-api | 发现管理 API：订阅关系查看、服务视图、上游状态/新鲜度查询 | 2 | IT：订阅关系、服务视图、上游状态与新鲜度可查 |
@@ -30,9 +30,9 @@ phase-1 说明：`projection.v1` 一次定稿两类报文——全量 bootstrap�
 
 phase-2 说明：投影模型按 `(cluster, namespace, service)` 组织，cluster 为投影边界注入的来源标识（ADR-014），不进 `ServiceKey`；启动/重连向配置的 registry 集群 bootstrap 全量拉取，之后消费变更流，重连即重新 bootstrap（全量覆盖幂等）。本 phase 只做单集群与查询闭环，多集群聚合归 phase-5；查询 API 与订阅选择器共用同一选择器模型（service/label）。
 
-phase-3 说明：推送单元 = **service 实例集快照**（原子、幂等覆盖，ADR-007）；gRPC server-stream 单流内天然有序，一流多目标（订阅选择器 service/label）；每订阅者独立有界队列，满时合并/丢弃并以兜底轮询收敛（at-most-once 自愈底线），慢消费者不得阻塞他流。推送指标按架构 §6「推送 v0.3」内建。
+phase-3 说明：订阅推送为推拉结合之「推」（ADR-019）——Subscribe server-stream 推**视图语义增量变更批**（首条空批确认 + 逐 service 全 NEW 基线；labels 订阅由服务端翻译实例匹配态翻转，SDK 无脑 apply），一流多目标、单流按产生序有序；上游重连覆盖 = 覆盖前旧投影与新快照 diff 续推增量（订阅流与上游状态解耦）；扇出统一 per-service 分条（消息上界 = 单服务实例集）；慢消费者 isReady 断流（at-most-once）。「拉」（Query 全量）与 hash 对账分别已在 phase-2 交付 / 归 phase-4。推送指标按架构 §6「推送 v0.3」内建。
 
-phase-4 说明：三层兜底轮询继承资产 #8——订阅推送失败或空服务 60s 主动拉、15min 全量刷新；推送流断开先重建订阅，失败由轮询兜底。新鲜度标记携带上游断连中，出口在查询响应与推送快照的状态元信息；消费方（SDK）感知数据降级。registry 自我保护态不进投影数据（registry 内部概念，phase-1 定案）。
+phase-4 说明：hash 对账 API（ADR-019 三件套之三）——per-service checksum 随投影条目缓存（响应零计算），SDK 定期拉表比对、不一致 service 全量拉；checksum 规则跨语言稳定（canonical 序列化，不用 protobuf 字节）。三层兜底轮询继承资产 #8——订阅推送失败或空服务 60s 主动拉、15min 全量刷新；推送流断开先重建订阅，失败由轮询兜底。新鲜度标记携带上游断连中，出口在查询响应与推送快照的状态元信息；消费方（SDK）感知数据降级。registry 自我保护态不进投影数据（registry 内部概念，phase-1 定案）。
 
 phase-5 说明：discovery 不组集群（ADR-002）——每个 discovery 节点独立订阅 1..N 个 registry 集群，各源投影独立维护、查询/推送时刻本地合并（默认 union，可按 cluster/namespace 过滤），聚合逻辑只发生在本地、无跨源污染。上游状态按集群独立维护。
 
@@ -57,5 +57,7 @@ phase-9 说明：发现侧 starter 自动装配（与注册侧共存，按配置
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.3 | 2026-10-23 | phase-3 二轮 review 定案：上游覆盖改 diff 续推（订阅流与上游解耦，ADR-019 v1.1） |
+| 1.2 | 2026-10-23 | phase-3 设计 review 定案：订阅推送改推拉结合（ADR-019）——phase-3 改增量推送、phase-4 补 hash 对账 API；目标段 ADR 引用更新 |
 | 1.1 | 2026-10-23 | phase-1 设计 review 定案同步：registry 保护态（stale）不进投影契约，phase-1/phase-4 说明相应修订 |
 | 1.0 | 2026-10-23 | 版本启动，初始 phase 拆分（9 phase） |

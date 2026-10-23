@@ -1,6 +1,8 @@
 package org.mydotey.ai.artemis.discovery.infrastructure;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
@@ -8,6 +10,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import lombok.extern.slf4j.Slf4j;
 import org.mydotey.ai.artemis.common.config.ScfProperties;
+import org.mydotey.ai.artemis.discovery.domain.ProjectionDiff;
 import org.mydotey.ai.artemis.discovery.domain.ProjectionListener;
 import org.mydotey.ai.artemis.discovery.domain.ProjectionRegistry;
 import org.mydotey.ai.artemis.discovery.domain.ProjectionSession;
@@ -16,6 +19,8 @@ import org.mydotey.ai.artemis.discovery.domain.ProjectionSyncListener;
 import org.mydotey.ai.artemis.discovery.domain.ProjectionWatch;
 import org.mydotey.ai.artemis.discovery.domain.ServiceChange;
 import org.mydotey.ai.artemis.discovery.domain.ServiceInstances;
+import org.mydotey.ai.artemis.discovery.domain.ServiceKey;
+import org.mydotey.ai.artemis.discovery.domain.SubscriptionManager;
 import org.mydotey.ai.artemis.discovery.domain.UpstreamState;
 import org.mydotey.scf.Property;
 import org.mydotey.scf.facade.StringProperties;
@@ -52,6 +57,7 @@ public final class ProjectionSynchronizer implements AutoCloseable {
 
     private final ProjectionSource source;
     private final ProjectionRegistry registry;
+    private final SubscriptionManager subscriptionManager;
     private final String clusterId;
     private final ProjectionSyncListener syncListener;
 
@@ -69,10 +75,12 @@ public final class ProjectionSynchronizer implements AutoCloseable {
             StringProperties properties,
             ProjectionSource source,
             ProjectionRegistry registry,
+            SubscriptionManager subscriptionManager,
             String clusterId,
             ProjectionSyncListener syncListener) {
         this.source = source;
         this.registry = registry;
+        this.subscriptionManager = subscriptionManager;
         this.clusterId = clusterId;
         this.syncListener = syncListener;
         this.queueCapacity = ScfProperties.staticInt(
@@ -141,7 +149,7 @@ public final class ProjectionSynchronizer implements AutoCloseable {
                     throw new IllegalStateException("watch closed before establishment, cluster=" + clusterId);
                 }
                 List<ServiceInstances> snapshot = session.bootstrap();
-                registry.replaceAll(clusterId, snapshot); // 覆盖先于 drain（D-D3）
+                resyncWithDiff(snapshot); // diff 续推先于覆盖（D-S7：订阅流与上游状态解耦）
                 state = UpstreamState.SYNCED;
                 if (!everSynced) {
                     everSynced = true;
@@ -162,8 +170,28 @@ public final class ProjectionSynchronizer implements AutoCloseable {
             }
             @SuppressWarnings("unchecked")
             List<ServiceChange> batch = (List<ServiceChange>) event;
-            registry.apply(clusterId, batch);
+            // 扇出先于应用（D-S4）：labels 翻译需本批应用前旧值；表锁内成对执行，
+            // 批中间态（已推送未应用）对订阅基线不可见（FIX-1）
+            subscriptionManager.runWithFanout(() -> {
+                subscriptionManager.onChanges(clusterId, batch, key -> registry.service(clusterId, key));
+                registry.apply(clusterId, batch);
+            });
         }
+    }
+
+    /**
+     * 重连覆盖（D-S7）：旧投影 T0 与新快照 T1 diff 续推（与稳态增量同一扇出路径，旧值
+     * 取 T0）后再整表覆盖——上游重连对订阅方透明，registry 全冷重启时 diff = 全 DELETE。
+     */
+    private void resyncWithDiff(List<ServiceInstances> snapshot) {
+        Map<ServiceKey, ServiceInstances> oldByKey = new HashMap<>();
+        for (ServiceInstances service : registry.services(clusterId)) {
+            oldByKey.put(service.key(), service);
+        }
+        subscriptionManager.runWithFanout(() -> {
+            subscriptionManager.onChanges(clusterId, ProjectionDiff.diff(oldByKey, snapshot), oldByKey::get);
+            registry.replaceAll(clusterId, snapshot); // 覆盖先于 drain（D-D3）
+        });
     }
 
     /** 全抖动指数退避（同 registry peer bootstrap 策略）：base 倍增封顶，sleep 取 [0, base) 均匀。 */

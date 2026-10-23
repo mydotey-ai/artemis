@@ -1,6 +1,6 @@
 # 新一代 Artemis 产品规划与版本路线图
 
-版本: 1.11    更新时间: 2026-10-23
+版本: 1.12    更新时间: 2026-10-23
 
 > 本文是新一代 Artemis 的产品规划与版本路线图：定位与成功标准、迭代式版本切分（每版可发布可 eval）、各版本范围与验收要点。架构设计详见 [架构设计](../arch/artemis-next-architecture.md)；设计输入见 [原产品能力基线](../legacy/legacy-product-analysis.md) 与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -54,7 +54,7 @@
 
 ### v0.3 discovery
 
-- discovery-service：bootstrap 全量 + 变更流投影（`(cluster, namespace, service)` 模型，分组以实例 metadata 表达）、订阅推送（service 实例集快照、一流多目标）、三层兜底轮询、查询 API、新鲜度标记（上游连接状态；registry 保护态不在此列）。
+- discovery-service：bootstrap 全量 + 变更流投影（`(cluster, namespace, service)` 模型，分组以实例 metadata 表达）、订阅推送（推拉结合：增量流一流多目标 + hash 对账 + 全量拉兜底，ADR-019）、三层兜底轮询、查询 API、新鲜度标记（上游连接状态；registry 保护态不在此列）。
 - **多集群聚合**：单节点订阅多个 registry 集群，本地合并（union + 选择器过滤）。
 - **治理依赖（0..1）**：订阅 management 的摘除规则并应用过滤；完整治理规则链随 v0.4。
 - 治理期 2：发现管理 API（订阅关系查看、服务视图、上游状态/新鲜度）。
@@ -112,6 +112,7 @@
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.12 | 2026-10-23 | v0.3 phase-3 设计定案：订阅推送改推拉结合（增量流 + hash 对账 + 全量拉兜底，ADR-019 取代 ADR-007 订阅通道快照形态） |
 | 1.11 | 2026-10-23 | v0.3 phase-1 设计定案：registry 保护态不进 discovery 分发契约，v0.2/v0.3 相应表述修订（新鲜度标记仅指上游连接状态） |
 | 1.10 | 2026-10-19 | v0.1 客户端条目修正（phase-7 设计 review 定案）：注册侧 SDK 不做磁盘快照（注册事实源是业务代码，重启重注册 + 心跳幂等收敛自愈）；磁盘快照归发现侧 SDK（v0.3 已列） |
 | 1.9 | 2026-10-18 | ADR-016：management-service 从 v0.1 独立交付（内存态管理面，摘除记录归 management）；v0.2 删摘除扇出；v0.3 接 management 摘除规则；v0.4 补 DB/账户 |

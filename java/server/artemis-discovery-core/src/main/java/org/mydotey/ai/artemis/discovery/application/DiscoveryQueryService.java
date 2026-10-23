@@ -21,18 +21,9 @@ public final class DiscoveryQueryService {
     }
 
     public QueryResponse query(QueryRequest request) {
-        Set<ServiceKey> services = new LinkedHashSet<>();
-        for (ServiceKey key : request.services()) {
-            if (isBlank(key.namespace()) || isBlank(key.service())) {
-                throw new IllegalArgumentException(
-                        "blank namespace/service in query selector: " + key.namespace() + "/" + key.service());
-            }
-            services.add(key);
-        }
-        return new QueryResponse(registry.query(new DiscoverySelector(services, request.labels())));
-    }
-
-    private static boolean isBlank(String value) {
-        return value == null || value.isBlank();
+        Set<ServiceKey> services = new LinkedHashSet<>(request.services());
+        DiscoverySelector selector = new DiscoverySelector(services, request.labels());
+        selector.requireExplicitServicesValid();
+        return new QueryResponse(registry.query(selector));
     }
 }

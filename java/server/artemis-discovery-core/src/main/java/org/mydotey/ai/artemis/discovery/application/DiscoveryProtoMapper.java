@@ -2,8 +2,10 @@ package org.mydotey.ai.artemis.discovery.application;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import org.mydotey.ai.artemis.discovery.domain.ChangeType;
 import org.mydotey.ai.artemis.discovery.domain.ClusterServiceInstances;
+import org.mydotey.ai.artemis.discovery.domain.DiscoverySelector;
 import org.mydotey.ai.artemis.discovery.domain.Instance;
 import org.mydotey.ai.artemis.discovery.domain.InstanceChange;
 import org.mydotey.ai.artemis.discovery.domain.InstanceStatus;
@@ -55,6 +57,50 @@ public final class DiscoveryProtoMapper {
                         .setAck(org.mydotey.ai.artemis.proto.common.v1.Ack.ACK_FAIL)
                         .setError(ErrorInfo.newBuilder().setCode(code).setMessage(message)))
                 .build();
+    }
+
+    // ---- 订阅（discovery.v1，toDomain 请求 / toProto 事件）----
+
+    public DiscoverySelector toSelector(org.mydotey.ai.artemis.proto.discovery.v1.SubscribeRequest request) {
+        List<ServiceKey> services = new ArrayList<>();
+        for (org.mydotey.ai.artemis.proto.common.v1.ServiceKey key : request.getServicesList()) {
+            services.add(toDomain(key));
+        }
+        return new DiscoverySelector(Set.copyOf(services), request.getLabelsMap());
+    }
+
+    /** 订阅建立确认：两字段均未设的空事件（契约语义）。 */
+    public org.mydotey.ai.artemis.proto.discovery.v1.SubscriptionEvent toEstablishmentEvent() {
+        return org.mydotey.ai.artemis.proto.discovery.v1.SubscriptionEvent.newBuilder()
+                .build();
+    }
+
+    public org.mydotey.ai.artemis.proto.discovery.v1.SubscriptionEvent toProto(String cluster, ServiceChange change) {
+        return org.mydotey.ai.artemis.proto.discovery.v1.SubscriptionEvent.newBuilder()
+                .setCluster(cluster)
+                .setService(toProto(change))
+                .build();
+    }
+
+    public org.mydotey.ai.artemis.proto.discovery.v1.ServiceChange toProto(ServiceChange change) {
+        org.mydotey.ai.artemis.proto.discovery.v1.ServiceChange.Builder builder =
+                org.mydotey.ai.artemis.proto.discovery.v1.ServiceChange.newBuilder()
+                        .setKey(toProto(change.key()));
+        for (InstanceChange instance : change.changes()) {
+            builder.addChangesBuilder()
+                    .setInstance(toProto(instance.instance()))
+                    .setType(toProtoDiscovery(instance.type()));
+        }
+        return builder.build();
+    }
+
+    private org.mydotey.ai.artemis.proto.discovery.v1.ChangeType toProtoDiscovery(ChangeType type) {
+        return switch (type) {
+            case NEW -> org.mydotey.ai.artemis.proto.discovery.v1.ChangeType.CHANGE_TYPE_NEW;
+            case UPDATE -> org.mydotey.ai.artemis.proto.discovery.v1.ChangeType.CHANGE_TYPE_UPDATE;
+            case DELETE -> org.mydotey.ai.artemis.proto.discovery.v1.ChangeType.CHANGE_TYPE_DELETE;
+            case UNKNOWN -> org.mydotey.ai.artemis.proto.discovery.v1.ChangeType.CHANGE_TYPE_UNKNOWN;
+        };
     }
 
     // ---- 变更流（projection.v1，toDomain 入站）----

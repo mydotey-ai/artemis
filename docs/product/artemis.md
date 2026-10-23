@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.17    更新时间: 2026-10-23
+版本: 1.18    更新时间: 2026-10-24
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -182,10 +182,20 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **配置（SCF，`artemis.discovery.*`）**：`upstream.clusterId`（默认 default）、`upstream.endpoints`（**必填**，host:port 逗号分隔）、`upstream.auth.*`、`upstream.establishTimeoutMs/bootstrapTimeoutMs/reconnectBackoffMinMs/MaxMs`、`projection.queueCapacity`（默认 8192）。
 - **工程形态**：discovery-core 16 单测（投影存储/消费安全序/选择器/mapper）+ `DiscoveryProjectionIT` 4 例（进程内真实 registry + discovery 双 context 端到端：稳态注册→查询亚秒可见、更新/删除反映、registry 重启 re-bootstrap 覆盖陈旧、未同步 UNAVAILABLE）；code-review 修复 4 项中高危（陈旧 DELETE no-op、keepalive、旧轮回调隔离 per-round 队列、DISCONNECTED 门控）。
 
+**v0.3 phase-3（discovery 订阅契约与推送）已交付**：
+
+- **推拉结合模型（ADR-019，取代 ADR-007 订阅通道快照形态）**：订阅通道 = 实时推增量（本 phase）+ 定期拉全量（Query 已有）+ hash 对账（phase-4）——稳态带宽 O(变更数) 而非 O(服务实例数 × 变更数)，增量丢失由 checksum 对账显式检测（原产品局限 #3「无版本/世代」的现代化）。
+- **订阅契约**：`discovery.v1 DiscoverySubscriptionService.Subscribe`（server-stream）——首条空事件 = 建立确认，随后逐 service 推送全 `NEW` 基线；稳态推视图语义增量变更批（per-service 分条、单流按产生序有序、一流多目标、事件携带来源 cluster）。
+- **labels 视图语义翻译（服务端）**：labels 订阅收到的即视图语义——实例进出 labels 视图（UPDATE 改 metadata）由服务端显式翻译为 `NEW`/`DELETE`，SDK 收到即 apply，无需自行判断匹配态。
+- **上游解耦**：registry↔discovery 断连重连对订阅方透明——断连期间流静默（陈旧换可用），重连覆盖差异以 **diff 增量续推**（旧投影 vs 新快照 diff，消失服务全 `DELETE`、registry 全冷重启推全删），流不断。
+- **at-most-once**：慢消费者（outbound 背压）服务端断流 `RESOURCE_EXHAUSTED` + 注销，重订阅重新基线自愈；推送指标（active/push/closed.slow-consumer）就地内建。
+- **工程形态**：discovery-core 28 单测（投影 diff、翻译矩阵四象限、表锁基线/扇出互斥）+ `DiscoverySubscriptionIT` 7 例（确认/基线、增量亚秒可见、双流隔离、labels 视图、上游重启 diff 续推流不断、未就绪 UNAVAILABLE、cancel 注销）；code-review 双轨（skill max + 内联）10 findings，核心修复 = 订阅基线与批「扇出+应用」表锁串行化（消除僵尸复活/确认被抢/变更丢失三竞态）。契约详见 [discovery-subscription-api.md](../api/discovery-subscription-api.md)。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.18 | 2026-10-24 | v0.3 phase-3 交付：推拉结合订阅推送（ADR-019：增量流 + labels 视图翻译 + diff 续推）；新建 api/discovery-subscription-api.md |
 | 1.17 | 2026-10-23 | v0.3 phase-2 交付：discovery 投影内核（消费安全序/自愈重连/readiness）与 discovery.v1 查询 API；新建 api/discovery-query-api.md |
 | 1.16 | 2026-10-23 | v0.3 phase-1 交付：projection.v1 分发契约与 registry 侧投影数据源；核心概念补「投影分发」 |
 | 1.15 | 2026-10-23 | v0.2 版本收尾：交付状态更新为已交付（验收对照见 v0.2/plan.md），下一版本 v0.3 |

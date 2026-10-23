@@ -1,6 +1,6 @@
 # 新一代 Artemis 架构设计
 
-版本: 1.34    更新时间: 2026-10-23
+版本: 1.36    更新时间: 2026-10-23
 
 > 本文是新一代 Artemis（重设计产品）的架构设计基线：总体架构、核心机制、技术栈策略与关键决策记录。产品定位与版本切分见 [产品规划与路线图](../product/artemis-next-roadmap.md)；设计输入来自 [原产品能力基线](../legacy/legacy-product-analysis.md)（§5 可继承资产 / §6 局限清单）与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -146,9 +146,9 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 **多集群聚合**：各源投影独立维护；查询/推送时刻按选择器合并（默认 union，可按 cluster/namespace 过滤）。
 
-**推送模型（继承语义，协议升级）**：推送单元 = **service 实例集快照**（原子、幂等覆盖）；gRPC server-streaming 单流内天然有序；乱序/丢失窗口由兜底轮询收敛；订阅选择器 service/label，一流多目标。
+**推送模型（推拉结合，[adr-019](../decisions/adr-019-hybrid-push-pull-subscription.md)）**：订阅通道实时推**增量变更批**（视图语义——labels 订阅由服务端翻译匹配态，SDK 无脑 apply；一流多目标、单流内按产生序有序；首条空批确认 + 逐 service 全 NEW 基线）；投影/查询/基线/对账单元 = **service 实例集快照**（[adr-007](../decisions/adr-007-snapshot-push-unit.md)，单元语义保留）；上游重连覆盖 = 覆盖前旧投影与新快照 diff 续推增量（订阅流与上游状态解耦，断连期间流静默）；慢消费者 isReady 断流（at-most-once）。
 
-**三层兜底轮询（继承资产）**：订阅推送失败或空服务 60s 主动拉、15min 全量刷新——at-most-once 推送的自愈底线。
+**三层兜底轮询 + hash 对账（继承资产 #8 + [adr-019](../decisions/adr-019-hybrid-push-pull-subscription.md)）**：hash 对账——SDK 定期拉 per-service checksum 表与本地比对，不一致 service 触发全量拉（增量丢失的显式检测，漂移窗口 = 对账周期）；三层兜底——订阅推送失败或空服务 60s 主动拉、15min 全量刷新，at-most-once 推送的自愈底线。
 
 **过滤器链 SPI（继承资产）**：治理启用时向 management 订阅规则流；规则本地缓存，management 不可用时用最后已知规则继续（逐 filter fail-open）。
 
@@ -212,7 +212,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 | D4 | 全对全 + 增量报文，负责制后置 | [adr-004](../decisions/adr-004-full-mesh-replication.md) |
 | D5 | 双轨 + 外部 DB（治理元数据） | [adr-005](../decisions/adr-005-dual-track-external-db.md) |
 | D6 | peer 间无拉对账 | [adr-006](../decisions/adr-006-no-peer-reconciliation.md) |
-| D7 | 推送单元 = service 实例集快照 | [adr-007](../decisions/adr-007-snapshot-push-unit.md) |
+| D7 | 推送单元 = service 实例集快照（订阅通道形态被 D19 取代；快照单元语义保留于投影/查询/基线/对账） | [adr-007](../decisions/adr-007-snapshot-push-unit.md) |
 | D8 | Java 25 + Spring Boot 4.1 先行，Rust 后补混合集群 | [adr-008](../decisions/adr-008-java-first-rust-hybrid.md) |
 | D9 | 安全内建（v0.1 默认认证） | [adr-009](../decisions/adr-009-security-by-default.md) |
 | D10 | namespace 进 v0.1 数据模型 | [adr-010](../decisions/adr-010-namespace-day-one.md) |
@@ -224,6 +224,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 | D16 | 管理面从 v0.1 独立交付（management-service 持有摘除记录；registry 只提供只读事实查询） | [adr-016](../decisions/adr-016-management-service-day-one.md) |
 | D17 | 自我保护 2.0：节点级兜底 + 服务级双层保护、显式状态与超时回落 | [adr-017](../decisions/adr-017-self-protection-two-layer.md) |
 | D18 | registry → discovery 投影分发契约：三值事件、at-most-once + 断流、订阅建立确认、保护态不进契约 | [adr-018](../decisions/adr-018-projection-distribution-contract.md) |
+| D19 | 订阅推送推拉结合：实时增量流 + 全量拉兜底 + hash 对账（取代 D7 订阅通道快照形态；快照单元保留） | [adr-019](../decisions/adr-019-hybrid-push-pull-subscription.md) |
 
 ## 8. 与原产品的对照（资产继承与局限修复）
 
@@ -261,6 +262,8 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.36 | 2026-10-23 | v0.3 phase-3 二轮 review 定案：上游覆盖改 diff 续推（订阅流与上游状态解耦），ADR-019 v1.1 同步 |
+| 1.35 | 2026-10-23 | v0.3 phase-3 设计 review 定案：§4.2 推送模型改推拉结合（增量流 + hash 对账，D19/ADR-019；D7 订阅通道形态被取代、快照单元语义保留），三层兜底轮询段并入对账表述 |
 | 1.34 | 2026-10-23 | v0.3 phase-1 收尾：§7 增 D18（ADR-018 投影分发契约——三值事件、at-most-once + 建立确认、保护态不进契约） |
 | 1.33 | 2026-10-23 | v0.3 phase-1 设计定案：registry 自我保护态不进投影分发契约（§4.1/§4.2）——保护态为 registry 内部清理门控概念，discovery 不感知 |
 | 1.32 | 2026-10-23 | v0.2 phase-6 设计定案：§4.1 新增优雅停机段——ContextClosedEvent 序列（DOWN → 排水 drainMs → 终刷 → 停端口）、就绪门三态（DOWN 复用 not ready 联动）、无连接迁移、SDK starter ContextClosedEvent 自动 close |

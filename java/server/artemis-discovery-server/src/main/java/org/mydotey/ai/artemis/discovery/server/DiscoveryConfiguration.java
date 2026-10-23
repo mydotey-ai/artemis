@@ -1,15 +1,19 @@
 package org.mydotey.ai.artemis.discovery.server;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import org.mydotey.ai.artemis.common.auth.BasicAuth;
 import org.mydotey.ai.artemis.discovery.application.DiscoveryProtoFacade;
 import org.mydotey.ai.artemis.discovery.application.DiscoveryQueryService;
 import org.mydotey.ai.artemis.discovery.application.DiscoveryReadinessGate;
+import org.mydotey.ai.artemis.discovery.application.DiscoverySubscriptionService;
 import org.mydotey.ai.artemis.discovery.domain.ProjectionRegistry;
 import org.mydotey.ai.artemis.discovery.domain.ProjectionSyncListener;
+import org.mydotey.ai.artemis.discovery.domain.SubscriptionManager;
 import org.mydotey.ai.artemis.discovery.infrastructure.ProjectionSynchronizer;
 import org.mydotey.ai.artemis.discovery.server.auth.AuthConfig;
 import org.mydotey.ai.artemis.discovery.server.config.DiscoveryConfigurationSources;
 import org.mydotey.ai.artemis.discovery.server.grpc.DiscoveryQueryGrpcService;
+import org.mydotey.ai.artemis.discovery.server.grpc.DiscoverySubscriptionGrpcService;
 import org.mydotey.ai.artemis.discovery.server.grpc.GrpcAuthInterceptor;
 import org.mydotey.ai.artemis.discovery.server.grpc.ReadinessInterceptor;
 import org.mydotey.ai.artemis.discovery.server.health.DiscoveryReadinessHealthIndicator;
@@ -49,6 +53,11 @@ public class DiscoveryConfiguration {
     }
 
     @Bean
+    SubscriptionManager subscriptionManager(ProjectionRegistry registry) {
+        return new SubscriptionManager(registry);
+    }
+
+    @Bean
     UpstreamConfig upstreamConfig(StringProperties properties) {
         return new UpstreamConfig(properties);
     }
@@ -65,16 +74,22 @@ public class DiscoveryConfiguration {
         return new GrpcProjectionSource(properties, config, auth);
     }
 
-    /** 上游同步引擎：首轮 SYNCED 开 readiness，断连只通知不降（D-D5）。 */
+    /** 上游同步引擎：首轮 SYNCED 开 readiness，断连只通知不降（D-D5）；订阅扇出内联同步线程（D-S4/D-S7）。 */
     @Bean(initMethod = "start", destroyMethod = "close")
     ProjectionSynchronizer projectionSynchronizer(
             StringProperties properties,
             GrpcProjectionSource source,
             ProjectionRegistry registry,
+            SubscriptionManager subscriptionManager,
             UpstreamConfig upstreamConfig,
             DiscoveryReadinessGate readinessGate) {
         return new ProjectionSynchronizer(
-                properties, source, registry, upstreamConfig.clusterId(), new ProjectionSyncListener() {
+                properties,
+                source,
+                registry,
+                subscriptionManager,
+                upstreamConfig.clusterId(),
+                new ProjectionSyncListener() {
                     @Override
                     public void onSynced() {
                         readinessGate.markReady();
@@ -88,13 +103,25 @@ public class DiscoveryConfiguration {
     }
 
     @Bean
-    DiscoveryProtoFacade discoveryProtoFacade(DiscoveryQueryService queryService) {
-        return new DiscoveryProtoFacade(queryService);
+    DiscoverySubscriptionService discoverySubscriptionService(SubscriptionManager manager) {
+        return new DiscoverySubscriptionService(manager);
+    }
+
+    @Bean
+    DiscoveryProtoFacade discoveryProtoFacade(
+            DiscoveryQueryService queryService, DiscoverySubscriptionService subscriptionService) {
+        return new DiscoveryProtoFacade(queryService, subscriptionService);
     }
 
     @Bean
     DiscoveryQueryGrpcService discoveryQueryGrpcService(DiscoveryProtoFacade facade) {
         return new DiscoveryQueryGrpcService(facade);
+    }
+
+    @Bean
+    DiscoverySubscriptionGrpcService discoverySubscriptionGrpcService(
+            DiscoveryProtoFacade facade, MeterRegistry meterRegistry) {
+        return new DiscoverySubscriptionGrpcService(facade, meterRegistry);
     }
 
     @Bean
