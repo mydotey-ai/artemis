@@ -1,6 +1,6 @@
 # v0.2 版本规划
 
-版本: 1.3    更新时间: 2026-10-21
+版本: 1.4    更新时间: 2026-10-23
 
 ## 目标
 
@@ -39,15 +39,18 @@ phase-6 说明：优雅停机 = 先把自身标记为下线（节点状态 API �
 
 | roadmap 验收要点 | 对应测试 | 结果 |
 |---|---|---|
-| 3 节点集群 | | |
-| 节点故障客户端无感换址 | | |
-| 杀节点数据最终一致 | | |
-| 保护态可观测 | | |
+| 3 节点集群 | `ClusterMembershipIT`（3 节点成员互见/端点可达）、`ReplicationFanoutIT`（3 节点写入最终一致）、`SdkFailoverIT`/`GracefulShutdownIT`（3 节点 + 真实 SDK 端到端） | 通过 |
+| 节点故障客户端无感换址 | `SdkFailoverIT.should_failoverAndKeepLeaseAlive_when_connectedNodeKilled`（杀节点后续约不断）、`GracefulShutdownIT.should_failover_when_connectedNodeShutdownGracefully`（优雅停机换址） | 通过 |
+| 杀节点数据最终一致 | `ReplicationFanoutIT`（副本扇出/猝死清理收敛）、`SdkFailoverIT.should_reconcileNodeData_when_ttlRotation`（轮换即对账）、`GracefulShutdownIT.should_converge_when_nodeRestartedAfterShutdown`（停机重启 bootstrap 收敛） | 通过 |
+| 保护态可观测 | `SelfProtectionClusterIT`（节点独立判定/服务级隔离/指标）、`GetSelfProtectionStatus` 经 `RegistryQueryIT`/`ManagementAdminIT` 可查 | 通过 |
+
+> 验收执行：`java/scripts/dev-test.sh all`（2026-10-23，v0.2 最终态）BUILD SUCCESS，全 reactor 0 失败。
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.4 | 2026-10-23 | 版本收尾：验收对照表填齐（四条验收要点均映射可执行测试并通过） |
 | 1.3 | 2026-10-21 | phase-4 设计定案（ADR-017）：节点级兜底 + 服务级双层、显式状态/周期评估/超时回落、有界指标与独立状态 API |
 | 1.2 | 2026-10-21 | phase-3 设计定案：说明补异步 bootstrap/退避/全候选、三段式成员配置、对外节点状态 API 与后台并发探测（不参与扇出门控） |
 | 1.1 | 2026-10-21 | phase-2 副本租约语义 review 定案（继承原产品：续约复制/清理不扇出/缺席补注册），phase-2 说明与验收方式同步修订 |

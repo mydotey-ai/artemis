@@ -7,7 +7,7 @@
 | 版本 | 状态 | 备注 |
 |---|---|---|
 | v0.1 | done | |
-| v0.2 | in-progress | 当前版本 |
+| v0.2 | done | |
 
 状态枚举：planned | in-progress | acceptance | done（planned = 启动产物已写、基线未提交）。
 
@@ -19,7 +19,7 @@
 | 步骤 | — |
 | 分支 / worktree | — |
 
-> v0.1 已于 2026-10-19 收尾（验收对照见 `v0.1/plan.md`）。
+> v0.1 已于 2026-10-19 收尾（验收对照见 `v0.1/plan.md`）；v0.2 已于 2026-10-23 收尾（验收对照见 `v0.2/plan.md`）。
 
 ## 当前 phase 步骤进度
 
@@ -42,12 +42,6 @@
 ## phase 总览（当前版本，版本 done 后清空；只记状态，主题/工作量以 plan 为准）
 
 | phase | 状态 |
-|---|---|
-| phase-1-peer-protocol | done |
-| phase-2-replication-fanout | done |
-| phase-3-peer-bootstrap | done |
-| phase-4-self-protection-2 | done |
-| phase-5-sdk-failover | done |
-| phase-6-graceful-shutdown | done |
+|---|---|---|
 
 状态枚举：planned | in-progress | done。
