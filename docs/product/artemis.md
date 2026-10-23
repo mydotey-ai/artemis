@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.16    更新时间: 2026-10-23
+版本: 1.17    更新时间: 2026-10-23
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -173,10 +173,20 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **边界**：契约只承载实例事实，registry 自我保护态（stale）等内部概念不下发（排障面仍由 management 状态 API 提供）。
 - **工程形态**：内部端口 readiness 门控（未就绪 `UNAVAILABLE`）；10 单测 + 8 服务级 IT（全量/分片、变更流、清理删除、断流重连 re-bootstrap）；决策记录 [ADR-018](../decisions/adr-018-projection-distribution-contract.md)。
 
+**v0.3 phase-2（discovery 投影内核与查询）已交付**：
+
+- **投影模型**：discovery 侧按 `(cluster, namespace, service)` 组织只读投影——cluster 为来源标识（投影边界注入，ADR-014），v0.3 单集群（多集群聚合 phase-5）。存储 per-service 条目（`ConcurrentHashMap` + 不可变实例集，读路径无锁零克隆）；**条目存在性 = 服务存在性（≥1 实例）**，实例全部下线即删条目（与 registry 空服务回收语义收敛）。
+- **上游消费**：消费 phase-1 `projection.v1` 分发流——「Watch 建立确认 → Bootstrap 全量覆盖 → 变更流应用」安全序（覆盖先于一切事件应用，无丢失）；断流/失败/慢消费（事件队列满）整轮重来：关会话 → 全抖动指数退避（1s→10s）→ 重新 Watch+Bootstrap 全量覆盖幂等自愈（每轮端点轮换，watch 与 bootstrap 同端点保同源视图）。watch 长流启用 keepalive 检测半开连接。
+- **readiness**：首轮投影同步完成前查询 `UNAVAILABLE`（空数据不作真相）；同步后上游断连不降 ready——投影继续服务（陈旧换可用），新鲜度标记出口随 phase-4。
+- **查询 API**：`discovery.v1 DiscoveryQueryService/Query`（unary，外部端口 gRPC 9095，BasicAuth 默认关闭）——选择器 `services`（精确集合，空=全部）+ `labels`（实例 metadata 全键值过滤，分组语义 ADR-013）；响应携带 cluster 来源标识。契约详见 [discovery-query-api.md](../api/discovery-query-api.md)。
+- **配置（SCF，`artemis.discovery.*`）**：`upstream.clusterId`（默认 default）、`upstream.endpoints`（**必填**，host:port 逗号分隔）、`upstream.auth.*`、`upstream.establishTimeoutMs/bootstrapTimeoutMs/reconnectBackoffMinMs/MaxMs`、`projection.queueCapacity`（默认 8192）。
+- **工程形态**：discovery-core 16 单测（投影存储/消费安全序/选择器/mapper）+ `DiscoveryProjectionIT` 4 例（进程内真实 registry + discovery 双 context 端到端：稳态注册→查询亚秒可见、更新/删除反映、registry 重启 re-bootstrap 覆盖陈旧、未同步 UNAVAILABLE）；code-review 修复 4 项中高危（陈旧 DELETE no-op、keepalive、旧轮回调隔离 per-round 队列、DISCONNECTED 门控）。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.17 | 2026-10-23 | v0.3 phase-2 交付：discovery 投影内核（消费安全序/自愈重连/readiness）与 discovery.v1 查询 API；新建 api/discovery-query-api.md |
 | 1.16 | 2026-10-23 | v0.3 phase-1 交付：projection.v1 分发契约与 registry 侧投影数据源；核心概念补「投影分发」 |
 | 1.15 | 2026-10-23 | v0.2 版本收尾：交付状态更新为已交付（验收对照见 v0.2/plan.md），下一版本 v0.3 |
 | 1.14 | 2026-10-23 | v0.2 phase-6 交付：节点优雅停机（DOWN 标记 → drain → 终刷 → 停端口）、就绪门三态与 DOWN 传播、SDK starter ContextClosedEvent 自动注销、K8s 排水配置注意 |

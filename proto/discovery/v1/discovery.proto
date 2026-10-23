@@ -1,6 +1,35 @@
 syntax = "proto3";
 package artemis.discovery.v1;
+import "common/v1/model.proto";
 option java_package = "org.mydotey.ai.artemis.proto.discovery.v1";
 option java_multiple_files = true;
 
-// v0.1 占位：服务发现（订阅/推送）契约随 v0.2 定稿，组织与冻结范围见 proto-contract.md §1–§2。
+// SDK → discovery 查询契约（架构 §2.2 外部端口）。v0.3 phase-2 交付 unary 查询；
+// 订阅推送 rpc 随 phase-3 以新增 rpc 演进（wire 兼容，field number/rpc 名只增）。
+// 选择器模型与订阅共用（v0.3 plan）：services 精确集合（空 = 全部服务）+
+// labels 实例 metadata 全键值匹配（实例级过滤——分组以实例 metadata 表达，ADR-013）。
+
+message QueryRequest {
+  repeated artemis.common.v1.ServiceKey services = 1;  // 空 = 全部服务
+  map<string, string> labels = 2;                      // 实例须含全部键值才入选
+}
+
+// 投影视图单元：cluster 是来源标识，由 discovery 在投影边界注入（ADR-014，registry 契约不携带）
+message ClusterServiceInstances {
+  string cluster = 1;
+  artemis.common.v1.ServiceInstances instances = 2;    // service 实例集快照（ADR-007 单元）
+}
+
+message QueryResponseData {
+  repeated ClusterServiceInstances services = 1;
+}
+
+message QueryResponse {
+  artemis.common.v1.ResponseStatus status = 1;
+  QueryResponseData data = 2;
+}
+
+service DiscoveryQueryService {
+  // 查询当前投影。未就绪（首轮 bootstrap 未完成）UNAVAILABLE——空数据不作真相返回。
+  rpc Query(QueryRequest) returns (QueryResponse);
+}

@@ -11,7 +11,7 @@
   </parent>
 
   <artifactId>artemis-discovery-server</artifactId>
-  <description>discovery 服务端 Spring Boot 装配（订阅推送接入 v0.2）</description>
+  <description>discovery 服务端 Spring Boot 装配：上游投影消费 + 查询出口（v0.3 phase-2 起）</description>
 
   <dependencyManagement>
     <dependencies>
@@ -36,10 +36,89 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter</artifactId>
     </dependency>
+    <!-- actuator readiness/metrics 管理端口（HTTP 辅助通道按需递补） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+    </dependency>
+    <!-- trace：Spring Boot 4.1 官方 OpenTelemetry 集成 -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-opentelemetry</artifactId>
+    </dependency>
+    <!-- 结构化 JSON 日志 -->
+    <dependency>
+      <groupId>net.logstash.logback</groupId>
+      <artifactId>logstash-logback-encoder</artifactId>
+    </dependency>
+    <!-- SCF source/manager 装配（properties 定义在 discovery-core infrastructure 与本模块） -->
+    <dependency>
+      <groupId>org.mydotey.scf</groupId>
+      <artifactId>scf-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.mydotey.scf</groupId>
+      <artifactId>scf-simple</artifactId>
+    </dependency>
+    <!-- Spring Boot 4.1 官方 gRPC 服务端（tech-stack #33）：@GrpcService 自动装配 -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-grpc-server</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
       <scope>test</scope>
     </dependency>
+    <!-- 端到端 IT：进程内起真实 registry（外部 + 内部 peer 端口），discovery 消费其 projection 流 -->
+    <dependency>
+      <groupId>org.mydotey.ai.artemis</groupId>
+      <artifactId>artemis-registry-server</artifactId>
+      <version>${revision}</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
+
+  <build>
+    <plugins>
+      <!-- 可执行 fat jar（单节点起停/容器化基础）。classifier=exec：原 jar 保持普通布局，
+           failsafe/测试 classpath 不受 BOOT-INF 重排影响 -->
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <version>${spring-boot.version}</version>
+        <configuration>
+          <classifier>exec</classifier>
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- failsafe：*IT 服务级集成测试进 verify 生命周期，dev-test.sh integration|all 模式经此覆盖 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>integration-test</goal>
+              <goal>verify</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
 </project>

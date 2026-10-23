@@ -1,0 +1,38 @@
+package org.mydotey.ai.artemis.discovery.application;
+
+import java.util.LinkedHashSet;
+import java.util.Set;
+import org.mydotey.ai.artemis.discovery.domain.DiscoverySelector;
+import org.mydotey.ai.artemis.discovery.domain.ProjectionRegistry;
+import org.mydotey.ai.artemis.discovery.domain.QueryRequest;
+import org.mydotey.ai.artemis.discovery.domain.QueryResponse;
+import org.mydotey.ai.artemis.discovery.domain.ServiceKey;
+
+/**
+ * 查询用例：选择器归一/校验（信任边界一次）→ 投影查询。
+ * 校验失败抛 {@link IllegalArgumentException}，由 proto 门面转契约错误码 INVALID_ARGUMENT。
+ */
+public final class DiscoveryQueryService {
+
+    private final ProjectionRegistry registry;
+
+    public DiscoveryQueryService(ProjectionRegistry registry) {
+        this.registry = registry;
+    }
+
+    public QueryResponse query(QueryRequest request) {
+        Set<ServiceKey> services = new LinkedHashSet<>();
+        for (ServiceKey key : request.services()) {
+            if (isBlank(key.namespace()) || isBlank(key.service())) {
+                throw new IllegalArgumentException(
+                        "blank namespace/service in query selector: " + key.namespace() + "/" + key.service());
+            }
+            services.add(key);
+        }
+        return new QueryResponse(registry.query(new DiscoverySelector(services, request.labels())));
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+}

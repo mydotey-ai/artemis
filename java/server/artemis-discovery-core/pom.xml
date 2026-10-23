@@ -11,12 +11,21 @@
   </parent>
 
   <artifactId>artemis-discovery-core</artifactId>
-  <description>discovery 投影内核（v0.2 起递补）；proto 生成 discovery.v1</description>
+  <description>discovery 投影内核：投影存储、上游同步、查询用例；proto 生成 discovery.v1</description>
 
   <dependencies>
     <dependency>
       <groupId>org.mydotey.ai.artemis</groupId>
       <artifactId>artemis-common</artifactId>
+    </dependency>
+    <!-- discovery.v1 查询 service stub 生成编译依赖（stub 由 discovery-server 消费） -->
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-stub</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-protobuf</artifactId>
     </dependency>
   </dependencies>
 
@@ -30,6 +39,13 @@
           <includes>
             <include>discovery/v1/*.proto</include>
           </includes>
+          <plugins>
+            <plugin kind="binary-maven">
+              <groupId>io.grpc</groupId>
+              <artifactId>protoc-gen-grpc-java</artifactId>
+              <version>${grpc.version}</version>
+            </plugin>
+          </plugins>
         </configuration>
         <executions>
           <execution>
