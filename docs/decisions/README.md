@@ -21,3 +21,4 @@
 | [adr-015-layered-model-inside-core.md](adr-015-layered-model-inside-core.md) | Accepted | D15：DDD 四层（接入层 server 承载 / application / domain / infrastructure）与层间模型转换 |
 | [adr-016-management-service-day-one.md](adr-016-management-service-day-one.md) | Accepted | D16：管理面从 v0.1 独立交付（management-service 持有摘除记录；registry 只提供只读事实查询） |
 | [adr-017-self-protection-two-layer.md](adr-017-self-protection-two-layer.md) | Accepted | D17：自我保护 2.0——节点级兜底 + 服务级双层保护、显式状态与超时回落 |
+| [adr-018-projection-distribution-contract.md](adr-018-projection-distribution-contract.md) | Accepted | D18：registry → discovery 投影分发契约——三值事件、at-most-once、订阅建立确认、保护态不进契约 |

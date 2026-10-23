@@ -2,8 +2,6 @@ package org.mydotey.ai.artemis.registry.server.grpc;
 
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
-import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.mydotey.ai.artemis.proto.common.v1.Ack;
@@ -34,9 +32,8 @@ import org.mydotey.scf.filter.RangeValueConfig;
 @Slf4j
 public final class ReplicationGrpcService extends ReplicationServiceGrpc.ReplicationServiceImplBase {
 
-    static final String KEY_SHARD_BYTES = "artemis.registry.bootstrap.shardBytes";
+    static final String KEY_SHARD_BYTES = BootstrapShards.KEY_SHARD_BYTES;
 
-    private static final int DEFAULT_SHARD_BYTES = 1024 * 1024;
     private static final ResponseStatus SUCCESS =
             ResponseStatus.newBuilder().setAck(Ack.ACK_SUCCESS).build();
 
@@ -49,7 +46,11 @@ public final class ReplicationGrpcService extends ReplicationServiceGrpc.Replica
         this.facade = facade;
         this.readinessGate = readinessGate;
         this.shardBytes = properties.getIntProperty(
-                KEY_SHARD_BYTES, new RangeValueConfig<>(DEFAULT_SHARD_BYTES, 64 * 1024, 8 * 1024 * 1024));
+                KEY_SHARD_BYTES,
+                new RangeValueConfig<>(
+                        BootstrapShards.DEFAULT_SHARD_BYTES,
+                        BootstrapShards.MIN_SHARD_BYTES,
+                        BootstrapShards.MAX_SHARD_BYTES));
     }
 
     @Override
@@ -91,25 +92,10 @@ public final class ReplicationGrpcService extends ReplicationServiceGrpc.Replica
         log.info("bootstrap snapshot requested by node '{}'", request.getRequesterNodeId());
         try {
             // 惰性逐 service 映射 + 分片：内存与单分片同阶，不物化整表 proto 副本
-            Iterator<org.mydotey.ai.artemis.proto.common.v1.ServiceInstances> services =
-                    facade.bootstrapSnapshotStream().iterator();
-            int budget = shardBytes.getValue();
-            List<org.mydotey.ai.artemis.proto.common.v1.ServiceInstances> shard = new ArrayList<>();
-            int size = 0;
-            while (services.hasNext()) {
-                org.mydotey.ai.artemis.proto.common.v1.ServiceInstances service = services.next();
-                int serviceSize = service.getSerializedSize();
-                if (!shard.isEmpty() && size + serviceSize > budget) {
-                    sendShard(shard, responseObserver);
-                    shard = new ArrayList<>();
-                    size = 0;
-                }
-                shard.add(service);
-                size += serviceSize;
-            }
-            if (!shard.isEmpty()) {
-                sendShard(shard, responseObserver);
-            }
+            BootstrapShards.send(
+                    facade.bootstrapSnapshotStream().iterator(),
+                    shardBytes.getValue(),
+                    shard -> sendShard(shard, responseObserver));
             responseObserver.onCompleted();
         } catch (RuntimeException e) {
             responseObserver.onError(Status.INTERNAL

@@ -2,6 +2,7 @@ package org.mydotey.ai.artemis.registry.server;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
+import org.mydotey.ai.artemis.registry.application.ProjectionProtoFacade;
 import org.mydotey.ai.artemis.registry.application.ReadinessGate;
 import org.mydotey.ai.artemis.registry.application.RegistryProtoFacade;
 import org.mydotey.ai.artemis.registry.application.RegistryQueryProtoFacade;
@@ -14,6 +15,7 @@ import org.mydotey.ai.artemis.registry.application.ReplicationService;
 import org.mydotey.ai.artemis.registry.application.ReplicationServiceImpl;
 import org.mydotey.ai.artemis.registry.domain.ChangeListener;
 import org.mydotey.ai.artemis.registry.domain.ClusterMembers;
+import org.mydotey.ai.artemis.registry.domain.InstanceChange;
 import org.mydotey.ai.artemis.registry.domain.InstanceRegistry;
 import org.mydotey.ai.artemis.registry.domain.LeaseEvictionScheduler;
 import org.mydotey.ai.artemis.registry.domain.MonotonicClock;
@@ -25,6 +27,7 @@ import org.mydotey.ai.artemis.registry.domain.SelfProtection;
 import org.mydotey.ai.artemis.registry.domain.SnapshotScheduler;
 import org.mydotey.ai.artemis.registry.infrastructure.ClusterNodeStatusMonitor;
 import org.mydotey.ai.artemis.registry.infrastructure.FileRegistrySnapshotStore;
+import org.mydotey.ai.artemis.registry.infrastructure.ProjectionDispatcher;
 import org.mydotey.ai.artemis.registry.infrastructure.ReplicationFanout;
 import org.mydotey.ai.artemis.registry.infrastructure.ScheduledLeaseEvictionScheduler;
 import org.mydotey.ai.artemis.registry.infrastructure.ScheduledSnapshotScheduler;
@@ -32,6 +35,7 @@ import org.mydotey.ai.artemis.registry.infrastructure.StaticClusterMembers;
 import org.mydotey.ai.artemis.registry.server.auth.AuthConfig;
 import org.mydotey.ai.artemis.registry.server.config.RegistryConfigurationSources;
 import org.mydotey.ai.artemis.registry.server.grpc.GrpcAuthInterceptor;
+import org.mydotey.ai.artemis.registry.server.grpc.ProjectionGrpcService;
 import org.mydotey.ai.artemis.registry.server.grpc.ReadinessInterceptor;
 import org.mydotey.ai.artemis.registry.server.grpc.RegistryQueryGrpcService;
 import org.mydotey.ai.artemis.registry.server.grpc.ReplicationGrpcService;
@@ -76,22 +80,46 @@ public class RegistryConfiguration {
         return () -> System.nanoTime() / 1_000_000;
     }
 
+    /** 投影分发（registry → discovery）：与集群成员无关，单节点也需提供。 */
+    @Bean(initMethod = "start", destroyMethod = "close")
+    ProjectionDispatcher projectionDispatcher(StringProperties properties, MeterRegistry meterRegistry) {
+        return new ProjectionDispatcher(properties, meterRegistry);
+    }
+
     /**
-     * 变更事件出口：多节点成员身份（静态配置，装配期判定）→ 扇出管线（运行时类有 public close，
-     * inferred destroy 生效）；单节点 → no-op（零开销，纯续约 RENEW 事件被吞掉，语义与 v0.1 一致）。
+     * 变更事件出口：统一事件源 → 复制扇出（多节点，运行时类有 public close）+ 投影分发。
+     * 两通道各自非阻塞、在各自边界过滤消费方不关心的事件（复制过滤 EVICTED，投影过滤 RENEW
+     * 并映射 EVICTED→DELETE）。单节点时复制为 no-op（零开销，语义与 v0.1 一致）。
      */
-    @Bean
+    @Bean(destroyMethod = "close")
     ChangeListener changeListener(
             StringProperties properties,
             ClusterMembers clusterMembers,
             PeerReplicator peerReplicator,
-            MeterRegistry meterRegistry) {
-        if (clusterMembers.self().isEmpty()) {
-            return change -> {};
+            MeterRegistry meterRegistry,
+            ProjectionDispatcher projectionDispatcher) {
+        ReplicationFanout fanout = clusterMembers.self().isEmpty()
+                ? null
+                : new ReplicationFanout(properties, clusterMembers, peerReplicator, meterRegistry);
+        if (fanout != null) {
+            fanout.start();
         }
-        ReplicationFanout fanout = new ReplicationFanout(properties, clusterMembers, peerReplicator, meterRegistry);
-        fanout.start();
-        return fanout;
+        return new ChangeListener() {
+            @Override
+            public void onChange(InstanceChange change) {
+                if (fanout != null) {
+                    fanout.onChange(change);
+                }
+                projectionDispatcher.onChange(change);
+            }
+
+            /** 销毁回调（@Bean destroyMethod 按运行时类型反射调用，非接口方法）。 */
+            public void close() {
+                if (fanout != null) {
+                    fanout.close();
+                }
+            }
+        };
     }
 
     @Bean
@@ -224,6 +252,17 @@ public class RegistryConfiguration {
     ReplicationGrpcService replicationGrpcService(
             ReplicationProtoFacade facade, ReadinessGate readinessGate, StringProperties properties) {
         return new ReplicationGrpcService(facade, readinessGate, properties);
+    }
+
+    @Bean
+    ProjectionProtoFacade projectionProtoFacade(InstanceRegistry registry, ProjectionDispatcher projectionDispatcher) {
+        return new ProjectionProtoFacade(registry, projectionDispatcher);
+    }
+
+    @Bean
+    ProjectionGrpcService projectionGrpcService(
+            ProjectionProtoFacade facade, ReadinessGate readinessGate, StringProperties properties) {
+        return new ProjectionGrpcService(facade, readinessGate, properties);
     }
 
     @Bean

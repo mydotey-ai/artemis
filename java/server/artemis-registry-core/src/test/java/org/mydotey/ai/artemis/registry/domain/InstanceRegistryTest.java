@@ -183,17 +183,37 @@ class InstanceRegistryTest {
     }
 
     @Test
-    void should_remove_without_event_when_lease_expired() {
+    void should_emit_evicted_when_lease_expired() {
         registry.register(KEY, List.of(instance("i1")));
         events.clear();
         clock.advance(Duration.ofSeconds(30));
 
         int evicted = registry.evictExpired();
 
-        // 原产品继承：TTL 清理本地删除、零事件（DELETE 不扇出——收不到续约的租约全集群各自过期）
+        // 统一事件源：清理派发 EVICTED（复制扇出在发送侧过滤——删除不跨节点传播）
         assertThat(evicted).isEqualTo(1);
-        assertThat(events).isEmpty();
+        assertThat(events).singleElement().satisfies(event -> {
+            assertThat(event.type()).isEqualTo(ChangeType.EVICTED);
+            assertThat(event.instance().instanceId()).isEqualTo("i1");
+        });
         assertThat(registry.snapshot(KEY)).isEmpty();
+    }
+
+    @Test
+    void should_emit_eviction_after_later_write_events() {
+        registry.register(KEY, List.of(instance("i1"))); // t=0，i1 到期点 t=30
+        clock.advance(Duration.ofSeconds(20));
+        registry.register(KEY, List.of(instance("i2"))); // t=20，i2 到期点 t=50
+        clock.advance(Duration.ofSeconds(11)); // t=31：仅 i1 过期
+
+        registry.evictExpired();
+
+        assertThat(events)
+                .extracting(InstanceChange::instance, InstanceChange::type)
+                .containsExactly(
+                        tuple(instance("i1"), ChangeType.NEW),
+                        tuple(instance("i2"), ChangeType.NEW),
+                        tuple(instance("i1"), ChangeType.EVICTED));
     }
 
     @Test

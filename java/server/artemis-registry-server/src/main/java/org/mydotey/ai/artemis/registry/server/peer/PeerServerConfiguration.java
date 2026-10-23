@@ -14,6 +14,7 @@ import org.mydotey.ai.artemis.common.auth.BasicAuth;
 import org.mydotey.ai.artemis.registry.domain.ClusterMembers;
 import org.mydotey.ai.artemis.registry.server.auth.PeerAuthConfig;
 import org.mydotey.ai.artemis.registry.server.grpc.BasicAuthServerInterceptor;
+import org.mydotey.ai.artemis.registry.server.grpc.ProjectionGrpcService;
 import org.mydotey.ai.artemis.registry.server.grpc.ReadinessInterceptor;
 import org.mydotey.ai.artemis.registry.server.grpc.RegistryQueryGrpcService;
 import org.mydotey.ai.artemis.registry.server.grpc.ReplicationGrpcService;
@@ -47,8 +48,10 @@ import org.springframework.grpc.server.lifecycle.GrpcServerLifecycle;
 public class PeerServerConfiguration {
 
     /** 只允许出现在内部端口的服务（主 server 装配时过滤）。 */
-    private static final Set<String> INTERNAL_SERVICES =
-            Set.of("artemis.replication.v1.ReplicationService", "artemis.management.v1.RegistryQueryService");
+    private static final Set<String> INTERNAL_SERVICES = Set.of(
+            "artemis.replication.v1.ReplicationService",
+            "artemis.projection.v1.ProjectionService",
+            "artemis.management.v1.RegistryQueryService");
 
     /**
      * 主 server 的 service 过滤器：显式排除内部服务（见类注释）。
@@ -107,6 +110,7 @@ public class PeerServerConfiguration {
             PeerAuthConfig auth,
             @Qualifier("peerGrpcExecutor") ExecutorService executor,
             ReplicationGrpcService replicationService,
+            ProjectionGrpcService projectionService,
             RegistryQueryGrpcService queryService,
             ReadinessInterceptor readinessInterceptor,
             ObjectProvider<ObservationGrpcServerInterceptor> observationInterceptor,
@@ -132,7 +136,14 @@ public class PeerServerConfiguration {
         observationInterceptor.ifAvailable(replicationInterceptors::add);
         replicationInterceptors.add(internalAuth);
 
+        // 投影分发：readiness 在 service 方法内门控（同复制），认证先于一切
+        List<ServerInterceptor> projectionInterceptors = new ArrayList<>();
+        exceptionHandlerInterceptor.ifAvailable(projectionInterceptors::add);
+        observationInterceptor.ifAvailable(projectionInterceptors::add);
+        projectionInterceptors.add(internalAuth);
+
         factory.addService(ServerInterceptors.intercept(replicationService, replicationInterceptors));
+        factory.addService(ServerInterceptors.intercept(projectionService, projectionInterceptors));
         factory.addService(ServerInterceptors.intercept(queryService, queryInterceptors));
         return new GrpcServerLifecycle(factory, Duration.ofMillis(config.shutdownGraceMs()), publisher);
     }

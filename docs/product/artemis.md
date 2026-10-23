@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.15    更新时间: 2026-10-23
+版本: 1.16    更新时间: 2026-10-23
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -14,6 +14,7 @@
 - **namespace**：多租户隔离单元，服务的内禀属性。
 - **服务与实例标识**：服务由 `(namespace, service)` 标识（`ServiceKey`）；实例由 `instance_id` 在服务内标识（`InstanceKey`）。
 - **实例状态**：客户端自报（服务端不做主动探测）；实例数据由客户端上报，服务端只存事实。
+- **投影分发（registry → discovery）**：registry 向 discovery 推送实例事实（全量快照 + 新增/变更/移除三值变更流）；discovery 侧投影是只读副本，discovery 不组集群。
 
 数据模型与操作语义以仓库顶层 `proto/` 契约（单一来源：[proto 契约规范](../dev/proto-contract.md)）为准；本版契约的设计细节见 [phase-1 设计文档](../milestones/v0.1/phases/phase-1-scaffold.md)。
 
@@ -53,7 +54,7 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 
 ## 4. 交付状态
 
-**v0.2（registry 集群）已交付**（2026-10-23 版本收尾，验收对照见 `docs/milestones/v0.2/plan.md`）；下一版本 v0.3（discovery）待启动，进度以 `docs/milestones/dev-state.md` 为准。
+**v0.2（registry 集群）已交付**（2026-10-23 版本收尾，验收对照见 `docs/milestones/v0.2/plan.md`）；v0.3（discovery）进行中，进度以 `docs/milestones/dev-state.md` 为准。
 
 **phase-1（脚手架 + proto 契约骨架）已交付**：`java/` 十模块 Maven reactor 骨架（parent + 各 core/server/client/starter）与 `proto/` 六组契约骨架（v0.1 定稿 `common.v1` + `registry.v1`，其余四组占位）；`mvn -f java/pom.xml verify` 全绿，enforcer 模块边界断言（core 禁 Spring、client 禁服务端模块）生效。
 
@@ -164,10 +165,19 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **部署注意**：gRPC 关停宽限期显式设为 **1s**（框架默认 30s 会与排水叠加）。K8s 等编排环境 `terminationGracePeriodSeconds` 须 ≥ `drainMs` + 1s + 余量，否则 SIGKILL 会截断排水（截断后仍由客户端容灾 + peer 副本兜底）。
 - **工程形态**：新增 11 例单测（就绪门三态、停机序列编排、DOWN 自报、未就绪不终刷、DOWN 不 bootstrap、starter 事件关闭）与 `GracefulShutdownIT` 4 例集群 IT（排水窗口取证、无感换址、终刷回放、停机后重启收敛）；全量 `dev-test.sh all` 绿。
 
+**v0.3 phase-1（projection.v1 契约 + registry 侧数据分发）已交付**：
+
+- **分发契约**：`projection.v1` 定义于 registry 内部 peer 端口——`Bootstrap`（全量快照 server-stream，按字节预算分片，默认 1MB，与 peer bootstrap 共用配置）与 `Watch`（变更流 server-stream）；变更仅三值 `NEW/UPDATE/DELETE`（纯续约不推送、TTL 清理映射为删除）。
+- **消费方安全序**：`Watch` 登记订阅后立即返回一条空批作为建立确认；消费方「先 Watch → 收到确认 → Bootstrap」，重叠窗口变更被全量覆盖幂等吸收，无丢失。推送为 at-most-once，断流/慢消费者由服务端断开，消费方重 Bootstrap 收敛。
+- **registry 侧实现**：注册表事件统一出口（写路径与租约清理同锁有序派发）；异步组批（同实例后到覆盖、按 service 聚合、批量上限）→ 每订阅者有界队列 + 串行推送；慢消费者/推送失败断流并计数。复制扇出发送侧过滤清理事件（删除不跨节点传播语义不变）。
+- **边界**：契约只承载实例事实，registry 自我保护态（stale）等内部概念不下发（排障面仍由 management 状态 API 提供）。
+- **工程形态**：内部端口 readiness 门控（未就绪 `UNAVAILABLE`）；10 单测 + 8 服务级 IT（全量/分片、变更流、清理删除、断流重连 re-bootstrap）；决策记录 [ADR-018](../decisions/adr-018-projection-distribution-contract.md)。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.16 | 2026-10-23 | v0.3 phase-1 交付：projection.v1 分发契约与 registry 侧投影数据源；核心概念补「投影分发」 |
 | 1.15 | 2026-10-23 | v0.2 版本收尾：交付状态更新为已交付（验收对照见 v0.2/plan.md），下一版本 v0.3 |
 | 1.14 | 2026-10-23 | v0.2 phase-6 交付：节点优雅停机（DOWN 标记 → drain → 终刷 → 停端口）、就绪门三态与 DOWN 传播、SDK starter ContextClosedEvent 自动注销、K8s 排水配置注意 |
 | 1.13 | 2026-10-23 | v0.2 phase-5 交付：SDK 三级地址容灾（HTTP 前置寻址 + 观测态优先级选址 + 熔断换址）与连接 TTL 轮换；`GET /cluster/nodes` 发现端点（未就绪 503）；SDK 配置键与指标递补 |

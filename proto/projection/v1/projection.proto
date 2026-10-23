@@ -1,6 +1,79 @@
 syntax = "proto3";
 package artemis.projection.v1;
+import "common/v1/model.proto";
 option java_package = "org.mydotey.ai.artemis.proto.projection.v1";
 option java_multiple_files = true;
 
-// v0.1 占位：多集群投影契约随 v0.3 定稿，组织与冻结范围见 proto-contract.md §1–§2。
+// registry → discovery 数据分发契约（架构 §2.2 通道③、§4.2）。
+// 绑定 registry 内部 peer 端口（与 peer 复制同端口同认证）；ready 门控：未就绪 UNAVAILABLE。
+// 数据不带 cluster 维度：registry 是单集群事实源，cluster 由 discovery 按订阅源本地附加。
+// 投放语义：at-most-once（推送不重试不确认）；丢失/乱序窗口由消费方自愈——
+// 断连重连重新 Bootstrap（全量覆盖幂等）+ 兜底轮询（架构 §4.2 三层兜底）。
+// 消费方安全序：先 Watch，收到订阅建立确认（首条空批，services 为空）后再 Bootstrap——
+// 确认之前的变更已包含在随后的全量快照中，重叠窗口的变更被全量覆盖幂等吸收，无丢失。
+
+// ---- 变更事件（投影语义：消费方只关心实例的新增/变更/移除） ----
+
+enum ChangeType {
+  CHANGE_TYPE_UNSPECIFIED = 0;
+  CHANGE_TYPE_UNKNOWN = 1;   // 本地映射目标
+  CHANGE_TYPE_NEW = 2;
+  CHANGE_TYPE_UPDATE = 3;
+  CHANGE_TYPE_DELETE = 4;    // instance 至少携带 instance_id，其余字段无意义
+}
+
+message InstanceChange {
+  artemis.common.v1.Instance instance = 1;
+  ChangeType type = 2;
+}
+
+// 按 service 聚合：一个 key 下的变更保持源节点产生序
+message ServiceChange {
+  artemis.common.v1.ServiceKey key = 1;
+  repeated InstanceChange changes = 2;
+}
+
+// ---- 全量 bootstrap（拉取 + 分片应答） ----
+
+message BootstrapRequest {
+  string requester_id = 1;   // 订阅方标识（discovery 节点名等，排障用）
+}
+
+message BootstrapResponse {
+  artemis.common.v1.ResponseStatus status = 1;
+  BootstrapResponseData data = 2;
+}
+
+// 分片单位：单服务实例集（复用公共模型，单一来源）
+message BootstrapResponseData {
+  repeated artemis.common.v1.ServiceInstances services = 1;
+}
+
+// ---- 变更流（订阅后增量推送，server-stream） ----
+
+message WatchRequest {
+  string subscriber_id = 1;  // 订阅方标识（排障用）
+}
+
+// 变更批次：按 service 聚合；移除统一为 DELETE。
+// 空批（services 为空）= 订阅建立确认，服务端在登记订阅后立即发送一条。
+message ChangeBatch {
+  repeated ServiceChange services = 1;
+}
+
+// 流事件 envelope（非 unary Response，不适用 status + data 规范）：
+// 未来新增事件类型以新增字段演进（field number 只增）
+message WatchEvent {
+  ChangeBatch changes = 1;
+}
+
+service ProjectionService {
+  // 全量快照分片：流正常结束 = 同步完成；中断由客户端整轮重来（全量覆盖幂等）。
+  // 空分片 + 流正常结束 = 空注册表。未就绪 UNAVAILABLE（未就绪节点不充当数据源）。
+  rpc Bootstrap(BootstrapRequest) returns (stream BootstrapResponse);
+
+  // 变更订阅：按批推送变更。
+  // 慢消费者/推送失败由服务端断流（at-most-once），消费方重 Bootstrap 自愈；
+  // 流断开 = 订阅结束。未就绪 UNAVAILABLE。
+  rpc Watch(WatchRequest) returns (stream WatchEvent);
+}

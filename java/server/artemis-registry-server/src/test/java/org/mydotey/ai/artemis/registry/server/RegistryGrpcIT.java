@@ -187,8 +187,11 @@ class RegistryGrpcIT {
         clock.advance(Duration.ofMillis(1500)); // 超过 TTL 1000ms
 
         TestAwait.await("expired instance evicted", () -> instanceCount() == 0);
-        // 原产品继承（phase-2）：TTL 清理本地删除、零事件（DELETE 不扇出，各节点独立过期）
-        assertThat(events).isEmpty();
+        // 统一事件源（v0.3 phase-1）：清理派发 EVICTED（registry 内部事件；复制扇出在发送侧过滤）
+        assertThat(events).singleElement().satisfies(change -> {
+            assertThat(change.type()).isEqualTo(ChangeType.EVICTED);
+            assertThat(change.instance().instanceId()).isEqualTo("i1");
+        });
     }
 
     @Test

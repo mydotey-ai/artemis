@@ -3,7 +3,6 @@ package org.mydotey.ai.artemis.registry.infrastructure;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadLocalRandom;
@@ -11,10 +10,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.extern.slf4j.Slf4j;
 import org.mydotey.ai.artemis.common.config.ScfProperties;
 import org.mydotey.ai.artemis.registry.domain.ChangeListener;
+import org.mydotey.ai.artemis.registry.domain.ChangeType;
 import org.mydotey.ai.artemis.registry.domain.ClusterMember;
 import org.mydotey.ai.artemis.registry.domain.ClusterMembers;
 import org.mydotey.ai.artemis.registry.domain.InstanceChange;
-import org.mydotey.ai.artemis.registry.domain.InstanceKey;
 import org.mydotey.ai.artemis.registry.domain.PeerReplicator;
 import org.mydotey.ai.artemis.registry.domain.PermanentReplicationException;
 import org.mydotey.ai.artemis.registry.domain.ReplicationBatch;
@@ -128,6 +127,9 @@ public final class ReplicationFanout implements ChangeListener, AutoCloseable {
         if (noOp || !running.get()) {
             return;
         }
+        if (change.type() == ChangeType.EVICTED) {
+            return; // 删除不跨节点传播（副本租约各自过期，架构 §4.1）
+        }
         if (!queue.offer(change)) {
             eventsDropped.increment();
             log.warn("replication queue full, change dropped: {}", change);
@@ -167,10 +169,7 @@ public final class ReplicationFanout implements ChangeListener, AutoCloseable {
 
     /** 同 (key, instanceId) 后到覆盖先到（产生序内后到 = 更新终态），按产生序拆批。包私有供确定性单测。 */
     static List<ReplicationBatch> buildBatches(List<InstanceChange> drained, String selfNodeId, int maxBatch) {
-        LinkedHashMap<InstanceKey, InstanceChange> merged = new LinkedHashMap<>();
-        for (InstanceChange change : drained) {
-            merged.put(new InstanceKey(change.key(), change.instance().instanceId()), change);
-        }
+        var merged = InstanceChangeMerge.latestPerInstance(drained);
         List<ReplicationBatch> batches = new ArrayList<>();
         List<InstanceChange> current = new ArrayList<>(Math.min(maxBatch, merged.size()));
         for (InstanceChange change : merged.values()) {

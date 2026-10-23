@@ -373,6 +373,8 @@ public interface RegistryProtoMapper {
             case UPDATE -> org.mydotey.ai.artemis.proto.replication.v1.ChangeType.CHANGE_TYPE_UPDATE;
             case DELETE -> org.mydotey.ai.artemis.proto.replication.v1.ChangeType.CHANGE_TYPE_DELETE;
             case RENEW -> org.mydotey.ai.artemis.proto.replication.v1.ChangeType.CHANGE_TYPE_RENEW;
+            // EVICTED 为 registry 内部事件：复制扇出在发送侧过滤，不应到达映射
+            case EVICTED -> throw new IllegalArgumentException("EVICTED is not a replication change type");
         };
     }
 

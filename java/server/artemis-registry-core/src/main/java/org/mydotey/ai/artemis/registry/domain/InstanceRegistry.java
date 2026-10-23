@@ -145,9 +145,10 @@ public final class InstanceRegistry {
     }
 
     /**
-     * 过期清理：now - 续约时刻 &gt;= TTL 即摘除（TTL 每轮读取，动态生效）并本地删除；
-     * **不派发事件**（原产品继承：TTL 清理产生的 DELETE 不扇出——副本与事实源同一种租约、
-     * 靠 RENEW 复制维持，收不到续约的租约在全集群各自过期，删除不跨节点传播）。返回摘除数。
+     * 过期清理：now - 续约时刻 &gt;= TTL 即摘除（TTL 每轮读取，动态生效）并本地删除。
+     * 摘除作为结构性变更派发 {@link ChangeType#EVICTED}（与写路径同 Holder 锁全序）——统一事件源
+     * 不变量；「删除不跨节点传播」由复制扇出在发送侧过滤 EVICTED 保证（副本与事实源同一种租约、
+     * 靠 RENEW 复制维持，收不到续约的租约在全集群各自过期）。返回摘除数。
      */
     // ponytail: 全表 O(服务数×实例数) 扫描，10 万实例按 1s 周期实测容量；成瓶颈改按到期时间分桶，
     // 或每 holder 维护 volatile 最早续约下界实现无锁跳过（消每秒持锁扫描对同 holder 心跳续约的排队尖刺）
@@ -172,19 +173,20 @@ public final class InstanceRegistry {
                 if (services.get(key) != holder) {
                     continue; // 迭代快照与回收竞态：旧 holder 的事件已由回收者派发完毕
                 }
-                boolean structural = false;
+                // 惰性分配：稳态（无过期）每轮零分配
+                List<InstanceChange> changes = null;
                 for (Lease lease : holder.leases.values()) {
                     if (now - lease.renewalTimeMs >= ttlMs) {
                         holder.leases.remove(lease.instance.instanceId()); // CHM 弱一致迭代器容忍遍历中移除
-                        structural = true;
+                        if (changes == null) {
+                            changes = new ArrayList<>();
+                        }
+                        changes.add(new InstanceChange(key, lease.instance, ChangeType.EVICTED, now));
                         evicted++;
                     }
                 }
-                if (structural) {
-                    holder.rebuildSnapshot();
-                    if (holder.leases.isEmpty()) {
-                        services.remove(key, holder);
-                    }
+                if (changes != null) {
+                    commit(key, holder, changes);
                 }
             }
         }
@@ -325,7 +327,8 @@ public final class InstanceRegistry {
                                 lease.renewalTimeMs = now;
                             }
                         }
-                        case DELETE -> structural |= holder.leases.remove(instanceId) != null;
+                        // EVICTED 为 registry 内部事件，复制入站不会产生；防御性按 DELETE 应用
+                        case DELETE, EVICTED -> structural |= holder.leases.remove(instanceId) != null;
                     }
                     applied++;
                 }

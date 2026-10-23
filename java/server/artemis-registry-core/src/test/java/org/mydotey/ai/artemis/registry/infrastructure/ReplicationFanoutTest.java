@@ -83,6 +83,22 @@ class ReplicationFanoutTest {
                 .containsExactly("i2", "p2");
     }
 
+    // ---- 消费方语义过滤 ----
+
+    @Test
+    void should_not_replicate_evicted_event() {
+        RecordingReplicator replicator = new RecordingReplicator();
+        ReplicationFanout fanout = startedFanout(Map.of(), replicator);
+
+        fanout.onChange(change("i1", ChangeType.EVICTED));
+        fanout.onChange(change("i2", ChangeType.NEW));
+
+        TestAwait.await("only NEW delivered", () -> replicator.delivered.size() == 1);
+        assertThat(replicator.delivered.get(0).changes())
+                .extracting(c -> c.instance().instanceId())
+                .containsExactly("i2");
+    }
+
     // ---- 异步投递路径 ----
 
     @Test

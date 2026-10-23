@@ -1,6 +1,6 @@
 # 新一代 Artemis 架构设计
 
-版本: 1.32    更新时间: 2026-10-23
+版本: 1.34    更新时间: 2026-10-23
 
 > 本文是新一代 Artemis（重设计产品）的架构设计基线：总体架构、核心机制、技术栈策略与关键决策记录。产品定位与版本切分见 [产品规划与路线图](../product/artemis-next-roadmap.md)；设计输入来自 [原产品能力基线](../legacy/legacy-product-analysis.md)（§5 可继承资产 / §6 局限清单）与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -130,7 +130,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 - 服务端快照：内存注册表定期落盘（快照带落盘时间戳，重启只回放**时效内**快照，默认最长 1h，超期视为无效；时间戳超前 now 超过 1min 的时钟回拨宽容上限亦视为无效，防损坏/异常时钟使时效判定失效）；重启优先从已就绪 peer 全量同步，无已就绪 peer 回放本地有效快照——消除「全集群重启依赖客户端风暴重注册」的结构性缺口。
 - 消费方磁盘快照（发现侧 SDK，v0.3）：SDK 持久化最后已知服务列表，冷启动可回放、server 全挂时兜底。注册侧 SDK 不落盘：注册事实源是业务代码自身，重启重新注册 + 心跳幂等收敛天然自愈。
 
-**自我保护 2.0（两层判定，[ADR-017](../decisions/adr-017-self-protection-two-layer.md)）**：保留节点级全局滑动窗口作为网络分区/小服务/纯副本兜底；新增每服务窗口，服务峰值达 `minCount` 后服务级状态权威，否则回落节点级。保护态是一等显式状态——`NORMAL/PROTECTING` + `protectingSince`，由 1s 清理调度周期评估（唯一写入口），迁移计数/日志/指标可查；节点健康时服务窗口峰值 `maxCountResetMs` 未抬升即回落（限制单服务客户端迁移造成的永久保护），节点级保护中不回落。指标有界：节点级沿用 v0.1 gauge，服务级 `service.protection{namespace,service}` 仅保护中注册 + 保护中服务数/迁移计数。保护态经 management 状态 API（`GetSelfProtectionStatus`）可查，经 discovery 下发数据带 `stale` 标记（v0.3）；阈值可配。各节点独立判定，保护态不复制/不持久化，且不抑制复制（仅跳过本地过期清理）。
+**自我保护 2.0（两层判定，[ADR-017](../decisions/adr-017-self-protection-two-layer.md)）**：保留节点级全局滑动窗口作为网络分区/小服务/纯副本兜底；新增每服务窗口，服务峰值达 `minCount` 后服务级状态权威，否则回落节点级。保护态是一等显式状态——`NORMAL/PROTECTING` + `protectingSince`，由 1s 清理调度周期评估（唯一写入口），迁移计数/日志/指标可查；节点健康时服务窗口峰值 `maxCountResetMs` 未抬升即回落（限制单服务客户端迁移造成的永久保护），节点级保护中不回落。指标有界：节点级沿用 v0.1 gauge，服务级 `service.protection{namespace,service}` 仅保护中注册 + 保护中服务数/迁移计数。保护态经 management 状态 API（`GetSelfProtectionStatus`）可查，**不进 registry→discovery 分发契约**（2026-10-23 定案：保护态是 registry 内部清理门控概念，discovery 不感知；契约只承载实例事实）；阈值可配。各节点独立判定，保护态不复制/不持久化，且不抑制复制（仅跳过本地过期清理）。
 
 **readiness 门控（继承）**：HTTP 出口为管理端口 `/actuator/health/readiness` 与外部 `/readyz`（未就绪 503）；启动数据源按优先级三分支——① **存在已就绪 peer**：直接从任一已就绪 peer 全量同步，同步成功即 ready（不设数据非空门槛，空数据 peer 也算同步成功），同步失败定期重试、保持不 ready、不降级本地快照（数据源存在时带旧数据服务是错误行为）；② **无已就绪 peer**：回放本地时效内快照（见持久化节，超期/损坏/缺失均视为无效）；③ **无有效快照**：空表直接 ready（心跳即注册，客户端自愈补齐）。不存在已就绪 peer（空集群/首个节点/全集群同时冷启动）不等待 peer——修复原产品双重冷启动死锁（无 UP peer 永不就绪 + `replicationInstanceCount > 0` 空数据门槛，legacy runtime §3.3）。集群模式分支①**异步执行**（不阻塞端口绑定，节点状态 API 可观察 STARTING）：首轮立即、失败按全抖动指数退避（1s→10s，修正原产品固定 1s 轮询），每轮依次尝试**全部** UP 候选；一旦确认过已就绪 peer，后续即使 peer 暂时全部不可达也**不降级本地快照**。not ready 期间：外部写流量由 readiness 拦截、`Replicate`/`Bootstrap` 返回 UNAVAILABLE（发送侧保序重试）、HTTP 寻址端点 `/cluster/nodes` 返回 503（SDK 按 url 列表重试其它地址/单域名退避重试原址），且快照调度器不落盘（防止空表覆盖可回退快照）。**不继承 force 开关族**（force-up/force-down 6 键旁路，原产品死锁引导补丁，legacy §7.3–7.6 判为危险开关/口径分裂/DOWN 粘性缺陷簇，且发布样例常开致门控形同虚设）：死锁根因消除后引导必要性消失；唯一长等待场景（有已就绪 peer 但同步持续失败）的逃生路径为调整静态成员配置移除故障 peer（重启后按「无已就绪 peer」走 ②/③ 直接 ready，收进自洽的单节点语义，避免留在集群跳过同步造成的复制分叉）。
 
@@ -152,7 +152,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 **过滤器链 SPI（继承资产）**：治理启用时向 management 订阅规则流；规则本地缓存，management 不可用时用最后已知规则继续（逐 filter fail-open）。
 
-**新鲜度标记**：查询响应携带状态元信息（上游断连中、上游自我保护态等），消费方可感知数据降级。
+**新鲜度标记**：查询响应携带状态元信息（如上游断连中），消费方可感知数据降级。registry 自我保护态是上游内部概念，不进入投影数据与新鲜度标记（2026-10-23 定案，见 §4.1）。
 
 **哲学延续**：服务端不做主动健康探测，实例状态客户端自报；主动健康检查作为 v1.x 可选项。
 
@@ -223,6 +223,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 | D15 | DDD 四层（接入层 server 承载 / application / domain / infrastructure，领域为核心）+ 层间模型转换 | [adr-015](../decisions/adr-015-layered-model-inside-core.md) |
 | D16 | 管理面从 v0.1 独立交付（management-service 持有摘除记录；registry 只提供只读事实查询） | [adr-016](../decisions/adr-016-management-service-day-one.md) |
 | D17 | 自我保护 2.0：节点级兜底 + 服务级双层保护、显式状态与超时回落 | [adr-017](../decisions/adr-017-self-protection-two-layer.md) |
+| D18 | registry → discovery 投影分发契约：三值事件、at-most-once + 断流、订阅建立确认、保护态不进契约 | [adr-018](../decisions/adr-018-projection-distribution-contract.md) |
 
 ## 8. 与原产品的对照（资产继承与局限修复）
 
@@ -260,6 +261,8 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.34 | 2026-10-23 | v0.3 phase-1 收尾：§7 增 D18（ADR-018 投影分发契约——三值事件、at-most-once + 建立确认、保护态不进契约） |
+| 1.33 | 2026-10-23 | v0.3 phase-1 设计定案：registry 自我保护态不进投影分发契约（§4.1/§4.2）——保护态为 registry 内部清理门控概念，discovery 不感知 |
 | 1.32 | 2026-10-23 | v0.2 phase-6 设计定案：§4.1 新增优雅停机段——ContextClosedEvent 序列（DOWN → 排水 drainMs → 终刷 → 停端口）、就绪门三态（DOWN 复用 not ready 联动）、无连接迁移、SDK starter ContextClosedEvent 自动 close |
 | 1.31 | 2026-10-23 | v0.2 phase-5 验证定案：§2.2/§4.1 外部 HTTP `GET /cluster/nodes`（SDK 前置寻址，phase-5 新增）readiness 门控未就绪 503——未就绪节点不作寻址应答者；观测面（gRPC GetNodeStatus）豁免不变 |
 | 1.30 | 2026-10-21 | v0.2 phase-4 设计定案（ADR-017）：§4.1 自我保护 2.0 改为节点级兜底 + 服务级双层、显式状态机/周期评估/超时回落、独立保护状态 API、保护态不抑制复制；§6 指标补保护态 2.0；§7 增 D17 |
