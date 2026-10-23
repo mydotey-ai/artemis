@@ -1,6 +1,6 @@
 # 新一代 Artemis 架构设计
 
-版本: 1.31    更新时间: 2026-10-23
+版本: 1.32    更新时间: 2026-10-23
 
 > 本文是新一代 Artemis（重设计产品）的架构设计基线：总体架构、核心机制、技术栈策略与关键决策记录。产品定位与版本切分见 [产品规划与路线图](../product/artemis-next-roadmap.md)；设计输入来自 [原产品能力基线](../legacy/legacy-product-analysis.md)（§5 可继承资产 / §6 局限清单）与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -136,6 +136,8 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 **集群成员与节点状态（第一天约束）**：成员抽象接口 v0.1 进架构，静态配置实现先行；动态成员（K8s 成员源）后置版本。v0.2 静态配置条目 `<node-id>@<peer-host>:<peer-port>@<external-host>:<external-port>`（逗号分隔，host 支持括号 IPv6；集群模式三段必填），自身身份显式配置 `artemis.registry.cluster.self`（替代原产品 URL 子串匹配本机，legacy §6 #10）；成员表/自身身份非法启动失败。对外端点显式配置以支持多网卡/NAT/K8s（server 生命周期或集群统一端口无法可靠推导）。节点状态 API（`replication.v1.NodeStatusService`，外部端口）返回 self 就绪态 + 成员 peer/external 端点与**观测态**：观测态由后台单线程调度 + 每轮虚拟线程**并发探测全部 peer**（默认 5s 周期、1s 超时，失败/超时/nodeId 不匹配 = UNKNOWN，每轮整体重建）维护；探测只服务 API/观测，**不参与复制扇出门控**（复制按 per-peer 队列独立重试）。SDK（v0.2 phase-5）以该列表为候选地址来源，优先 UP、连接失败/熔断兜底。
 
+**优雅停机（v0.2 phase-6）**：节点停机序列在 `ContextClosedEvent` 第一时机（bean 全活、先于 SmartLifecycle 停 gRPC 端口）执行——标记 self DOWN → 排水等待（`artemis.registry.shutdown.drainMs`，默认 10s，0 = 不等待）→ 仅曾就绪时终刷快照（未就绪跳过——空表不得覆盖可回退旧快照；重启分支②/③数据新鲜）→ 交还 Spring 停端口（gRPC `shutdown.grace-period` 显式设 1s——排水已承担存量服务职责，默认 30s 会与 drain 叠加超出编排终止宽限期）。self 观测态判定 DOWN 优先（`DOWN > UP > STARTING`），自报 DOWN 经节点状态 API / peer 后台探测原样传播（`GetNodeStatus` 观测面豁免照常应答），SDK 节点列表同源降权。就绪门随之三态化（NOT_READY/READY/DOWN，DOWN 终态不复活）：DOWN 复用 not ready 全部联动——外部新 rpc 拒 UNAVAILABLE（已建心跳流不受影响，服务到端口关闭）、`Replicate`/`Bootstrap` UNAVAILABLE、`/readyz` 与 `/cluster/nodes` 503、快照周期调度停刷（终刷由停机序列显式触发，不受门控）。端口关闭断流即客户端换址信号（phase-5 容灾：断流重连 exclude 当前 + 熔断），**无连接迁移**；kill（非优雅停机）恢复路径同构（断流熔断换址 + peer 副本 + 客户端重注册）。SDK 侧同原则：starter 监听 `ContextClosedEvent` 自动 close（停心跳 → 在途屏障 → deregister 全部实例 → 释放），`destroyMethod=close` 保留为幂等兜底——注销是程序还可用时的主动动作，不落在 bean 销毁阶段（宿主已停流、依赖 bean 可能已销毁）。K8s 部署 `terminationGracePeriodSeconds` ≥ drainMs + 端口关闭耗时。
+
 **实例管理（治理期 1 前半，management-service，ADR-016）**：management-service 从 v0.1 起独立交付实例列表/详情、手动摘除/恢复与状态 API（leases/config 排障面）。摘除是 management 的内存态记录（重启丢失），不改变 registry 租约与心跳；**registry 不感知摘除**，只提供只读事实查询（服务列表、实例快照、租约明细与保护统计、配置状态，敏感值在 registry 侧脱敏）。**有效视图 = registry 事实 + management 摘除记录**，由 management 查询时组合；v0.3 起 discovery 经 management 规则流获取摘除规则后自行过滤（治理启用时）。v0.4 由 DB 持久化接管（四级摘除、审计、重下发）。
 
 ### 4.2 discovery-service
@@ -258,6 +260,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.32 | 2026-10-23 | v0.2 phase-6 设计定案：§4.1 新增优雅停机段——ContextClosedEvent 序列（DOWN → 排水 drainMs → 终刷 → 停端口）、就绪门三态（DOWN 复用 not ready 联动）、无连接迁移、SDK starter ContextClosedEvent 自动 close |
 | 1.31 | 2026-10-23 | v0.2 phase-5 验证定案：§2.2/§4.1 外部 HTTP `GET /cluster/nodes`（SDK 前置寻址，phase-5 新增）readiness 门控未就绪 503——未就绪节点不作寻址应答者；观测面（gRPC GetNodeStatus）豁免不变 |
 | 1.30 | 2026-10-21 | v0.2 phase-4 设计定案（ADR-017）：§4.1 自我保护 2.0 改为节点级兜底 + 服务级双层、显式状态机/周期评估/超时回落、独立保护状态 API、保护态不抑制复制；§6 指标补保护态 2.0；§7 增 D17 |
 | 1.29 | 2026-10-21 | v0.2 phase-3 设计定案：§2.2 外部端口补对外节点状态 API（认证保留/readiness 按方法豁免）；§4.1 分支①异步/退避/尝试全部候选/不降级快照、未就绪拒绝 Replicate/Bootstrap 与快照落盘守卫；成员配置三段式（含对外端点）与后台并发探测（不参与扇出门控）；§6 指标补 bootstrap/探测 |

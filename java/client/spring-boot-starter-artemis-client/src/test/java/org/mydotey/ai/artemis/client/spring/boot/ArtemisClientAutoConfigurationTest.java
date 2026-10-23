@@ -19,6 +19,7 @@ import org.mydotey.ai.artemis.client.ServiceInstance;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.StandardEnvironment;
 import org.springframework.util.StreamUtils;
@@ -45,6 +46,20 @@ class ArtemisClientAutoConfigurationTest {
         assertThatThrownBy(() -> client.get().register(instance()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("closed");
+    }
+
+    @Test
+    void should_closeClient_when_contextClosedEvent() {
+        runner.withPropertyValues(ADDRESS).run(context -> {
+            // context close 第一时机（bean 销毁前）手动发布事件：注销在程序还可用时主动执行
+            context.publishEvent(new ContextClosedEvent(context));
+
+            ArtemisClient bean = context.getBean(ArtemisClient.class);
+            assertThatThrownBy(() -> bean.register(instance()))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("closed");
+        });
+        // destroy 阶段二次 close 幂等 no-op，容器正常关闭
     }
 
     @Test

@@ -419,6 +419,7 @@ class ManagementAdminIT {
                                 "--management.server.port=0",
                                 "--artemis.registry.internal.port=" + internalPort,
                                 "--management.endpoint.health.group.readiness.include=readinessState,registryReadiness",
+                                "--artemis.registry.shutdown.drainMs=0", // 测试关闭不等待排水
                                 "--artemis.registry.snapshot.path=" + snapshotPath);
                 // 主 server lifecycle 名随传输实现而定（netty/shaded），按名称排除内部 peer 后取
                 externalPort = context.getBeansOfType(GrpcServerLifecycle.class).entrySet().stream()

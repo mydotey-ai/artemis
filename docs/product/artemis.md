@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.13    更新时间: 2026-10-23
+版本: 1.14    更新时间: 2026-10-23
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -155,10 +155,20 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **集群语义**：各节点只按本地收到的心跳独立判定；保护态不复制、不持久化，也不抑制复制。3 节点进程内 IT 验证节点独立保护、指标标签与超时退出。
 - **工程形态**：registry-core 单测覆盖双层窗口/状态机/回落/指标/查询/回收竞态，registry-server 服务级与 3 节点集群 IT，management client/Admin 端点端到端；全量 `dev-test.sh all` 绿。
 
+**v0.2 phase-6（优雅停机与集群验收收尾）已交付**：
+
+- **节点优雅停机**：停机序列在 Spring `ContextClosedEvent` 第一时机执行（先于 gRPC 端口关闭）——先标记自身 `DOWN`（节点状态 API 与 peer 探测可见），排水等待（`artemis.registry.shutdown.drainMs`，默认 **10s**，`0` = 不等待），再终刷快照，最后停端口。排水期间不接新流量（新 RPC `UNAVAILABLE`、`/readyz` 与 `/cluster/nodes` 返回 503、`Replicate`/`Bootstrap` 拒绝），**已建立的心跳流继续服务到端口关闭**（续约照常）；端口关闭即断流信号，客户端凭容灾无感换址（断流重连 + 熔断 + TTL 轮换），**不做连接迁移**。
+- **DOWN 传播**：就绪门升级为三态（未就绪 / 就绪 / DOWN，DOWN 终态不复活）；`DOWN` 优先于 `UP` 自报，经节点状态 API 与 `/cluster/nodes` 对外可见，SDK 选址池降权（`UP > UNKNOWN/STARTING > DOWN`）。
+- **终刷与重启恢复**：仅**曾就绪**的节点在停机时终刷快照（未就绪时注册表为空/残缺，跳过以免覆盖可回退旧快照）；单节点重启回放终刷数据，集群节点重启优先从就绪 peer 全量 bootstrap——两条路径均收敛到停机前状态。
+- **SDK 优雅下线时序**：starter 监听 `ContextClosedEvent` 自动 `close()`——停心跳 → 等在途上报 → 全量注销 → 释放，发生在容器关闭第一时机（程序仍可用、早于宿主停流与 bean 销毁）；`destroyMethod=close` 保留为幂等兜底。
+- **部署注意**：gRPC 关停宽限期显式设为 **1s**（框架默认 30s 会与排水叠加）。K8s 等编排环境 `terminationGracePeriodSeconds` 须 ≥ `drainMs` + 1s + 余量，否则 SIGKILL 会截断排水（截断后仍由客户端容灾 + peer 副本兜底）。
+- **工程形态**：新增 11 例单测（就绪门三态、停机序列编排、DOWN 自报、未就绪不终刷、DOWN 不 bootstrap、starter 事件关闭）与 `GracefulShutdownIT` 4 例集群 IT（排水窗口取证、无感换址、终刷回放、停机后重启收敛）；全量 `dev-test.sh all` 绿。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.14 | 2026-10-23 | v0.2 phase-6 交付：节点优雅停机（DOWN 标记 → drain → 终刷 → 停端口）、就绪门三态与 DOWN 传播、SDK starter ContextClosedEvent 自动注销、K8s 排水配置注意 |
 | 1.13 | 2026-10-23 | v0.2 phase-5 交付：SDK 三级地址容灾（HTTP 前置寻址 + 观测态优先级选址 + 熔断换址）与连接 TTL 轮换；`GET /cluster/nodes` 发现端点（未就绪 503）；SDK 配置键与指标递补 |
 | 1.12 | 2026-10-21 | v0.2 phase-4 交付：自我保护 2.0（节点级兜底 + 服务级权威、显式状态与超时回落）、有界指标、`GetSelfProtectionStatus` 与 Admin 状态端点、集群独立判定 |
 | 1.11 | 2026-10-21 | v0.2 phase-3 交付：peer 全量 bootstrap（异步/退避/整体替换/not ready 语义）、三段式成员配置、对外节点状态 API 与后台并发探测、配置与指标；修正 phase-1 交付节对外端点表述 |

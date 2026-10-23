@@ -90,6 +90,12 @@
 
 ### ⑥ /code-review max
 
+**技能选择**：使用内置 **`code-review`** skill（参数 `max`）。不要误用同类插件技能——`mattpocock-skills:code-review`（Standards+Spec 双轴 PR 评审）、`code-review:code-review`（PR 评审）、`open-code-review:*`（外部 OCR）、`ponytail:ponytail-review`（仅过度设计清扫）均不是本步骤要求的实现级 correctness review。
+
+**审查口径**：本 worktree 的未提交改动 + 本 phase 分支相对 main 的 diff（含未跟踪文件），逐文件审查 correctness / 并发 / 资源释放 / 测试有效性；findings 按 severity 分级并在 chat 呈现。
+
+**已知环境故障与兜底（2026-10-23 实测）**：审查子 agent 被 spawn 时内置工具（Read/Grep/Glob/Bash）不可用，只能搜到 MCP 工具，会退而用浏览器/无关 MCP 工具取 diff 并**永久挂起**（实测卡在 `browser_run_code_unsafe` 约 1 小时无返回）。判定条件：子 agent 约 10 分钟无新增 transcript，或出现调用 browser/MCP 工具取代码/执行命令。一旦命中，终止该子 agent，改由**主会话以完整工具权限内联执行同口径 max 级 review**（自行 `git diff` + 未跟踪文件逐文件审查、逐条验证 findings）；state ⑥ 备注登记「内联替代 skill + 故障原因」，⑦⑧⑨ 流程不变。
+
 **产出**：findings 清单（severity 分级，chat 呈现）。无 findings 则 ⑦ 标 skipped、备注「无 findings」，直接 ⑧。
 
 ### ⑦ /mydotey-ai:fix

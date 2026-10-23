@@ -19,6 +19,7 @@ import org.mydotey.ai.artemis.registry.domain.Instance;
 import org.mydotey.ai.artemis.registry.domain.InstanceChange;
 import org.mydotey.ai.artemis.registry.domain.InstanceRegistry;
 import org.mydotey.ai.artemis.registry.domain.InstanceStatus;
+import org.mydotey.ai.artemis.registry.domain.NodeState;
 import org.mydotey.ai.artemis.registry.domain.ReplicationBatch;
 import org.mydotey.ai.artemis.registry.domain.ResponseStatus;
 import org.mydotey.ai.artemis.registry.domain.ServiceKey;
@@ -89,6 +90,24 @@ class ReplicationServiceImplTest {
                 .hasValueSatisfying(s -> assertThat(s.instances())
                         .extracting(Instance::instanceId)
                         .containsExactly("i1", "i2"));
+    }
+
+    @Test
+    void should_reportSelfDown_when_markedDown() {
+        ReadinessGate gate = new ReadinessGate();
+        gate.markReady();
+        ReplicationServiceImpl ready = serviceWithGate(gate);
+        assertThat(ready.nodeStatus().state()).isEqualTo(NodeState.UP);
+        assertThat(ready.clusterNodes().getFirst().state()).isEqualTo(NodeState.UP);
+
+        gate.markDown(); // 优雅停机标记：DOWN 优先于就绪史，self 自报下线
+        assertThat(ready.nodeStatus().state()).isEqualTo(NodeState.DOWN);
+        assertThat(ready.clusterNodes().getFirst().state()).isEqualTo(NodeState.DOWN);
+    }
+
+    private ReplicationServiceImpl serviceWithGate(ReadinessGate gate) {
+        return new ReplicationServiceImpl(
+                members(), gate, nodeId -> NodeState.UNKNOWN, registry, Clock.systemUTC(), new SimpleMeterRegistry());
     }
 
     private static InstanceChange change(ChangeType type, String instanceId) {

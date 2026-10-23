@@ -143,7 +143,10 @@ class SnapshotRestoreIT {
                             "artemis.registry.snapshot.path",
                             snapshotFilePath.toString(),
                             "artemis.registry.internal.port",
-                            String.valueOf(peerPort)))
+                            String.valueOf(peerPort),
+                            // 自定义 properties 不走 surefire/failsafe 的测试 JVM 系统属性，显式关闭排水
+                            "artemis.registry.shutdown.drainMs",
+                            "0"))
                     .properties();
         }
 

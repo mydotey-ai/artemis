@@ -9,4 +9,4 @@ phase 设计文档与测试文档在各自 phase 开工（① worktree 开工）
 | phase-3-peer-bootstrap | [phase-3-peer-bootstrap.md](phase-3-peer-bootstrap.md) | [phase-3-peer-bootstrap-test.md](phase-3-peer-bootstrap-test.md) |
 | phase-4-self-protection-2 | [phase-4-self-protection-2.md](phase-4-self-protection-2.md) | [phase-4-self-protection-2-test.md](phase-4-self-protection-2-test.md) |
 | phase-5-sdk-failover | [phase-5-sdk-failover.md](phase-5-sdk-failover.md) | [phase-5-sdk-failover-test.md](phase-5-sdk-failover-test.md) |
-| phase-6-graceful-shutdown | — | — |
+| phase-6-graceful-shutdown | [phase-6-graceful-shutdown.md](phase-6-graceful-shutdown.md) | [phase-6-graceful-shutdown-test.md](phase-6-graceful-shutdown-test.md) |

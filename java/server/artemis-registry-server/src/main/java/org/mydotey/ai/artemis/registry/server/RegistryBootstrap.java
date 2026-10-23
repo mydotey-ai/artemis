@@ -109,6 +109,10 @@ public final class RegistryBootstrap implements InitializingBean, AutoCloseable 
         if (readinessGate.isReady()) {
             return;
         }
+        if (readinessGate.isDown()) {
+            // 优雅停机中：不再同步、不再回放快照（与终刷快照并发替换注册表会互相覆盖）
+            return;
+        }
         attempts.increment();
         try {
             List<ClusterMember> candidates = readyPeers();

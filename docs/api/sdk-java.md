@@ -1,6 +1,6 @@
 # Artemis Java SDK（注册侧）
 
-版本: 1.2    更新时间: 2026-10-23
+版本: 1.3    更新时间: 2026-10-23
 
 > `artemis-client` 是注册侧 Java 8 SDK：本地实例集为唯一事实源，显式操作 + 心跳全量上报。协议契约（`registry.v1`）见[proto 契约规范](../dev/proto-contract.md)，内部只读查询契约见 [registry-query-api.md](registry-query-api.md)。
 
@@ -77,7 +77,7 @@ artemis.client.auth.password=artemis
 client.register(instance);
 ```
 
-- 自动接管生命周期（`start`/`close`）、把 Boot/actuator 的 `MeterRegistry` 注入 SDK（无 registry 或多个同型 bean 时回落 `Metrics.globalRegistry`）。
+- 自动接管生命周期（`start`/`close`；关闭经 `ContextClosedEvent` 在容器关闭第一时机主动注销）、把 Boot/actuator 的 `MeterRegistry` 注入 SDK（无 registry 或多个同型 bean 时回落 `Metrics.globalRegistry`）。
 - `artemis.client.enabled=false` 关闭自动装配；宿主自定义 `ArtemisClient` bean 时自动装配让位。
 - 未配置 `registry.addresses` 时启动 fail-fast（`IllegalArgumentException`），不会静默不注册。
 
@@ -128,6 +128,8 @@ client.register(instance);
 
 崩溃恢复：进程重启后业务重新注册即可（心跳 upsert 幂等收敛），SDK 不做注册侧磁盘快照。
 
+**Spring Boot 容器关闭**：starter 监听 `ContextClosedEvent`，在容器关闭第一时机（宿主停流与 bean 销毁之前）调用 `close()`——注销在程序仍可用时主动发出；`destroyMethod=close` 保留为幂等兜底（重复调用 no-op）。
+
 ## 7. 可观测（Micrometer）
 
 `newClient(properties, meterRegistry)` 注入宿主 registry；缺省挂 `Metrics.globalRegistry`（Micrometer 官方库模式，宿主 `Metrics.addRegistry` 接管，不接管则空转）。
@@ -156,6 +158,7 @@ client.register(instance);
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.3 | 2026-10-23 | v0.2 phase-6：starter 关闭改由 `ContextClosedEvent` 第一时机触发 `close()`（注销提前到程序可用时），destroyMethod 为幂等兜底 |
 | 1.2 | 2026-10-23 | v0.2 phase-5：地址改前置寻址 url（`registry.addresses`，原 `serverAddresses` 弃用）；新增「地址与容灾」三级管线与 TTL 轮换节；配置表补 registry.* 六键；指标补 rotation/circuit/nodelist |
 | 1.1 | 2026-10-19 | phase-8：补 Spring Boot starter 坐标、自动装配用法与条件；修正环境变量映射名并列出 starter 支持的键写法 |
 | 1.0 | 2026-10-19 | 初版：phase-7 注册侧 SDK 公开 API、配置、语义、可观测与限制 |

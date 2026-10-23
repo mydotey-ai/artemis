@@ -179,6 +179,23 @@ class RegistryBootstrapTest {
         bootstrap.close();
     }
 
+    @Test
+    void should_skip_bootstrap_when_markedDown() throws IOException {
+        Path file = writeValidSnapshot("i-local");
+        Setup setup = setup(file);
+        setup.gate().markDown(); // 优雅停机中：不回放快照（与终刷并发会互相覆盖）
+
+        bootstrap(setup, emptyMembers(), unreachablePeerSource());
+
+        assertThat(setup.gate().isReady()).isFalse();
+        assertThat(setup.service().getInstances(KEY)).isEmpty();
+        assertThat(setup.meters()
+                        .get("artemis.registry.bootstrap.attempts")
+                        .counter()
+                        .count())
+                .isZero();
+    }
+
     // ---- 设施 ----
 
     private Result bootstrap(Path snapshotFile) {

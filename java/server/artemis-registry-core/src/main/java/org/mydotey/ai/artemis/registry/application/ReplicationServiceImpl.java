@@ -20,8 +20,8 @@ import org.mydotey.ai.artemis.registry.domain.ResponseStatus;
 import org.mydotey.ai.artemis.registry.domain.ServiceInstances;
 
 /**
- * 节点状态自报：就绪门映射（未 ready → STARTING，ready → UP），启动时刻取装配层时钟。
- * 单节点模式（无成员身份）node_id 为空。
+ * 节点状态自报：就绪门映射（未 ready → STARTING，ready → UP，优雅停机标记 → DOWN），
+ * 启动时刻取装配层时钟。单节点模式（无成员身份）node_id 为空。
  * 入站复制：校验后零事件应用（指标就地定义，guidelines §1）。
  */
 public final class ReplicationServiceImpl implements ReplicationService {
@@ -57,14 +57,13 @@ public final class ReplicationServiceImpl implements ReplicationService {
     @Override
     public NodeStatus nodeStatus() {
         String nodeId = clusterMembers.self().map(ClusterMember::nodeId).orElse("");
-        NodeState state = readinessGate.isReady() ? NodeState.UP : NodeState.STARTING;
-        return new NodeStatus(nodeId, state, startedAtMs);
+        return new NodeStatus(nodeId, selfState(), startedAtMs);
     }
 
     @Override
     public List<ClusterMemberStatus> clusterNodes() {
         String selfNodeId = clusterMembers.self().map(ClusterMember::nodeId).orElse(null);
-        NodeState selfState = readinessGate.isReady() ? NodeState.UP : NodeState.STARTING;
+        NodeState selfState = selfState();
         List<ClusterMemberStatus> nodes =
                 new ArrayList<>(clusterMembers.members().size());
         for (ClusterMember member : clusterMembers.members()) {
@@ -88,6 +87,14 @@ public final class ReplicationServiceImpl implements ReplicationService {
         batchesReceived.increment();
         changesApplied.increment(registry.applyReplicated(batch.changes()));
         return new ResponseStatus(Ack.SUCCESS, null);
+    }
+
+    /** self 观测态：优雅停机 DOWN 优先（自报下线，peer 探测原样传播），否则就绪门映射。 */
+    private NodeState selfState() {
+        if (readinessGate.isDown()) {
+            return NodeState.DOWN;
+        }
+        return readinessGate.isReady() ? NodeState.UP : NodeState.STARTING;
     }
 
     /** 信任边界一次校验：source、service key 与逐变更 instanceId 非空、变更类型可识别（与外部入口对齐）。 */

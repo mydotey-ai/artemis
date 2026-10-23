@@ -17,7 +17,7 @@
 |---|---|
 | phase | — |
 | 步骤 | — |
-| 分支 / worktree | v0.2-phase5-sdk-failover @ .claude/worktrees/v0.2-phase5-sdk-failover |
+| 分支 / worktree | — |
 
 > v0.1 已于 2026-10-19 收尾（验收对照见 `v0.1/plan.md`）。
 
@@ -25,17 +25,17 @@
 
 | 步骤 | 状态 | 备注 |
 |---|---|---|
-| worktree 开工 | done | 分支/worktree 新建（main 8a6706c 起）；设计/测试文档骨架落盘，phases/README 登记 |
-| 上下文加载 | done | 已读：roadmap v0.2、架构 §2.1/§2.2/§4.1、ADR-006、legacy §2.8/§5#2/§8-5、guidelines §7/§9/§10、tech-stack §2.2 矩阵、client internal 全组件、服务端 NodeStatusGrpcService/StaticClusterMembers/ClusterNodeStatusMonitor/ReplicationServiceImpl、NodeStatusApiIT/ClientSdkIT、replication.proto |
-| 设计 | done | review 通过（4 轮修订，设计文档 v1.4 / 测试文档 v1.3） |
-| 实现 | done | 回退重入完成：/cluster/nodes readiness 门控（503）+ FakeRegistryServer 开流拒绝 + 3 新用例；架构 §2.2/§4.1 与设计/测试文档已同步 |
-| 测试 | done | 回退重入 ⑤ all 全绿（12 模块 BUILD SUCCESS，新用例 DefaultArtemisClientTest 13/HttpNodeListFetcherTest 5/ClusterNodesControllerTest 1 全过） |
-| code-review | done | 回退重入 ⑥：9 findings（1 单链破坏、2 markBroken 双计、3 阈值语义、5 轮换双跳为行为级） |
-| fix | done | 9/9 全修复 + 单链保持用例补充；实现结果已记（设计文档 v1.7） |
-| 回归测试 | done | ⑧（回退重入）all 全绿；中途 2 失败已处置（starter 断言对齐、ReplicationFanoutIT 判 flaky 单跑+末轮过） |
-| 验证 | done | 自动化验证重验通过（all 全绿 + TTL 取证 + serverAddresses 无残留）；用户人工验证通过（2026-10-23，含两条裁决：寻址端点 readiness 门控、UNAVAILABLE 收敛用例） |
-| 文档同步 | done | 架构（④ 期已同步 v1.31）、sdk-java v1.2、node-status-api v1.1、产品文档 v1.13；phase 文档「文档同步」节已填 |
-| 完工 | done | 分支 2b48004 提交（用户发起 commit）；squash 回 main 并 push |
+| worktree 开工 | done | worktree 用户预建（main 83bebf6 起、无分叉干净）续用确认；设计/测试文档骨架落盘，phases/README 登记 |
+| 上下文加载 | done | 已读：roadmap v0.2、架构 §2.2/§4.1、tech-java.md、guidelines §4/§5/§7、legacy §2.7（无优雅停机资产）、phase-5 设计文档、replication.proto NodeState（DOWN 预留）、RegistryBootstrap/RegistryConfiguration/ReadinessGate/ReplicationServiceImpl.nodeStatus/ClusterNodeStatusMonitor/ReadinessInterceptor/ReplicationGrpcService/SdkFailoverIT、guidelines §7 |
+| 设计 | done | review 通过（1 轮修订，设计文档 v1.2 / 测试文档 v1.2：starter ContextClosedEvent 自动 close 时序修正） |
+| 实现 | done | core（ReadinessGate 三态 + nodeStatus/clusterNodes DOWN 优先）+ server（GracefulShutdownHook + 装配）+ starter（ContextClosedEvent 自动 close）+ pom（surefire/failsafe 测试 JVM drainMs=0）+ 测试（3 单测类新增/扩充 + GracefulShutdownIT 4 用例 + starter 事件用例） |
+| 测试 | done | ⑤ dev-test.sh all 全绿（首轮 spotless 违规，apply 后重跑 BUILD SUCCESS）；单跑确认 GracefulShutdownIT 4/4、GracefulShutdownHookTest 3/3、starter 事件用例过 |
+| code-review | done | 内联 max 级 review（按 dev-java ⑥「已知环境故障与兜底」：skill 子 agent 无内置工具、吊死 playwright 约 1h）：5 findings（1 high 空快照覆盖、2 medium bootstrap 竞态/IT 假绿、2 low） |
+| fix | done | 5/5 修复：未就绪不终刷 + bootstrap DOWN 早退（各补用例）、IT isAlive 断言、新端口、AssertJ 收敛 |
+| 回归测试 | done | ⑧ 三轮：① 新断言暴露 gRPC 关停宽限 30s 与 drain 叠加（失败）；② 宽限 1s 后全绿；③ 测试属性补齐后全绿（GracefulShutdownIT 4/4，31s） |
+| 验证 | done | 自动化验证通过（dev-test.sh all BUILD SUCCESS + 日志取证）；用户人工验证通过（2026-10-23） |
+| 文档同步 | done | 架构 v1.32、产品 v1.14、sdk-java v1.3、phase 设计 v1.4 / 测试 v1.3、dev-java ⑥ 兜底条款；索引无新增 |
+| 完工 | done | 分支 a490ba4 提交；squash 回 main 并 push |
 
 步骤状态枚举：pending | in-progress | done | skipped。
 
@@ -48,6 +48,6 @@
 | phase-3-peer-bootstrap | done |
 | phase-4-self-protection-2 | done |
 | phase-5-sdk-failover | done |
-| phase-6-graceful-shutdown | planned |
+| phase-6-graceful-shutdown | done |
 
 状态枚举：planned | in-progress | done。

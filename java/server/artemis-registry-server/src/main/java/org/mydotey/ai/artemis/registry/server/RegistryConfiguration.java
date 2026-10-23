@@ -249,4 +249,17 @@ public class RegistryConfiguration {
     ReadinessHealthIndicator registryReadinessHealthIndicator(ReadinessGate readinessGate) {
         return new ReadinessHealthIndicator(readinessGate);
     }
+
+    /**
+     * 优雅停机序列（ContextClosedEvent 第一时机：标记 DOWN → 排水 → 终刷快照，先于 gRPC 端口关闭；
+     * ApplicationListener 类型 bean 由容器自动注册为事件监听器）。
+     */
+    @Bean
+    GracefulShutdownHook gracefulShutdownHook(
+            ReadinessGate readinessGate,
+            RegistryService registryService,
+            ClusterMembers clusterMembers,
+            StringProperties properties) {
+        return new GracefulShutdownHook(readinessGate, registryService, clusterMembers, properties);
+    }
 }

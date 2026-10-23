@@ -127,6 +127,13 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-failsafe-plugin</artifactId>
+        <configuration>
+          <systemPropertyVariables>
+            <!-- 测试 JVM 全局关停机排水：各 IT tearDown 的 context close 不等待 drain；
+                 需要排水的用例（GracefulShutdownIT）以节点启动参数显式覆盖（命令行优先级更高） -->
+            <artemis.registry.shutdown.drainMs>0</artemis.registry.shutdown.drainMs>
+          </systemPropertyVariables>
+        </configuration>
         <executions>
           <execution>
             <goals>
@@ -135,6 +142,16 @@
             </goals>
           </execution>
         </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <systemPropertyVariables>
+            <!-- 同上：*Test 中起 Spring context 的用例（如 ApplicationContextTest）close 不等待 drain -->
+            <artemis.registry.shutdown.drainMs>0</artemis.registry.shutdown.drainMs>
+          </systemPropertyVariables>
+        </configuration>
       </plugin>
     </plugins>
   </build>
