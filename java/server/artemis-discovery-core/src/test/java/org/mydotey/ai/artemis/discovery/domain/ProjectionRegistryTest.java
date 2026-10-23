@@ -143,11 +143,65 @@ class ProjectionRegistryTest {
 
     @Test
     void should_reject_blank_service_key_with_invalid_argument() {
-        DiscoveryQueryService queryService = new DiscoveryQueryService(registry);
+        DiscoveryQueryService queryService = new DiscoveryQueryService(registry, new UpstreamStatuses());
         assertThatThrownBy(() -> queryService.query(new QueryRequest(List.of(new ServiceKey("", "svc")), Map.of())))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> queryService.query(new QueryRequest(List.of(new ServiceKey("ns", " ")), Map.of())))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void should_maintain_cached_checksum_on_apply_and_replace_all() {
+        registry.apply(CLUSTER, change(ORDER, new InstanceChange(instance("i1"), ChangeType.NEW)));
+        assertThat(checksum(ORDER)).isEqualTo(ProjectionChecksum.of(find(ORDER).instances()));
+
+        registry.apply(CLUSTER, change(ORDER, new InstanceChange(instance("i2"), ChangeType.NEW)));
+        assertThat(checksum(ORDER))
+                .as("条目变更后缓存随新条目重算（D-F3）")
+                .isEqualTo(ProjectionChecksum.of(find(ORDER).instances()));
+
+        registry.apply(CLUSTER, change(ORDER, new InstanceChange(instance("i1"), ChangeType.DELETE)));
+        assertThat(checksum(ORDER)).isEqualTo(ProjectionChecksum.of(find(ORDER).instances()));
+
+        // 覆盖：ORDER 消失（缺项）、USER 新建
+        registry.replaceAll(CLUSTER, List.of(service(USER, instance("u1"))));
+        assertThat(checksum(ORDER)).as("空即删条目，对账表缺项（D-F1）").isNull();
+        assertThat(checksum(USER)).isEqualTo(ProjectionChecksum.of(find(USER).instances()));
+    }
+
+    @Test
+    void should_omit_and_compute_view_checksum_by_labels_selector() {
+        registry.replaceAll(
+                CLUSTER,
+                List.of(
+                        service(ORDER, instance("i1", Map.of("group", "a")), instance("i2", Map.of("group", "b"))),
+                        service(USER, instance("u1", Map.of("group", "a")))));
+
+        // labels 视图现算（D-F3）：checksum = 过滤视图 [i1] 的指纹，条目按视图有实例收录
+        // （code-review FIX-3：CHM 弱一致迭代序不定，按 key 定位断言、不依赖顺序）
+        List<ServiceChecksum> view = registry.checksums(new DiscoverySelector(java.util.Set.of(), Map.of("group", "a")))
+                .get(0)
+                .services();
+        assertThat(view).extracting(ServiceChecksum::key).containsExactlyInAnyOrder(ORDER, USER);
+        assertThat(view.stream()
+                        .filter(entry -> entry.key().equals(ORDER))
+                        .findFirst()
+                        .orElseThrow()
+                        .checksum())
+                .isEqualTo(ProjectionChecksum.of(service(ORDER, instance("i1", Map.of("group", "a")))));
+
+        // 滤空缺项：全滤空 → 无条目（D-F1）
+        assertThat(registry.checksums(new DiscoverySelector(java.util.Set.of(), Map.of("group", "z"))))
+                .isEmpty();
+
+        // 显式集合命中（无 labels 读缓存）：缺失服务不返回
+        List<ServiceChecksum> hit = registry.checksums(
+                        new DiscoverySelector(java.util.Set.of(ORDER, OTHER_NS), Map.of()))
+                .get(0)
+                .services();
+        assertThat(hit).extracting(ServiceChecksum::key).containsExactly(ORDER);
+        assertThat(hit.get(0).checksum())
+                .isEqualTo(ProjectionChecksum.of(find(ORDER).instances()));
     }
 
     private ClusterServiceInstances find(ServiceKey key) {
@@ -157,7 +211,17 @@ class ProjectionRegistryTest {
                 .orElse(null);
     }
 
+    private Integer checksum(ServiceKey key) {
+        return registry.checksums(new DiscoverySelector(java.util.Set.of(), Map.of())).stream()
+                .flatMap(cluster -> cluster.services().stream())
+                .filter(service -> service.key().equals(key))
+                .map(ServiceChecksum::checksum)
+                .findFirst()
+                .orElse(null);
+    }
+
     private QueryResponse query(java.util.Set<ServiceKey> services, Map<String, String> labels) {
-        return new DiscoveryQueryService(registry).query(new QueryRequest(List.copyOf(services), labels));
+        return new DiscoveryQueryService(registry, new UpstreamStatuses())
+                .query(new QueryRequest(List.copyOf(services), labels));
     }
 }

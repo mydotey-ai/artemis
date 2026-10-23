@@ -8,15 +8,17 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 投影存储（D-D2）：per-cluster {@code ConcurrentHashMap<ServiceKey, ServiceInstances>}，
+ * 投影存储（D-D2）：per-cluster {@code ConcurrentHashMap<ServiceKey, Entry>}，
  * 值不可变、per-service 条目替换（registry InstanceRegistry 同构，原子粒度 = service
- * 实例集，ADR-007）。
+ * 实例集，ADR-007）。条目携带视图 checksum（D-F3）：构建新条目时计算（{@link ProjectionChecksum}），
+ * 对账拉取读缓存零计算。
  *
  * <p>条目存在性 = 服务存在性（≥1 实例）：DELETE 后空集即删条目——registry 侧空 holder
  * 回收、bootstrap 快照不含空服务，变更流与覆盖两路径语义收敛，空条目不滞留。
  *
  * <p>写侧约定：per-cluster 单线程（同步器线程）串行调用 {@link #replaceAll}/{@link #apply}，
- * 保同 service 变更序；读路径无锁（CHM 弱一致迭代 + 不可变值持引用过滤，零克隆）。
+ * 保同 service 变更序；读路径无锁（CHM 弱一致迭代 + 不可变值持引用过滤，零克隆）——
+ * 对账读与并发 apply 无锁交错，瞬时不一致触发的一次多余全量拉无害（下次对账收敛，D-F7）。
  */
 public final class ProjectionRegistry {
 
@@ -42,6 +44,21 @@ public final class ProjectionRegistry {
         return result;
     }
 
+    /**
+     * 对账表拉取（D-F1/D-F3）：labels 空 → 读条目缓存 checksum（零计算）；labels 非空 →
+     * 过滤视图现算。只含有实例条目，滤空缺项 = 视图无实例。
+     */
+    public List<ClusterChecksums> checksums(DiscoverySelector selector) {
+        List<ClusterChecksums> result = new ArrayList<>();
+        for (Map.Entry<String, ClusterProjection> entry : clusters.entrySet()) {
+            List<ServiceChecksum> services = entry.getValue().checksums(selector);
+            if (!services.isEmpty()) {
+                result.add(new ClusterChecksums(entry.getKey(), services));
+            }
+        }
+        return result;
+    }
+
     public Set<String> clusterIds() {
         return Set.copyOf(clusters.keySet());
     }
@@ -49,13 +66,13 @@ public final class ProjectionRegistry {
     /** 单条目读（订阅扇出旧值 lookup，D-S4）：无条目返回 null，无锁持引用。 */
     public ServiceInstances service(String cluster, ServiceKey key) {
         ClusterProjection projection = clusters.get(cluster);
-        return projection == null ? null : projection.table.get(key);
+        return projection == null ? null : projection.instances(key);
     }
 
     /** 全条目读（重连覆盖 diff 的旧投影 T0，D-S7）：无锁持引用快照。 */
     public List<ServiceInstances> services(String cluster) {
         ClusterProjection projection = clusters.get(cluster);
-        return projection == null ? List.of() : List.copyOf(projection.table.values());
+        return projection == null ? List.of() : projection.instancesList();
     }
 
     private ClusterProjection projection(String cluster) {
@@ -64,7 +81,9 @@ public final class ProjectionRegistry {
 
     private static final class ClusterProjection {
 
-        private final ConcurrentHashMap<ServiceKey, ServiceInstances> table = new ConcurrentHashMap<>();
+        private final ConcurrentHashMap<ServiceKey, Entry> table = new ConcurrentHashMap<>();
+
+        private record Entry(ServiceInstances instances, int checksum) {}
 
         void replaceAll(List<ServiceInstances> services) {
             Set<ServiceKey> present = new HashSet<>();
@@ -72,7 +91,7 @@ public final class ProjectionRegistry {
                 if (service.instances().isEmpty()) {
                     continue; // 防御：快照理论上不含空服务（registry 空 holder 回收）
                 }
-                table.put(service.key(), service);
+                table.put(service.key(), entry(service));
                 present.add(service.key());
             }
             table.keySet().retainAll(present);
@@ -87,20 +106,20 @@ public final class ProjectionRegistry {
         }
 
         private void apply(ServiceKey key, InstanceChange change) {
-            ServiceInstances current = table.get(key);
+            Entry current = table.get(key);
             switch (change.type()) {
-                case NEW, UPDATE -> table.put(key, upsert(current, key, change.instance()));
+                case NEW, UPDATE -> table.put(key, entry(upsert(instances(current), key, change.instance())));
                 case DELETE -> {
                     if (current != null) {
                         ServiceInstances remaining =
-                                without(current, change.instance().instanceId());
+                                without(current.instances(), change.instance().instanceId());
                         if (remaining == null) {
                             // instanceId 不存在（陈旧/重复 DELETE）：no-op，不伤同服务其余实例
                             // （语义对齐 registry InstanceRegistry——remove 未命中不动 holder）
                         } else if (remaining.instances().isEmpty()) {
                             table.remove(key); // 空即删（D-D2）
                         } else {
-                            table.put(key, remaining);
+                            table.put(key, entry(remaining));
                         }
                     } // 未知服务 DELETE 忽略
                 }
@@ -108,6 +127,14 @@ public final class ProjectionRegistry {
                     // 未知类型不可执行，丢弃（对端版本未知演进；丢失窗口由 re-bootstrap 自愈）
                 }
             }
+        }
+
+        private static Entry entry(ServiceInstances service) {
+            return new Entry(service, ProjectionChecksum.of(service));
+        }
+
+        private static ServiceInstances instances(Entry entry) {
+            return entry == null ? null : entry.instances();
         }
 
         private static ServiceInstances upsert(ServiceInstances current, ServiceKey key, Instance instance) {
@@ -151,11 +178,52 @@ public final class ProjectionRegistry {
             return new ServiceInstances(current.key(), instances);
         }
 
+        ServiceInstances instances(ServiceKey key) {
+            return instances(table.get(key));
+        }
+
+        List<ServiceInstances> instancesList() {
+            List<ServiceInstances> services = new ArrayList<>(table.size());
+            for (Entry entry : table.values()) {
+                services.add(entry.instances());
+            }
+            return List.copyOf(services);
+        }
+
+        List<ServiceChecksum> checksums(DiscoverySelector selector) {
+            List<ServiceChecksum> result = new ArrayList<>();
+            if (selector.services().isEmpty()) {
+                for (Map.Entry<ServiceKey, Entry> entry : table.entrySet()) {
+                    addChecksum(result, entry.getKey(), entry.getValue(), selector);
+                }
+            } else {
+                for (ServiceKey key : selector.services()) {
+                    Entry entry = table.get(key);
+                    if (entry != null) {
+                        addChecksum(result, key, entry, selector);
+                    }
+                }
+            }
+            return result;
+        }
+
+        private static void addChecksum(
+                List<ServiceChecksum> result, ServiceKey key, Entry entry, DiscoverySelector selector) {
+            if (selector.labels().isEmpty()) {
+                result.add(new ServiceChecksum(key, entry.checksum())); // 读缓存（零计算，D-F3）
+                return;
+            }
+            ServiceInstances filtered = filter(entry.instances(), selector.labels());
+            if (!filtered.instances().isEmpty()) { // 滤空缺项 = 视图无实例（D-F1）
+                result.add(new ServiceChecksum(key, ProjectionChecksum.of(filtered)));
+            }
+        }
+
         void query(String cluster, DiscoverySelector selector, List<ClusterServiceInstances> result) {
             if (!selector.services().isEmpty()) {
                 // 显式集合（已去重）：命中条目即返回（labels 过滤后可为空实例集）；条目不存在不返回
                 for (ServiceKey key : selector.services()) {
-                    ServiceInstances service = table.get(key);
+                    ServiceInstances service = instances(key);
                     if (service != null) {
                         result.add(new ClusterServiceInstances(cluster, filter(service, selector.labels())));
                     }
@@ -163,8 +231,8 @@ public final class ProjectionRegistry {
                 return;
             }
             // 全量查询：过滤后为空不返回（防响应膨胀）
-            for (ServiceInstances service : table.values()) {
-                ServiceInstances filtered = filter(service, selector.labels());
+            for (Entry entry : table.values()) {
+                ServiceInstances filtered = filter(entry.instances(), selector.labels());
                 if (!filtered.instances().isEmpty()) {
                     result.add(new ClusterServiceInstances(cluster, filtered));
                 }

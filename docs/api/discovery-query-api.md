@@ -1,6 +1,6 @@
 # discovery 查询 API
 
-版本: 1.0    更新时间: 2026-10-23
+版本: 1.1    更新时间: 2026-10-24
 
 > 本文定义 discovery-service 的查询契约（`discovery.v1`，SDK 与控制面消费）。v0.3 phase-2 交付 unary 查询；订阅推送 rpc 随 phase-3 以新增 rpc 演进（wire 兼容）。
 
@@ -31,6 +31,8 @@
 
 **响应**：`data.services` 为 `ClusterServiceInstances` 列表——`cluster`（来源标识，投影边界注入，ADR-014）+ `instances`（`ServiceInstances`：service 实例集快照，ADR-007 原子单元）。
 
+**新鲜度元信息**（v0.3 phase-4）：`data.upstreams` 为 `UpstreamStatus` 列表（`cluster` + `UpstreamSyncState`：`SYNCED` 实时 / `SYNCING`、`DISCONNECTED` 投影冻结陈旧）——**非 `SYNCED` 即数据可能陈旧**（消费方感知数据降级；快照顺序不保证，按 cluster 键控消费）。语义细节与枚举值见 [discovery-reconciliation-api.md](discovery-reconciliation-api.md) §4。
+
 **空条目规则**（条目存在性 = 服务存在性，≥1 实例）：
 
 | 场景 | 返回 |
@@ -57,4 +59,5 @@
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-24 | phase-4：`QueryResponseData.upstreams` 新鲜度元信息字段（wire 兼容只增） |
 | 1.0 | 2026-10-23 | 初版：discovery.v1 查询契约（选择器语义、空条目规则、readiness/认证、上游配置） |

@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import org.mydotey.ai.artemis.discovery.domain.ChangeType;
+import org.mydotey.ai.artemis.discovery.domain.ChecksumResponse;
+import org.mydotey.ai.artemis.discovery.domain.ClusterChecksums;
 import org.mydotey.ai.artemis.discovery.domain.ClusterServiceInstances;
 import org.mydotey.ai.artemis.discovery.domain.DiscoverySelector;
 import org.mydotey.ai.artemis.discovery.domain.Instance;
@@ -12,8 +14,11 @@ import org.mydotey.ai.artemis.discovery.domain.InstanceStatus;
 import org.mydotey.ai.artemis.discovery.domain.QueryRequest;
 import org.mydotey.ai.artemis.discovery.domain.QueryResponse;
 import org.mydotey.ai.artemis.discovery.domain.ServiceChange;
+import org.mydotey.ai.artemis.discovery.domain.ServiceChecksum;
 import org.mydotey.ai.artemis.discovery.domain.ServiceInstances;
 import org.mydotey.ai.artemis.discovery.domain.ServiceKey;
+import org.mydotey.ai.artemis.discovery.domain.UpstreamState;
+import org.mydotey.ai.artemis.discovery.domain.UpstreamStatus;
 import org.mydotey.ai.artemis.proto.common.v1.ErrorInfo;
 import org.mydotey.ai.artemis.proto.common.v1.ResponseStatus;
 import org.mydotey.ai.artemis.proto.discovery.v1.QueryResponseData;
@@ -45,6 +50,9 @@ public final class DiscoveryProtoMapper {
         for (ClusterServiceInstances service : response.services()) {
             data.addServicesBuilder().setCluster(service.cluster()).setInstances(toProto(service.instances()));
         }
+        for (UpstreamStatus upstream : response.upstreams()) {
+            data.addUpstreams(toProto(upstream));
+        }
         return org.mydotey.ai.artemis.proto.discovery.v1.QueryResponse.newBuilder()
                 .setStatus(ResponseStatus.newBuilder().setAck(org.mydotey.ai.artemis.proto.common.v1.Ack.ACK_SUCCESS))
                 .setData(data)
@@ -73,6 +81,65 @@ public final class DiscoveryProtoMapper {
     public org.mydotey.ai.artemis.proto.discovery.v1.SubscriptionEvent toEstablishmentEvent() {
         return org.mydotey.ai.artemis.proto.discovery.v1.SubscriptionEvent.newBuilder()
                 .build();
+    }
+
+    // ---- 对账（discovery.v1，toDomain 请求 / toProto 响应）----
+
+    public DiscoverySelector toSelector(org.mydotey.ai.artemis.proto.discovery.v1.ChecksumRequest request) {
+        List<ServiceKey> services = new ArrayList<>();
+        for (org.mydotey.ai.artemis.proto.common.v1.ServiceKey key : request.getServicesList()) {
+            services.add(toDomain(key));
+        }
+        return new DiscoverySelector(Set.copyOf(services), request.getLabelsMap());
+    }
+
+    public org.mydotey.ai.artemis.proto.discovery.v1.ChecksumResponse toSuccessProto(ChecksumResponse response) {
+        org.mydotey.ai.artemis.proto.discovery.v1.ChecksumResponseData.Builder data =
+                org.mydotey.ai.artemis.proto.discovery.v1.ChecksumResponseData.newBuilder();
+        for (ClusterChecksums cluster : response.clusters()) {
+            org.mydotey.ai.artemis.proto.discovery.v1.ClusterChecksums.Builder clusterBuilder =
+                    org.mydotey.ai.artemis.proto.discovery.v1.ClusterChecksums.newBuilder()
+                            .setCluster(cluster.cluster());
+            for (ServiceChecksum service : cluster.services()) {
+                clusterBuilder
+                        .addServicesBuilder()
+                        .setKey(toProto(service.key()))
+                        .setChecksum(service.checksum());
+            }
+            data.addClusters(clusterBuilder);
+        }
+        for (UpstreamStatus upstream : response.upstreams()) {
+            data.addUpstreams(toProto(upstream));
+        }
+        return org.mydotey.ai.artemis.proto.discovery.v1.ChecksumResponse.newBuilder()
+                .setStatus(ResponseStatus.newBuilder().setAck(org.mydotey.ai.artemis.proto.common.v1.Ack.ACK_SUCCESS))
+                .setData(data)
+                .build();
+    }
+
+    public org.mydotey.ai.artemis.proto.discovery.v1.ChecksumResponse toErrorChecksumProto(
+            String code, String message) {
+        return org.mydotey.ai.artemis.proto.discovery.v1.ChecksumResponse.newBuilder()
+                .setStatus(ResponseStatus.newBuilder()
+                        .setAck(org.mydotey.ai.artemis.proto.common.v1.Ack.ACK_FAIL)
+                        .setError(ErrorInfo.newBuilder().setCode(code).setMessage(message)))
+                .build();
+    }
+
+    public org.mydotey.ai.artemis.proto.discovery.v1.UpstreamStatus toProto(UpstreamStatus upstream) {
+        return org.mydotey.ai.artemis.proto.discovery.v1.UpstreamStatus.newBuilder()
+                .setCluster(upstream.cluster())
+                .setState(toProto(upstream.state()))
+                .build();
+    }
+
+    private org.mydotey.ai.artemis.proto.discovery.v1.UpstreamSyncState toProto(UpstreamState state) {
+        return switch (state) {
+            case SYNCING -> org.mydotey.ai.artemis.proto.discovery.v1.UpstreamSyncState.UPSTREAM_SYNC_STATE_SYNCING;
+            case SYNCED -> org.mydotey.ai.artemis.proto.discovery.v1.UpstreamSyncState.UPSTREAM_SYNC_STATE_SYNCED;
+            case DISCONNECTED ->
+                org.mydotey.ai.artemis.proto.discovery.v1.UpstreamSyncState.UPSTREAM_SYNC_STATE_DISCONNECTED;
+        };
     }
 
     public org.mydotey.ai.artemis.proto.discovery.v1.SubscriptionEvent toProto(String cluster, ServiceChange change) {

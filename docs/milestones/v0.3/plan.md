@@ -1,6 +1,6 @@
 # v0.3 版本规划
 
-版本: 1.3    更新时间: 2026-10-23
+版本: 1.4    更新时间: 2026-10-24
 
 ## 目标
 
@@ -32,7 +32,7 @@ phase-2 说明：投影模型按 `(cluster, namespace, service)` 组织，cluste
 
 phase-3 说明：订阅推送为推拉结合之「推」（ADR-019）——Subscribe server-stream 推**视图语义增量变更批**（首条空批确认 + 逐 service 全 NEW 基线；labels 订阅由服务端翻译实例匹配态翻转，SDK 无脑 apply），一流多目标、单流按产生序有序；上游重连覆盖 = 覆盖前旧投影与新快照 diff 续推增量（订阅流与上游状态解耦）；扇出统一 per-service 分条（消息上界 = 单服务实例集）；慢消费者 isReady 断流（at-most-once）。「拉」（Query 全量）与 hash 对账分别已在 phase-2 交付 / 归 phase-4。推送指标按架构 §6「推送 v0.3」内建。
 
-phase-4 说明：hash 对账 API（ADR-019 三件套之三）——per-service checksum 随投影条目缓存（响应零计算），SDK 定期拉表比对、不一致 service 全量拉；checksum 规则跨语言稳定（canonical 序列化，不用 protobuf 字节）。三层兜底轮询继承资产 #8——订阅推送失败或空服务 60s 主动拉、15min 全量刷新；推送流断开先重建订阅，失败由轮询兜底。新鲜度标记携带上游断连中，出口在查询响应与推送快照的状态元信息；消费方（SDK）感知数据降级。registry 自我保护态不进投影数据（registry 内部概念，phase-1 定案）。
+phase-4 说明：hash 对账 API（ADR-019 三件套之三）——per-service 视图 checksum 随投影条目缓存（无 labels 响应零计算，labels 视图响应对算），SDK 定期拉表比对、不一致 service 全量拉；checksum 规则跨语言稳定（canonical 序列化，不用 protobuf 字节）。三层兜底轮询继承资产 #8——空服务 60s 主动拉由对账吸收（表缺项 = 权威空）、15min 全量刷新为最终兜底、推送失败先重建订阅再由轮询兜底。新鲜度标记携带上游断连中，出口在查询与对账响应的状态元信息（订阅流不携带——流与上游状态解耦，phase-3 D-S7）；消费方（SDK）感知数据降级。registry 自我保护态不进投影数据（registry 内部概念，phase-1 定案）。
 
 phase-5 说明：discovery 不组集群（ADR-002）——每个 discovery 节点独立订阅 1..N 个 registry 集群，各源投影独立维护、查询/推送时刻本地合并（默认 union，可按 cluster/namespace 过滤），聚合逻辑只发生在本地、无跨源污染。上游状态按集群独立维护。
 
@@ -57,6 +57,7 @@ phase-9 说明：发现侧 starter 自动装配（与注册侧共存，按配置
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.4 | 2026-10-24 | phase-4 设计 review 定案：checksum 视图语义（对账吸收空服务层）、新鲜度出口只在查询/对账响应（「推送快照」为 phase-3 改增量前残留措辞，移除） |
 | 1.3 | 2026-10-23 | phase-3 二轮 review 定案：上游覆盖改 diff 续推（订阅流与上游解耦，ADR-019 v1.1） |
 | 1.2 | 2026-10-23 | phase-3 设计 review 定案：订阅推送改推拉结合（ADR-019）——phase-3 改增量推送、phase-4 补 hash 对账 API；目标段 ADR 引用更新 |
 | 1.1 | 2026-10-23 | phase-1 设计 review 定案同步：registry 保护态（stale）不进投影契约，phase-1/phase-4 说明相应修订 |

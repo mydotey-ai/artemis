@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.18    更新时间: 2026-10-24
+版本: 1.19    更新时间: 2026-10-24
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -191,10 +191,21 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **at-most-once**：慢消费者（outbound 背压）服务端断流 `RESOURCE_EXHAUSTED` + 注销，重订阅重新基线自愈；推送指标（active/push/closed.slow-consumer）就地内建。
 - **工程形态**：discovery-core 28 单测（投影 diff、翻译矩阵四象限、表锁基线/扇出互斥）+ `DiscoverySubscriptionIT` 7 例（确认/基线、增量亚秒可见、双流隔离、labels 视图、上游重启 diff 续推流不断、未就绪 UNAVAILABLE、cancel 注销）；code-review 双轨（skill max + 内联）10 findings，核心修复 = 订阅基线与批「扇出+应用」表锁串行化（消除僵尸复活/确认被抢/变更丢失三竞态）。契约详见 [discovery-subscription-api.md](../api/discovery-subscription-api.md)。
 
+**v0.3 phase-4（discovery 兜底对账与新鲜度）已交付**：
+
+- **hash 对账（ADR-019 三件套之三，原产品局限 #3「漏推最久 15min 才纠正、丢失不可检测」的现代化）**：`discovery.v1 DiscoveryReconciliationService/Checksum`（unary，外部端口）拉取 per-service **视图 checksum 表**——SDK 定期与本地视图逐 service 比对，不一致触发 `Query` 全量拉，增量丢失显式检测、漂移窗口 = 对账周期。响应**缺项 = 权威空**（SDK 本地空 + 表缺即一致；丢失的 `NEW` 必致表项出现）。
+- **canonical 规则跨语言稳定（单一来源 [discovery-reconciliation-api.md](../api/discovery-reconciliation-api.md) §3，含 golden vector）**：per-instance FNV-1a-32 + XOR 结合——实例集与 metadata **双重抗序**（不定义跨语言排序规则），唯一顺序敏感点收窄到单实例标量字段位置序列；碰撞 ~2⁻³² 由 15min 全量刷新兜底。
+- **缓存分型**：checksum 随投影条目缓存（写入时计算）；无 labels 请求响应零计算，labels 视图响应对算（仅 labels 订阅方、对账周期频率）。
+- **新鲜度标记（局限 #15「缓存无新鲜度元信息」修复）**：查询与对账响应携带 `UpstreamStatus`（per-cluster：`SYNCED` 实时 / `SYNCING`、`DISCONNECTED` 投影冻结陈旧）——非 `SYNCED` 即可能陈旧，消费方感知数据降级。registry 自我保护态不进新鲜度（内部概念）；订阅流不携带（D-S7 流与上游解耦，降级感知经拉取面）。
+- **三层兜底轮询（资产 #8）契约面收口**：空服务层被对账吸收（缺项 = 权威空）、15min 全量刷新为对账失效的最终兜底、推送失败先重订阅再轮询兜底——服务端零新增配置与指标，SDK 侧节奏归 phase-8。
+- **工程形态**：单测 8 用例（canonical 抗序/字段敏感、条目缓存一致性、labels 视图、状态上报、proto 映射）+ `DiscoveryReconciliationIT` 5 例（SDK 角色独立实现 canonical 规则驱动端到端：表随注册/更新/注销一致演变、篡改本地视图对账检测后全量拉收敛、registry 关停 DISCONNECTED 标记可见且陈旧换可用、重启双面收敛、labels 视图指纹、未就绪拒绝）；code-review 双轨 6 findings（核心修复 = 快照先于读表，防「陈旧数据 + SYNCED」夸大新鲜度竞态）。
+
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.19 | 2026-10-24 | v0.3 phase-4 交付：hash 对账（canonical 规则单一来源 + golden vector）、新鲜度标记；新建 api/discovery-reconciliation-api.md |
 | 1.18 | 2026-10-24 | v0.3 phase-3 交付：推拉结合订阅推送（ADR-019：增量流 + labels 视图翻译 + diff 续推）；新建 api/discovery-subscription-api.md |
 | 1.17 | 2026-10-23 | v0.3 phase-2 交付：discovery 投影内核（消费安全序/自愈重连/readiness）与 discovery.v1 查询 API；新建 api/discovery-query-api.md |
 | 1.16 | 2026-10-23 | v0.3 phase-1 交付：projection.v1 分发契约与 registry 侧投影数据源；核心概念补「投影分发」 |

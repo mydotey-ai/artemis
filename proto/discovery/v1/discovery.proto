@@ -22,6 +22,7 @@ message ClusterServiceInstances {
 
 message QueryResponseData {
   repeated ClusterServiceInstances services = 1;
+  repeated UpstreamStatus upstreams = 2;  // 新鲜度元信息（v0.3 phase-4）：非 SYNCED = 数据可能陈旧
 }
 
 message QueryResponse {
@@ -79,4 +80,58 @@ service DiscoverySubscriptionService {
   // （幂等自愈）；增量丢失检测归 hash 对账（phase-4）与兜底轮询（SDK）。
   // 未就绪 UNAVAILABLE（readiness 拦截器，语义同 Query）。
   rpc Subscribe(SubscribeRequest) returns (stream SubscriptionEvent);
+}
+
+// ---- 对账与新鲜度（SDK → discovery，架构 §2.2 外部端口；v0.3 phase-4，ADR-019 三件套之三）----
+
+// 上游同步状态（新鲜度标记，数据枚举）：投影数据按来源 cluster 维度。SYNCED = 实时；
+// 其余 = 投影冻结陈旧、继续服务（陈旧换可用，D-D5）。registry 自我保护态不进新鲜度
+// （registry 内部概念，架构 §4.1 定案）。
+enum UpstreamSyncState {
+  UPSTREAM_SYNC_STATE_UNSPECIFIED = 0;
+  UPSTREAM_SYNC_STATE_UNKNOWN = 1;       // 客户端无法识别的值（本地映射目标）
+  UPSTREAM_SYNC_STATE_SYNCING = 2;       // 连接与首轮 bootstrap 进行中（含曾同步后的重连轮次）
+  UPSTREAM_SYNC_STATE_SYNCED = 3;        // 已完成首轮同步，正在消费变更流
+  UPSTREAM_SYNC_STATE_DISCONNECTED = 4;  // 曾同步但当前断连，等待重连（投影冻结）
+}
+
+// 上游新鲜度：拉取响应（查询/对账）的状态元信息，消费方感知数据降级（legacy 局限 #15 修复）
+message UpstreamStatus {
+  string cluster = 1;
+  UpstreamSyncState state = 2;
+}
+
+// per-service 视图校验和（对账单元 = service 实例集快照视图，ADR-007/ADR-019）
+message ServiceChecksum {
+  artemis.common.v1.ServiceKey key = 1;
+  uint32 checksum = 2;                   // canonical 规则见 api 文档（跨语言稳定，D-F2）
+}
+
+message ClusterChecksums {
+  string cluster = 1;
+  repeated ServiceChecksum services = 2;
+}
+
+// 对账请求：选择器与 QueryRequest/SubscribeRequest 同一语义（services 空 = 全部服务）
+message ChecksumRequest {
+  repeated artemis.common.v1.ServiceKey services = 1;
+  map<string, string> labels = 2;        // checksum 计算于 labels 过滤后的视图（D-F1/D-F3）
+}
+
+message ChecksumResponseData {
+  repeated ClusterChecksums clusters = 1;
+  repeated UpstreamStatus upstreams = 2; // 新鲜度元信息（语义同查询响应，D-F4）
+}
+
+message ChecksumResponse {
+  artemis.common.v1.ResponseStatus status = 1;
+  ChecksumResponseData data = 2;
+}
+
+service DiscoveryReconciliationService {
+  // hash 对账（ADR-019 三件套之三）：per-service 视图 checksum 表拉取——SDK 定期与本地
+  // 逐 service 比对，不一致的 service 触发 Query 全量拉（增量丢失的显式检测，漂移窗口
+  // = 对账周期）。响应只含视图中有实例的条目，缺项 = 该服务在视图中无实例（D-F1）。
+  // 未就绪 UNAVAILABLE（readiness 拦截器，语义同 Query/Subscribe）。
+  rpc Checksum(ChecksumRequest) returns (ChecksumResponse);
 }

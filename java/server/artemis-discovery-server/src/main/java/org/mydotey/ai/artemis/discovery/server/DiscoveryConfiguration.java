@@ -5,14 +5,17 @@ import org.mydotey.ai.artemis.common.auth.BasicAuth;
 import org.mydotey.ai.artemis.discovery.application.DiscoveryProtoFacade;
 import org.mydotey.ai.artemis.discovery.application.DiscoveryQueryService;
 import org.mydotey.ai.artemis.discovery.application.DiscoveryReadinessGate;
+import org.mydotey.ai.artemis.discovery.application.DiscoveryReconciliationService;
 import org.mydotey.ai.artemis.discovery.application.DiscoverySubscriptionService;
 import org.mydotey.ai.artemis.discovery.domain.ProjectionRegistry;
 import org.mydotey.ai.artemis.discovery.domain.ProjectionSyncListener;
 import org.mydotey.ai.artemis.discovery.domain.SubscriptionManager;
+import org.mydotey.ai.artemis.discovery.domain.UpstreamStatuses;
 import org.mydotey.ai.artemis.discovery.infrastructure.ProjectionSynchronizer;
 import org.mydotey.ai.artemis.discovery.server.auth.AuthConfig;
 import org.mydotey.ai.artemis.discovery.server.config.DiscoveryConfigurationSources;
 import org.mydotey.ai.artemis.discovery.server.grpc.DiscoveryQueryGrpcService;
+import org.mydotey.ai.artemis.discovery.server.grpc.DiscoveryReconciliationGrpcService;
 import org.mydotey.ai.artemis.discovery.server.grpc.DiscoverySubscriptionGrpcService;
 import org.mydotey.ai.artemis.discovery.server.grpc.GrpcAuthInterceptor;
 import org.mydotey.ai.artemis.discovery.server.grpc.ReadinessInterceptor;
@@ -57,6 +60,12 @@ public class DiscoveryConfiguration {
         return new SubscriptionManager(registry);
     }
 
+    /** 上游同步状态表（D-F5）：同步引擎上报、查询/对账响应装饰新鲜度。 */
+    @Bean
+    UpstreamStatuses upstreamStatuses() {
+        return new UpstreamStatuses();
+    }
+
     @Bean
     UpstreamConfig upstreamConfig(StringProperties properties) {
         return new UpstreamConfig(properties);
@@ -74,7 +83,7 @@ public class DiscoveryConfiguration {
         return new GrpcProjectionSource(properties, config, auth);
     }
 
-    /** 上游同步引擎：首轮 SYNCED 开 readiness，断连只通知不降（D-D5）；订阅扇出内联同步线程（D-S4/D-S7）。 */
+    /** 上游同步引擎：首轮 SYNCED 开 readiness，断连只通知不降（D-D5）；订阅扇出内联同步线程（D-S4/D-S7）；状态转移上报新鲜度表（D-F5）。 */
     @Bean(initMethod = "start", destroyMethod = "close")
     ProjectionSynchronizer projectionSynchronizer(
             StringProperties properties,
@@ -82,7 +91,8 @@ public class DiscoveryConfiguration {
             ProjectionRegistry registry,
             SubscriptionManager subscriptionManager,
             UpstreamConfig upstreamConfig,
-            DiscoveryReadinessGate readinessGate) {
+            DiscoveryReadinessGate readinessGate,
+            UpstreamStatuses upstreamStatuses) {
         return new ProjectionSynchronizer(
                 properties,
                 source,
@@ -94,12 +104,13 @@ public class DiscoveryConfiguration {
                     public void onSynced() {
                         readinessGate.markReady();
                     }
-                });
+                },
+                upstreamStatuses);
     }
 
     @Bean
-    DiscoveryQueryService discoveryQueryService(ProjectionRegistry registry) {
-        return new DiscoveryQueryService(registry);
+    DiscoveryQueryService discoveryQueryService(ProjectionRegistry registry, UpstreamStatuses upstreamStatuses) {
+        return new DiscoveryQueryService(registry, upstreamStatuses);
     }
 
     @Bean
@@ -108,14 +119,27 @@ public class DiscoveryConfiguration {
     }
 
     @Bean
+    DiscoveryReconciliationService discoveryReconciliationService(
+            ProjectionRegistry registry, UpstreamStatuses upstreamStatuses) {
+        return new DiscoveryReconciliationService(registry, upstreamStatuses);
+    }
+
+    @Bean
     DiscoveryProtoFacade discoveryProtoFacade(
-            DiscoveryQueryService queryService, DiscoverySubscriptionService subscriptionService) {
-        return new DiscoveryProtoFacade(queryService, subscriptionService);
+            DiscoveryQueryService queryService,
+            DiscoverySubscriptionService subscriptionService,
+            DiscoveryReconciliationService reconciliationService) {
+        return new DiscoveryProtoFacade(queryService, subscriptionService, reconciliationService);
     }
 
     @Bean
     DiscoveryQueryGrpcService discoveryQueryGrpcService(DiscoveryProtoFacade facade) {
         return new DiscoveryQueryGrpcService(facade);
+    }
+
+    @Bean
+    DiscoveryReconciliationGrpcService discoveryReconciliationGrpcService(DiscoveryProtoFacade facade) {
+        return new DiscoveryReconciliationGrpcService(facade);
     }
 
     @Bean

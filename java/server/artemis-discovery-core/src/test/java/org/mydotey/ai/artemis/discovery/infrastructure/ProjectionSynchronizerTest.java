@@ -30,6 +30,8 @@ import org.mydotey.ai.artemis.discovery.domain.ServiceInstances;
 import org.mydotey.ai.artemis.discovery.domain.ServiceKey;
 import org.mydotey.ai.artemis.discovery.domain.SubscriptionManager;
 import org.mydotey.ai.artemis.discovery.domain.UpstreamState;
+import org.mydotey.ai.artemis.discovery.domain.UpstreamStatus;
+import org.mydotey.ai.artemis.discovery.domain.UpstreamStatuses;
 
 class ProjectionSynchronizerTest {
 
@@ -39,6 +41,7 @@ class ProjectionSynchronizerTest {
     private final ProjectionRegistry registry = new ProjectionRegistry();
     private final List<String> events = new CopyOnWriteArrayList<>(); // synced/disconnected 序列
     private final FakeSource source = new FakeSource();
+    private final UpstreamStatuses upstreamStatuses = new UpstreamStatuses();
     private ProjectionSynchronizer synchronizer;
 
     @AfterEach
@@ -65,7 +68,8 @@ class ProjectionSynchronizerTest {
                     public void onDisconnected() {
                         events.add("disconnected");
                     }
-                });
+                },
+                upstreamStatuses);
         synchronizer.start();
     }
 
@@ -102,6 +106,25 @@ class ProjectionSynchronizerTest {
                 "buffered event applied after cover", () -> instanceIds(ORDER).contains("i2"));
         assertThat(instanceIds(ORDER)).containsExactlyInAnyOrder("i1", "i2");
         assertThat(events).contains("synced");
+    }
+
+    @Test
+    void should_report_state_transitions_to_upstream_statuses() throws Exception {
+        startSynchronizer(Map.of("artemis.discovery.upstream.reconnectBackoffMinMs", "10"));
+        FakeSession session = source.latestSession();
+        session.awaitWatched();
+        session.bootstrapResult = List.of(service(instance("i1")));
+        session.establish();
+
+        TestAwait.await(
+                "synced reported",
+                () -> upstreamStatuses.snapshot().contains(new UpstreamStatus(CLUSTER, UpstreamState.SYNCED)));
+
+        // 断流转移不再 await 快照值（code-review FIX-2）：DISCONNECTED 是 backoff 窗口内的
+        // 瞬态（1-10ms 后被重连轮 SYNCING 覆盖），10ms 采样会间歇错过——以持久 events 锚定
+        // 转移发生，快照值语义由 UpstreamStatusesTest 直测、上报对称性由 setState 单点保证
+        session.closeStream();
+        TestAwait.await("disconnected transition", () -> events.contains("disconnected"));
     }
 
     @Test

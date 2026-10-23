@@ -22,6 +22,7 @@ import org.mydotey.ai.artemis.discovery.domain.ServiceInstances;
 import org.mydotey.ai.artemis.discovery.domain.ServiceKey;
 import org.mydotey.ai.artemis.discovery.domain.SubscriptionManager;
 import org.mydotey.ai.artemis.discovery.domain.UpstreamState;
+import org.mydotey.ai.artemis.discovery.domain.UpstreamStatuses;
 import org.mydotey.scf.Property;
 import org.mydotey.scf.facade.StringProperties;
 
@@ -60,6 +61,7 @@ public final class ProjectionSynchronizer implements AutoCloseable {
     private final SubscriptionManager subscriptionManager;
     private final String clusterId;
     private final ProjectionSyncListener syncListener;
+    private final UpstreamStatuses upstreamStatuses;
 
     private final int queueCapacity;
     private final long establishTimeoutMs;
@@ -77,12 +79,14 @@ public final class ProjectionSynchronizer implements AutoCloseable {
             ProjectionRegistry registry,
             SubscriptionManager subscriptionManager,
             String clusterId,
-            ProjectionSyncListener syncListener) {
+            ProjectionSyncListener syncListener,
+            UpstreamStatuses upstreamStatuses) {
         this.source = source;
         this.registry = registry;
         this.subscriptionManager = subscriptionManager;
         this.clusterId = clusterId;
         this.syncListener = syncListener;
+        this.upstreamStatuses = upstreamStatuses;
         this.queueCapacity = ScfProperties.staticInt(
                         properties,
                         KEY_QUEUE_CAPACITY,
@@ -105,6 +109,12 @@ public final class ProjectionSynchronizer implements AutoCloseable {
         return state;
     }
 
+    /** 状态转移（D-F5）：本地字段与新鲜度上报成对（查询/对账响应装饰源）。 */
+    private void setState(UpstreamState next) {
+        state = next;
+        upstreamStatuses.update(clusterId, next);
+    }
+
     public void start() {
         worker.start();
     }
@@ -113,7 +123,7 @@ public final class ProjectionSynchronizer implements AutoCloseable {
         long backoffBase = 0;
         while (running) {
             try {
-                state = UpstreamState.SYNCING;
+                setState(UpstreamState.SYNCING);
                 syncRound();
                 backoffBase = 0; // 成功一轮即重置退避
             } catch (InterruptedException e) {
@@ -122,7 +132,7 @@ public final class ProjectionSynchronizer implements AutoCloseable {
                 log.warn("projection sync round failed, cluster={}", clusterId, e);
             }
             if (everSynced) {
-                state = UpstreamState.DISCONNECTED;
+                setState(UpstreamState.DISCONNECTED);
                 syncListener.onDisconnected(); // 只对「曾同步成功」报断连（SYNCING 期失败保持 SYNCING）
             }
             backoffBase = nextBackoffBase(backoffBase);
@@ -150,7 +160,7 @@ public final class ProjectionSynchronizer implements AutoCloseable {
                 }
                 List<ServiceInstances> snapshot = session.bootstrap();
                 resyncWithDiff(snapshot); // diff 续推先于覆盖（D-S7：订阅流与上游状态解耦）
-                state = UpstreamState.SYNCED;
+                setState(UpstreamState.SYNCED);
                 if (!everSynced) {
                     everSynced = true;
                     syncListener.onSynced(); // 只在首轮触发（readiness 只升不降，D-D5）
