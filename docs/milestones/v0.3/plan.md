@@ -1,6 +1,6 @@
 # v0.3 版本规划
 
-版本: 1.5    更新时间: 2026-10-24
+版本: 1.6    更新时间: 2026-10-24
 
 ## 目标
 
@@ -48,15 +48,16 @@ phase-9 说明：发现侧 starter 自动装配（与注册侧共存，按配置
 
 | roadmap 验收要点 | 对应测试 | 结果 |
 |---|---|---|
-| 推送亚秒可见 | | |
-| 断连自愈 | | |
-| 多集群 union 查询 | | |
-| all-in-one 单包起 | | |
+| 推送亚秒可见 | `DiscoverySubscriptionIT.should_push_increment_sub_second_on_stream`（订阅流增量亚秒）、`DiscoveryProjectionIT.should_serve_registry_writes_sub_second`（注册→查询亚秒） | 通过（dev-test.sh all 全绿） |
+| 断连自愈 | `DiscoveryClientIT.should_reconnect_after_stream_break_and_converge` / `should_fail_over_to_next_address_when_current_server_down` / `should_keep_last_known_instances_when_all_servers_down`（SDK 断连/换址/全挂兜底）、`DiscoveryProjectionIT.should_rebootstrap_and_cover_stale_after_registry_restart`（上游重启覆盖） | 通过（dev-test.sh all 全绿） |
+| 多集群 union 查询 | `DiscoveryMultiClusterIT.should_union_query_across_clusters`（及 cluster 过滤、单源故障隔离、独立新鲜度用例） | 通过（dev-test.sh all 全绿） |
+| all-in-one 单包起 | `AllInOneIT` 3 例（双端口起停、registry 注册 → discovery 网络可见、幂等关停）+ 单包冒烟（`artemis-dist-exec.jar` 默认 7 端口、双 actuator 200、SIGTERM 优雅退出） | 通过（dev-test.sh all 全绿 + 冒烟记录见 phase-9 测试文档） |
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.6 | 2026-10-24 | 版本收尾：验收对照表填齐（四项要点均通过，映射既有 IT + AllInOneIT + 单包冒烟） |
 | 1.5 | 2026-10-24 | phase-8 设计 review 定案：discovery 补静态节点目录（ADR-020），消费方 SDK 走与 registry 相同的前置寻址管线；选择器改 API 参数；注册侧接口更名 `RegistryClient` |
 | 1.4 | 2026-10-24 | phase-4 设计 review 定案：checksum 视图语义（对账吸收空服务层）、新鲜度出口只在查询/对账响应（「推送快照」为 phase-3 改增量前残留措辞，移除） |
 | 1.3 | 2026-10-23 | phase-3 二轮 review 定案：上游覆盖改 diff 续推（订阅流与上游解耦，ADR-019 v1.1） |
