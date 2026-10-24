@@ -18,6 +18,8 @@ import org.mydotey.ai.artemis.discovery.domain.EjectionRuleSource;
 import org.mydotey.ai.artemis.discovery.domain.EjectionRules;
 import org.mydotey.ai.artemis.discovery.domain.Instance;
 import org.mydotey.ai.artemis.discovery.domain.InstanceChange;
+import org.mydotey.ai.artemis.discovery.domain.ManagementState;
+import org.mydotey.ai.artemis.discovery.domain.ManagementStatus;
 import org.mydotey.ai.artemis.discovery.domain.ProjectionRegistry;
 import org.mydotey.ai.artemis.discovery.domain.ServiceChange;
 import org.mydotey.ai.artemis.discovery.domain.ServiceInstances;
@@ -55,6 +57,7 @@ public final class EjectionRuleSynchronizer implements AutoCloseable {
     private final EjectionFilter filter;
     private final ProjectionRegistry registry;
     private final SubscriptionManager subscriptionManager;
+    private final ManagementStatus managementStatus;
 
     private final int queueCapacity;
     private final long backoffMinMs;
@@ -63,17 +66,20 @@ public final class EjectionRuleSynchronizer implements AutoCloseable {
     private final Thread worker;
     private volatile boolean running = true;
     private volatile boolean enabled = true;
+    private boolean everSynced; // worker 线程独占（断连判定，同 ProjectionSynchronizer）
 
     public EjectionRuleSynchronizer(
             StringProperties properties,
             EjectionRuleSource source,
             EjectionFilter filter,
             ProjectionRegistry registry,
-            SubscriptionManager subscriptionManager) {
+            SubscriptionManager subscriptionManager,
+            ManagementStatus managementStatus) {
         this.source = source;
         this.filter = filter;
         this.registry = registry;
         this.subscriptionManager = subscriptionManager;
+        this.managementStatus = managementStatus;
         this.queueCapacity = ScfProperties.staticInt(
                         properties,
                         KEY_QUEUE_CAPACITY,
@@ -90,15 +96,17 @@ public final class EjectionRuleSynchronizer implements AutoCloseable {
                 Thread.ofPlatform().name("artemis-discovery-ejection-sync").unstarted(this::run);
     }
 
-    /** 未配置 management（0..1，D-E4）时装配层调用：start 不启动线程、零开销。 */
+    /** 未配置 management（0..1，D-E4）时装配层调用：start 不启动线程、零开销，状态 DISABLED。 */
     public void disable() {
         enabled = false;
+        managementStatus.update(ManagementState.DISABLED);
     }
 
     public void start() {
         if (!enabled) {
             return;
         }
+        managementStatus.update(ManagementState.SYNCING);
         worker.start();
     }
 
@@ -106,12 +114,16 @@ public final class EjectionRuleSynchronizer implements AutoCloseable {
         long backoffBase = 0;
         while (running) {
             try {
+                managementStatus.update(ManagementState.SYNCING);
                 syncRound();
                 backoffBase = 0; // 成功一轮即重置退避
             } catch (InterruptedException e) {
                 return; // close 中断
             } catch (Exception e) {
                 log.warn("ejection rule sync round failed", e);
+            }
+            if (everSynced) {
+                managementStatus.update(ManagementState.DISCONNECTED); // 规则冻结、最后已知规则继续（D-E3）
             }
             backoffBase = nextBackoffBase(backoffBase);
             try {
@@ -145,6 +157,8 @@ public final class EjectionRuleSynchronizer implements AutoCloseable {
             EjectionRules oldRules = filter.rules();
             EjectionRules newRules = EjectionRules.of(snapshot.rules());
             applyAndFanout(oldRules, newRules);
+            everSynced = true;
+            managementStatus.update(ManagementState.SYNCED);
             log.info(
                     "ejection rules snapshot applied, rules={}",
                     snapshot.rules().size());
@@ -240,6 +254,9 @@ public final class EjectionRuleSynchronizer implements AutoCloseable {
     public void close() {
         running = false;
         worker.interrupt();
+        if (enabled) {
+            managementStatus.update(ManagementState.DISCONNECTED); // 停机后不再连接规则源
+        }
         try {
             worker.join(5_000);
         } catch (InterruptedException e) {

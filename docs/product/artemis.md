@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.21    更新时间: 2026-10-24
+版本: 1.22    更新时间: 2026-10-24
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -220,10 +220,19 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **0..1 可选**：discovery 未配置 `artemis.discovery.management.endpoints` 时不订阅不过滤（空链直通零开销，不建连接不启线程）。
 - **工程形态**：management-core `EjectionStore.findAll` + `EjectionRuleDispatcher`（单锁全序分发）；discovery-core 规则同步引擎 + 过滤链；单测 15 例（规则模型/链/翻译矩阵/出口过滤/断流保持/分发全序/配置）+ `EjectionRuleStreamIT` 4 例（规则流契约）+ `DiscoveryEjectionFilterIT` 3 例（registry + discovery + management 三服务端到端：摘除过滤/恢复收敛/management 停机沿用最后规则/重启空快照收敛/未配置不过滤）；API 文档新建 [ejection-rule-stream-api.md](../api/ejection-rule-stream-api.md)、discovery 三 API 与 admin API 同步。
 
+**v0.3 phase-7（discovery 发现管理 API）已交付**：
+
+- **只读发现管理面**（治理期 2，架构 §5.1）：discovery 外部 HTTP 端口（默认 8090）新增 `/admin/v1` JSON API——`subscriptions`（订阅关系）、`services`（服务视图列表/详情）、`upstreams`（上游新鲜度 + 规则源状态）。复用 discovery 外部账户（`artemis.discovery.auth.*`，默认关闭）；**不做 readiness 门控**，启动期即可排障，未同步由状态字段自解释。
+- **订阅关系（调用方视角，原产品局限 #18 修复）**：订阅登记时分配进程内单调 `id`、记录选择器、gRPC 远端地址（单账户下唯一可靠调用方标识）与登记时刻；只保留活跃订阅，流取消/断流即消失（无历史/审计，审计归 v0.4 期 3）。
+- **服务视图**：列表按 `(cluster, namespace, service)` 聚合并支持 namespace/cluster 过滤；详情逐 cluster 返回可见实例。口径 = **摘除过滤后的有效发现视图**（与查询/推送/对账一致）；未过滤事实与摘除记录仍归 management 有效视图职责（ADR-016）。
+- **上游状态/规则源状态**：`/admin/v1/upstreams` 输出各 registry 来源 `SYNCING/SYNCED/DISCONNECTED`，以及 management 规则源 `DISABLED/SYNCING/SYNCED/DISCONNECTED`（phase-6 D-E9 出口；断连/停机时规则冻结、最后已知规则继续生效）。
+- **工程形态**：无 proto/wire 变更、无新增配置键；discovery-core 12 单测（订阅快照/视图聚合与过滤/规则源状态转移）+ `DiscoveryAdminIT` 6 例（认证、订阅出现与取消移除、视图/详情、上游与规则源状态、客户端错误）。契约详见 [discovery-admin-api.md](../api/discovery-admin-api.md)。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.22 | 2026-10-24 | v0.3 phase-7 交付：discovery 只读发现管理面（订阅关系/服务视图/上游与规则源状态）；新建 api/discovery-admin-api.md |
 | 1.21 | 2026-10-24 | v0.3 phase-6 交付：management 摘除规则流 + discovery 过滤器链（三出口一致过滤、跨 cluster 规则、fail-open/最后已知规则、0..1 可选） |
 | 1.20 | 2026-10-24 | v0.3 phase-5 交付：多集群聚合（union + cluster 选择器过滤、跨源隔离、JSON map 上游配置、readiness 全量门） |
 | 1.19 | 2026-10-24 | v0.3 phase-4 交付：hash 对账（canonical 规则单一来源 + golden vector）、新鲜度标记；新建 api/discovery-reconciliation-api.md |

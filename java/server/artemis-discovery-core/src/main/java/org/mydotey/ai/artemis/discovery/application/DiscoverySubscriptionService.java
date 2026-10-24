@@ -18,7 +18,11 @@ public final class DiscoverySubscriptionService {
     }
 
     public Subscription subscribe(DiscoverySelector selector, PushTarget target) {
+        return subscribe(selector, target, null);
+    }
+
+    public Subscription subscribe(DiscoverySelector selector, PushTarget target, String subscriber) {
         selector.requireValid();
-        return manager.subscribe(selector, target);
+        return manager.subscribe(selector, target, subscriber);
     }
 }

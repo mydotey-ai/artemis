@@ -1,11 +1,15 @@
 package org.mydotey.ai.artemis.discovery.domain;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
 /**
@@ -25,8 +29,12 @@ import java.util.function.Function;
  */
 public final class SubscriptionManager {
 
+    static final String UNKNOWN_SUBSCRIBER = "unknown";
+
     private final ProjectionRegistry registry;
     private final DiscoveryFilterChain chain;
+    private final Clock clock;
+    private final AtomicLong nextId = new AtomicLong();
     private final ConcurrentHashMap<SubscriptionImpl, DiscoverySelector> subscriptions = new ConcurrentHashMap<>();
     private final Object fanoutLock = new Object();
 
@@ -35,13 +43,25 @@ public final class SubscriptionManager {
     }
 
     public SubscriptionManager(ProjectionRegistry registry, DiscoveryFilterChain chain) {
+        this(registry, chain, Clock.systemUTC());
+    }
+
+    public SubscriptionManager(ProjectionRegistry registry, DiscoveryFilterChain chain, Clock clock) {
         this.registry = registry;
         this.chain = chain;
+        this.clock = clock;
     }
 
     /** 订阅登记 + 确认 + 基线（表锁内，D-S6）：基线 = 选择器命中的当前实例集全 NEW 批。 */
     public Subscription subscribe(DiscoverySelector selector, PushTarget target) {
-        SubscriptionImpl subscription = new SubscriptionImpl(selector, target);
+        return subscribe(selector, target, UNKNOWN_SUBSCRIBER);
+    }
+
+    /** 登记并记录调用方标识（管理面订阅关系，D-A2）：subscriber 空白按 unknown 归一。 */
+    public Subscription subscribe(DiscoverySelector selector, PushTarget target, String subscriber) {
+        String caller = subscriber == null || subscriber.isBlank() ? UNKNOWN_SUBSCRIBER : subscriber;
+        SubscriptionImpl subscription =
+                new SubscriptionImpl(nextId.incrementAndGet(), selector, target, caller, Instant.now(clock));
         synchronized (fanoutLock) {
             subscriptions.put(subscription, selector);
             try {
@@ -102,6 +122,16 @@ public final class SubscriptionManager {
         return subscriptions.size();
     }
 
+    /** 活跃订阅快照（管理面，D-A3）：弱一致迭代、按 id 升序；关闭即消失，无历史。 */
+    public List<SubscriptionInfo> snapshot() {
+        List<SubscriptionInfo> snapshot = new ArrayList<>(subscriptions.size());
+        for (SubscriptionImpl subscription : subscriptions.keySet()) {
+            snapshot.add(subscription.info());
+        }
+        snapshot.sort(Comparator.comparingLong(SubscriptionInfo::id));
+        return List.copyOf(snapshot);
+    }
+
     private static Map<String, Instance> index(ServiceInstances service) {
         if (service == null) {
             return Map.of();
@@ -115,13 +145,24 @@ public final class SubscriptionManager {
 
     private final class SubscriptionImpl implements Subscription {
 
+        private final long id;
         private final DiscoverySelector selector;
         private final PushTarget target;
+        private final String subscriber;
+        private final Instant establishedAt;
         private volatile boolean closed;
 
-        SubscriptionImpl(DiscoverySelector selector, PushTarget target) {
+        SubscriptionImpl(
+                long id, DiscoverySelector selector, PushTarget target, String subscriber, Instant establishedAt) {
+            this.id = id;
             this.selector = selector;
             this.target = target;
+            this.subscriber = subscriber;
+            this.establishedAt = establishedAt;
+        }
+
+        SubscriptionInfo info() {
+            return new SubscriptionInfo(id, selector, subscriber, establishedAt);
         }
 
         @Override

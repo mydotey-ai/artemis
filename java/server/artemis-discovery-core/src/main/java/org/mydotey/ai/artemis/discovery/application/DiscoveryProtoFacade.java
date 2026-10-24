@@ -48,6 +48,12 @@ public final class DiscoveryProtoFacade {
     /** 订阅：登记 + 基线推送（经 target）；选择器校验失败向上抛，由出口转 status。 */
     public Subscription subscribe(
             org.mydotey.ai.artemis.proto.discovery.v1.SubscribeRequest request, PushTarget target) {
-        return subscriptionService.subscribe(mapper.toSelector(request), target);
+        return subscribe(request, target, null);
+    }
+
+    /** 订阅（管理面标识）：subscriber 由接入层传远端地址，登记入订阅关系快照（D-A2）。 */
+    public Subscription subscribe(
+            org.mydotey.ai.artemis.proto.discovery.v1.SubscribeRequest request, PushTarget target, String subscriber) {
+        return subscriptionService.subscribe(mapper.toSelector(request), target, subscriber);
     }
 }

@@ -19,6 +19,8 @@ import org.mydotey.ai.artemis.discovery.domain.EjectionRuleSource;
 import org.mydotey.ai.artemis.discovery.domain.EjectionRuleWatch;
 import org.mydotey.ai.artemis.discovery.domain.Instance;
 import org.mydotey.ai.artemis.discovery.domain.InstanceStatus;
+import org.mydotey.ai.artemis.discovery.domain.ManagementState;
+import org.mydotey.ai.artemis.discovery.domain.ManagementStatus;
 import org.mydotey.ai.artemis.discovery.domain.ProjectionRegistry;
 import org.mydotey.ai.artemis.discovery.domain.PushTarget;
 import org.mydotey.ai.artemis.discovery.domain.ServiceChange;
@@ -35,19 +37,58 @@ class EjectionRuleSynchronizerTest {
     private final EjectionFilter filter = new EjectionFilter();
     private final SubscriptionManager manager = new SubscriptionManager(registry, DiscoveryFilterChain.of(filter));
     private final FakeSource source = new FakeSource();
+    private final ManagementStatus status = new ManagementStatus();
 
     private EjectionRuleSynchronizer startSynchronizer() {
+        return startSynchronizer(50, 100);
+    }
+
+    private EjectionRuleSynchronizer startSynchronizer(long backoffMinMs, long backoffMaxMs) {
         EjectionRuleSynchronizer synchronizer = new EjectionRuleSynchronizer(
                 new TestProperties(Map.of(
-                                "artemis.discovery.management.reconnectBackoffMinMs", "50",
-                                "artemis.discovery.management.reconnectBackoffMaxMs", "100"))
+                                "artemis.discovery.management.reconnectBackoffMinMs", String.valueOf(backoffMinMs),
+                                "artemis.discovery.management.reconnectBackoffMaxMs", String.valueOf(backoffMaxMs)))
                         .properties(),
                 source,
                 filter,
                 registry,
-                manager);
+                manager,
+                status);
         synchronizer.start();
         return synchronizer;
+    }
+
+    @Test
+    void should_report_syncing_then_synced_when_snapshot_applied() throws Exception {
+        try (EjectionRuleSynchronizer ignored = startSynchronizer(1_000, 2_000)) {
+            source.awaitWatch();
+            assertThat(status.state()).isEqualTo(ManagementState.SYNCING);
+
+            source.pushSnapshot(List.of());
+            await(() -> status.state() == ManagementState.SYNCED);
+        }
+    }
+
+    @Test
+    void should_report_disconnected_when_stream_lost_after_sync() throws Exception {
+        try (EjectionRuleSynchronizer ignored = startSynchronizer(2_000, 4_000)) {
+            source.awaitWatch();
+            source.pushSnapshot(List.of());
+            await(() -> status.state() == ManagementState.SYNCED);
+
+            source.closeCurrent();
+            await(() -> status.state() == ManagementState.DISCONNECTED);
+        }
+    }
+
+    @Test
+    void should_report_disabled_when_management_not_configured() {
+        EjectionRuleSynchronizer synchronizer = new EjectionRuleSynchronizer(
+                new TestProperties(Map.of()).properties(), source, filter, registry, manager, status);
+        synchronizer.disable();
+
+        assertThat(status.state()).isEqualTo(ManagementState.DISABLED);
+        synchronizer.close();
     }
 
     @Test

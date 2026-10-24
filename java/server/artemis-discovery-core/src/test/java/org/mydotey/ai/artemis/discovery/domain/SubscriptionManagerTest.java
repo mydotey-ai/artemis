@@ -2,6 +2,9 @@ package org.mydotey.ai.artemis.discovery.domain;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -146,6 +149,40 @@ class SubscriptionManagerTest {
 
         assertThat(manager.size()).isOne(); // closed 订阅已注销
         assertThat(target.events).containsExactly("default/order-service:[i1=NEW]"); // 未 close 照常收
+    }
+
+    // ---- 管理面订阅关系（D-A2/D-A3）----
+
+    @Test
+    void should_snapshot_active_subscription_with_caller_identity() {
+        Clock clock = Clock.fixed(Instant.parse("2026-10-24T10:00:00Z"), ZoneOffset.UTC);
+        SubscriptionManager adminManager = new SubscriptionManager(registry, DiscoveryFilterChain.empty(), clock);
+
+        Subscription subscription =
+                adminManager.subscribe(labels("group", "a"), new RecordingTarget(), "/127.0.0.1:9000");
+
+        SubscriptionInfo info = adminManager.snapshot().get(0);
+        assertThat(info.id()).isEqualTo(1);
+        assertThat(info.subscriber()).isEqualTo("/127.0.0.1:9000");
+        assertThat(info.establishedAt()).isEqualTo(Instant.parse("2026-10-24T10:00:00Z"));
+        assertThat(info.selector().labels()).containsEntry("group", "a");
+
+        subscription.close();
+        assertThat(adminManager.snapshot()).isEmpty();
+    }
+
+    @Test
+    void should_order_subscriptions_by_id_and_default_unknown_subscriber_when_snapshot() {
+        Subscription first = manager.subscribe(allServices(), new RecordingTarget());
+        Subscription second = manager.subscribe(labels("group", "a"), new RecordingTarget());
+
+        assertThat(manager.snapshot()).extracting(SubscriptionInfo::id).containsExactly(1L, 2L);
+        assertThat(manager.snapshot())
+                .extracting(SubscriptionInfo::subscriber)
+                .containsOnly(SubscriptionManager.UNKNOWN_SUBSCRIBER);
+
+        first.close();
+        second.close();
     }
 
     // ---- 多集群（phase-5）----

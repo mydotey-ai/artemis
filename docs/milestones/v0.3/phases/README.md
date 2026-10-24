@@ -10,3 +10,4 @@ phase 设计文档与测试文档在各自 phase 开工（① worktree 开工）
 | phase-4-fallback-freshness | [phase-4-fallback-freshness.md](phase-4-fallback-freshness.md) | [phase-4-fallback-freshness-test.md](phase-4-fallback-freshness-test.md) |
 | phase-5-multi-cluster | [phase-5-multi-cluster.md](phase-5-multi-cluster.md) | [phase-5-multi-cluster-test.md](phase-5-multi-cluster-test.md) |
 | phase-6-ejection-filter | [phase-6-ejection-filter.md](phase-6-ejection-filter.md) | [phase-6-ejection-filter-test.md](phase-6-ejection-filter-test.md) |
+| phase-7-discovery-admin-api | [phase-7-discovery-admin-api.md](phase-7-discovery-admin-api.md) | [phase-7-discovery-admin-api-test.md](phase-7-discovery-admin-api-test.md) |

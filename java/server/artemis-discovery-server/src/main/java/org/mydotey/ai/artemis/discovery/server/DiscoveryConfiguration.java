@@ -2,6 +2,7 @@ package org.mydotey.ai.artemis.discovery.server;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import org.mydotey.ai.artemis.common.auth.BasicAuth;
+import org.mydotey.ai.artemis.discovery.application.DiscoveryAdminService;
 import org.mydotey.ai.artemis.discovery.application.DiscoveryProtoFacade;
 import org.mydotey.ai.artemis.discovery.application.DiscoveryQueryService;
 import org.mydotey.ai.artemis.discovery.application.DiscoveryReadinessGate;
@@ -9,6 +10,7 @@ import org.mydotey.ai.artemis.discovery.application.DiscoveryReconciliationServi
 import org.mydotey.ai.artemis.discovery.application.DiscoverySubscriptionService;
 import org.mydotey.ai.artemis.discovery.domain.DiscoveryFilterChain;
 import org.mydotey.ai.artemis.discovery.domain.EjectionFilter;
+import org.mydotey.ai.artemis.discovery.domain.ManagementStatus;
 import org.mydotey.ai.artemis.discovery.domain.ProjectionRegistry;
 import org.mydotey.ai.artemis.discovery.domain.SubscriptionManager;
 import org.mydotey.ai.artemis.discovery.domain.UpstreamStatuses;
@@ -20,7 +22,9 @@ import org.mydotey.ai.artemis.discovery.server.grpc.DiscoveryReconciliationGrpcS
 import org.mydotey.ai.artemis.discovery.server.grpc.DiscoverySubscriptionGrpcService;
 import org.mydotey.ai.artemis.discovery.server.grpc.GrpcAuthInterceptor;
 import org.mydotey.ai.artemis.discovery.server.grpc.ReadinessInterceptor;
+import org.mydotey.ai.artemis.discovery.server.grpc.RemoteAddressInterceptor;
 import org.mydotey.ai.artemis.discovery.server.health.DiscoveryReadinessHealthIndicator;
+import org.mydotey.ai.artemis.discovery.server.http.HttpBasicAuthFilter;
 import org.mydotey.ai.artemis.discovery.server.upstream.GrpcEjectionRuleSource;
 import org.mydotey.ai.artemis.discovery.server.upstream.ManagementAuthConfig;
 import org.mydotey.ai.artemis.discovery.server.upstream.ManagementConfig;
@@ -30,6 +34,7 @@ import org.mydotey.ai.artemis.discovery.server.upstream.UpstreamSynchronizers;
 import org.mydotey.scf.ConfigurationManager;
 import org.mydotey.scf.facade.StringProperties;
 import org.springframework.boot.health.contributor.HealthIndicator;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
@@ -130,6 +135,12 @@ public class DiscoveryConfiguration {
         return new GrpcEjectionRuleSource(properties, managementConfig, managementAuthConfig);
     }
 
+    /** 规则源状态持有者（phase-7 D-A5）：同步引擎上报、管理面查询。 */
+    @Bean
+    ManagementStatus managementStatus() {
+        return new ManagementStatus();
+    }
+
     /** 规则同步引擎（phase-6）：未配置 management 时不启动线程（0..1，D-E4/D-E3）。 */
     @Bean(initMethod = "start", destroyMethod = "close")
     EjectionRuleSynchronizer ejectionRuleSynchronizer(
@@ -138,9 +149,10 @@ public class DiscoveryConfiguration {
             GrpcEjectionRuleSource ejectionRuleSource,
             EjectionFilter ejectionFilter,
             ProjectionRegistry registry,
-            SubscriptionManager subscriptionManager) {
+            SubscriptionManager subscriptionManager,
+            ManagementStatus managementStatus) {
         EjectionRuleSynchronizer synchronizer = new EjectionRuleSynchronizer(
-                properties, ejectionRuleSource, ejectionFilter, registry, subscriptionManager);
+                properties, ejectionRuleSource, ejectionFilter, registry, subscriptionManager, managementStatus);
         if (!managementConfig.enabled()) {
             synchronizer.disable(); // 0..1：不建连接不启线程
         }
@@ -186,6 +198,33 @@ public class DiscoveryConfiguration {
     DiscoverySubscriptionGrpcService discoverySubscriptionGrpcService(
             DiscoveryProtoFacade facade, MeterRegistry meterRegistry) {
         return new DiscoverySubscriptionGrpcService(facade, meterRegistry);
+    }
+
+    /** 发现管理面只读用例（phase-7）：服务视图经同一过滤链（有效视图，D-A6）。 */
+    @Bean
+    DiscoveryAdminService discoveryAdminService(
+            SubscriptionManager subscriptionManager,
+            ProjectionRegistry registry,
+            DiscoveryFilterChain chain,
+            UpstreamStatuses upstreamStatuses,
+            ManagementStatus managementStatus) {
+        return new DiscoveryAdminService(subscriptionManager, registry, chain, upstreamStatuses, managementStatus);
+    }
+
+    /** 管理面 HTTP 认证：仅 /admin/*（D-A7），账户与外部 gRPC 共用。 */
+    @Bean
+    FilterRegistrationBean<HttpBasicAuthFilter> discoveryAdminAuthFilter(AuthConfig auth) {
+        FilterRegistrationBean<HttpBasicAuthFilter> registration =
+                new FilterRegistrationBean<>(new HttpBasicAuthFilter(auth));
+        registration.addUrlPatterns("/admin/*");
+        registration.setName("discoveryAdminAuthFilter");
+        return registration;
+    }
+
+    /** 调用方地址捕获（D-A2）：订阅关系登记在管理面可见。 */
+    @Bean
+    RemoteAddressInterceptor remoteAddressInterceptor() {
+        return new RemoteAddressInterceptor();
     }
 
     @Bean

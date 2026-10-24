@@ -54,7 +54,7 @@ public final class DiscoverySubscriptionGrpcService
         StreamPushTarget target = new StreamPushTarget(observer);
         Subscription subscription;
         try {
-            subscription = facade.subscribe(request, target);
+            subscription = facade.subscribe(request, target, RemoteAddressInterceptor.remoteAddress());
         } catch (IllegalArgumentException e) {
             target.release(); // 构造时已计入 active，校验失败路径释放
             observer.onError(
