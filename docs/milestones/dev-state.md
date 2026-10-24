@@ -9,6 +9,7 @@
 | v0.1 | done | |
 | v0.2 | done | |
 | v0.3 | done | |
+| v0.4 | planned | 当前版本 |
 
 状态枚举：planned | in-progress | acceptance | done（planned = 启动产物已写、基线未提交）。
 
@@ -17,10 +18,10 @@
 | 项 | 值 |
 |---|---|
 | phase | — |
-| 步骤 | — |
+| 步骤 | 版本启动（plan 基线待提交） |
 | 分支 / worktree | — |
 
-> v0.1 已于 2026-10-19 收尾；v0.2 已于 2026-10-23 收尾；v0.3 已于 2026-10-24 收尾（验收对照见各 `plan.md`）。下次 /dev-java 自动进入下一版本启动。
+> v0.1/v0.2/v0.3 已收尾（验收对照见各 `plan.md`）。v0.4 于 2026-10-24 启动（治理面 I）。
 
 ## 当前 phase 步骤进度（版本 done 后清空本节）
 
@@ -28,4 +29,12 @@
 
 ## phase 总览（当前版本，版本 done 后清空；只记状态，主题/工作量以 plan 为准）
 
-（无）
+| phase | 状态 |
+|---|---|
+| phase-1-db-foundation | planned |
+| phase-2-account-takeover | planned |
+| phase-3-ejection-persistence | planned |
+| phase-4-logical-instance | planned |
+| phase-5-rule-ack-loop | planned |
+| phase-6-console-readonly | planned |
+| phase-7-all-in-one-full | planned |
