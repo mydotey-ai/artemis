@@ -145,10 +145,42 @@ class SubscriptionManagerTest {
         assertThat(target.events).containsExactly("default/order-service:[i1=NEW]"); // 未 close 照常收
     }
 
+    // ---- 多集群（phase-5）----
+
+    @Test
+    void should_skip_delivery_for_non_matching_clusters() {
+        RecordingTarget target = new RecordingTarget();
+        manager.subscribe(new DiscoverySelector(Set.of(), Map.of(), Set.of(CLUSTER)), target);
+        target.events.clear();
+
+        // 非命中 cluster 的变更不投递
+        fanout("cluster-b", batch(change(instance("i1", "a"), ChangeType.NEW)));
+        assertThat(target.events).isEmpty();
+
+        // 命中 cluster 照常投递
+        fanout(batch(change(instance("i1", "a"), ChangeType.NEW)));
+        assertThat(target.events).containsExactly("default/order-service:[i1=NEW]");
+    }
+
+    @Test
+    void should_baseline_only_matching_clusters() {
+        registry.replaceAll(CLUSTER, List.of(service(ORDER, instance("i1", "a"))));
+        registry.replaceAll("cluster-b", List.of(service(PAY, instance("p1", "b"))));
+
+        RecordingTarget target = new RecordingTarget();
+        manager.subscribe(new DiscoverySelector(Set.of(), Map.of(), Set.of(CLUSTER)), target);
+
+        assertThat(target.events).containsExactly("established", "default/order-service:[i1=NEW]");
+    }
+
     // ---- 设施 ----
 
     private void fanout(ServiceChange change) {
-        manager.onChanges(CLUSTER, List.of(change), key -> registry.service(CLUSTER, key));
+        fanout(CLUSTER, change);
+    }
+
+    private void fanout(String cluster, ServiceChange change) {
+        manager.onChanges(cluster, List.of(change), key -> registry.service(cluster, key));
     }
 
     private static InstanceChange change(Instance instance, ChangeType type) {

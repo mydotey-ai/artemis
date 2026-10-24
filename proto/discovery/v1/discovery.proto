@@ -7,11 +7,13 @@ option java_multiple_files = true;
 // SDK → discovery 查询契约（架构 §2.2 外部端口）。v0.3 phase-2 交付 unary 查询；
 // 订阅推送 rpc 随 phase-3 以新增 rpc 演进（wire 兼容，field number/rpc 名只增）。
 // 选择器模型与订阅共用（v0.3 plan）：services 精确集合（空 = 全部服务）+
-// labels 实例 metadata 全键值匹配（实例级过滤——分组以实例 metadata 表达，ADR-013）。
+// labels 实例 metadata 全键值匹配（实例级过滤——分组以实例 metadata 表达，ADR-013）+
+// clusters 来源 cluster 过滤（空 = 全部/union，phase-5 多集群聚合）。
 
 message QueryRequest {
   repeated artemis.common.v1.ServiceKey services = 1;  // 空 = 全部服务
   map<string, string> labels = 2;                      // 实例须含全部键值才入选
+  repeated string clusters = 3;                        // 来源 cluster 过滤（v0.3 phase-5）：空 = 全部（union）；未知 cluster 名静默无命中
 }
 
 // 投影视图单元：cluster 是来源标识，由 discovery 在投影边界注入（ADR-014，registry 契约不携带）
@@ -62,6 +64,7 @@ message ServiceChange {
 message SubscribeRequest {
   repeated artemis.common.v1.ServiceKey services = 1;  // 空 = 全部服务（语义同 QueryRequest）
   map<string, string> labels = 2;                      // 实例级过滤（语义同 QueryRequest）
+  repeated string clusters = 3;                        // 来源 cluster 过滤（语义同 QueryRequest，v0.3 phase-5）
 }
 
 // 流事件：单 service 视图变更 + 来源 cluster（cluster 归因是多集群聚合的确定需求，
@@ -116,6 +119,7 @@ message ClusterChecksums {
 message ChecksumRequest {
   repeated artemis.common.v1.ServiceKey services = 1;
   map<string, string> labels = 2;        // checksum 计算于 labels 过滤后的视图（D-F1/D-F3）
+  repeated string clusters = 3;          // 来源 cluster 过滤（语义同 QueryRequest，v0.3 phase-5）
 }
 
 message ChecksumResponseData {

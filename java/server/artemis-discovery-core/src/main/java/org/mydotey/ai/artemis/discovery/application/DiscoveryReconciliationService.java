@@ -22,10 +22,10 @@ public final class DiscoveryReconciliationService {
     }
 
     public ChecksumResponse checksum(DiscoverySelector selector) {
-        selector.requireExplicitServicesValid();
+        selector.requireValid();
         // 先快照后读表（code-review FIX-1，同 DiscoveryQueryService）：防「陈旧表 + SYNCED」
         // 使 SDK 对账静默跳过全量拉
-        List<UpstreamStatus> upstreams = upstreamStatuses.snapshot();
+        List<UpstreamStatus> upstreams = upstreamStatuses.snapshot(selector);
         return new ChecksumResponse(registry.checksums(selector), upstreams);
     }
 }

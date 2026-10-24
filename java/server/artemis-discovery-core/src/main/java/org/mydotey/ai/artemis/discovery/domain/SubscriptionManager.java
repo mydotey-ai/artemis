@@ -120,6 +120,9 @@ public final class SubscriptionManager {
 
         private void deliver(
                 String cluster, List<ServiceChange> batch, Function<ServiceKey, Map<String, Instance>> oldIndex) {
+            if (!selector.matchesCluster(cluster)) {
+                return; // 订阅 cluster 过滤（phase-5）：非命中来源不投递（基线经 query 已过滤）
+            }
             Set<ServiceKey> services = selector.services();
             for (ServiceChange service : batch) {
                 if (!services.isEmpty() && !services.contains(service.key())) {

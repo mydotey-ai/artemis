@@ -29,6 +29,40 @@ class DiscoveryProtoMapperTest {
     private final DiscoveryProtoMapper mapper = DiscoveryProtoMapper.INSTANCE;
 
     @Test
+    void should_map_clusters_between_proto_and_domain() {
+        // QueryRequest → domain：clusters 契约原样（可能重复，归一在应用服务）
+        org.mydotey.ai.artemis.discovery.domain.QueryRequest domain = mapper.toDomain(QueryRequest.newBuilder()
+                .addClusters("cluster-a")
+                .addClusters("cluster-a")
+                .build());
+        assertThat(domain.clusters()).containsExactly("cluster-a", "cluster-a");
+
+        // SubscribeRequest → selector：Set 去重 + matchesCluster 语义
+        DiscoverySelector selector =
+                mapper.toSelector(org.mydotey.ai.artemis.proto.discovery.v1.SubscribeRequest.newBuilder()
+                        .addClusters("cluster-a")
+                        .addClusters("cluster-a")
+                        .build());
+        assertThat(selector.clusters()).containsExactly("cluster-a");
+        assertThat(selector.matchesCluster("cluster-a")).isTrue();
+        assertThat(selector.matchesCluster("cluster-b")).isFalse();
+
+        // 空集恒真（union 默认）
+        DiscoverySelector all =
+                mapper.toSelector(org.mydotey.ai.artemis.proto.discovery.v1.SubscribeRequest.newBuilder()
+                        .build());
+        assertThat(all.matchesCluster("any")).isTrue();
+
+        // 空白 cluster 名：requireValid 抛 IllegalArgumentException（门面转 INVALID_ARGUMENT）
+        DiscoverySelector blank =
+                mapper.toSelector(org.mydotey.ai.artemis.proto.discovery.v1.SubscribeRequest.newBuilder()
+                        .addClusters(" ")
+                        .build());
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> blank.requireValid())
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void should_map_query_request_and_response() {
         QueryRequest request = QueryRequest.newBuilder()
                 .addServices(org.mydotey.ai.artemis.proto.common.v1.ServiceKey.newBuilder()

@@ -8,10 +8,8 @@ import org.mydotey.ai.artemis.discovery.application.DiscoveryReadinessGate;
 import org.mydotey.ai.artemis.discovery.application.DiscoveryReconciliationService;
 import org.mydotey.ai.artemis.discovery.application.DiscoverySubscriptionService;
 import org.mydotey.ai.artemis.discovery.domain.ProjectionRegistry;
-import org.mydotey.ai.artemis.discovery.domain.ProjectionSyncListener;
 import org.mydotey.ai.artemis.discovery.domain.SubscriptionManager;
 import org.mydotey.ai.artemis.discovery.domain.UpstreamStatuses;
-import org.mydotey.ai.artemis.discovery.infrastructure.ProjectionSynchronizer;
 import org.mydotey.ai.artemis.discovery.server.auth.AuthConfig;
 import org.mydotey.ai.artemis.discovery.server.config.DiscoveryConfigurationSources;
 import org.mydotey.ai.artemis.discovery.server.grpc.DiscoveryQueryGrpcService;
@@ -20,9 +18,9 @@ import org.mydotey.ai.artemis.discovery.server.grpc.DiscoverySubscriptionGrpcSer
 import org.mydotey.ai.artemis.discovery.server.grpc.GrpcAuthInterceptor;
 import org.mydotey.ai.artemis.discovery.server.grpc.ReadinessInterceptor;
 import org.mydotey.ai.artemis.discovery.server.health.DiscoveryReadinessHealthIndicator;
-import org.mydotey.ai.artemis.discovery.server.upstream.GrpcProjectionSource;
 import org.mydotey.ai.artemis.discovery.server.upstream.UpstreamAuthConfig;
 import org.mydotey.ai.artemis.discovery.server.upstream.UpstreamConfig;
+import org.mydotey.ai.artemis.discovery.server.upstream.UpstreamSynchronizers;
 import org.mydotey.scf.ConfigurationManager;
 import org.mydotey.scf.facade.StringProperties;
 import org.springframework.boot.health.contributor.HealthIndicator;
@@ -45,9 +43,10 @@ public class DiscoveryConfiguration {
         return new StringProperties(configurationManager);
     }
 
+    /** 就绪门为全量门（phase-5）：全部配置上游首轮 SYNCED 才 ready，断连不降（D-D5）。 */
     @Bean
-    DiscoveryReadinessGate discoveryReadinessGate() {
-        return new DiscoveryReadinessGate();
+    DiscoveryReadinessGate discoveryReadinessGate(UpstreamConfig upstreamConfig) {
+        return new DiscoveryReadinessGate(upstreamConfig.upstreams().size());
     }
 
     @Bean
@@ -76,35 +75,24 @@ public class DiscoveryConfiguration {
         return new UpstreamAuthConfig(properties);
     }
 
-    /** 上游投影数据源（领域端口 gRPC 实现，channel 池随 close 释放）。 */
-    @Bean(destroyMethod = "close")
-    GrpcProjectionSource grpcProjectionSource(
-            StringProperties properties, UpstreamConfig config, UpstreamAuthConfig auth) {
-        return new GrpcProjectionSource(properties, config, auth);
-    }
-
-    /** 上游同步引擎：首轮 SYNCED 开 readiness，断连只通知不降（D-D5）；订阅扇出内联同步线程（D-S4/D-S7）；状态转移上报新鲜度表（D-F5）。 */
+    /** 多上游同步编排（phase-5）：per cluster (source, synchronizer)，共享投影分表与扇出表锁；
+     * 订阅扇出内联同步线程（D-S4/D-S7）；状态转移上报新鲜度表（D-F5）。 */
     @Bean(initMethod = "start", destroyMethod = "close")
-    ProjectionSynchronizer projectionSynchronizer(
+    UpstreamSynchronizers upstreamSynchronizers(
             StringProperties properties,
-            GrpcProjectionSource source,
+            UpstreamConfig upstreamConfig,
+            UpstreamAuthConfig upstreamAuthConfig,
             ProjectionRegistry registry,
             SubscriptionManager subscriptionManager,
-            UpstreamConfig upstreamConfig,
             DiscoveryReadinessGate readinessGate,
             UpstreamStatuses upstreamStatuses) {
-        return new ProjectionSynchronizer(
+        return new UpstreamSynchronizers(
                 properties,
-                source,
+                upstreamConfig,
+                upstreamAuthConfig,
                 registry,
                 subscriptionManager,
-                upstreamConfig.clusterId(),
-                new ProjectionSyncListener() {
-                    @Override
-                    public void onSynced() {
-                        readinessGate.markReady();
-                    }
-                },
+                readinessGate,
                 upstreamStatuses);
     }
 

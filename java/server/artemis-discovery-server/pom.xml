@@ -68,6 +68,11 @@
       <groupId>org.mydotey.scf</groupId>
       <artifactId>scf-simple</artifactId>
     </dependency>
+    <!-- 上游多集群 JSON map 配置解析（phase-5，TypeConverter；版本随 parent 管理对齐 grpc 线） -->
+    <dependency>
+      <groupId>com.google.code.gson</groupId>
+      <artifactId>gson</artifactId>
+    </dependency>
     <!-- Spring Boot 4.1 官方 gRPC 服务端（tech-stack #33）：@GrpcService 自动装配 -->
     <dependency>
       <groupId>org.springframework.boot</groupId>

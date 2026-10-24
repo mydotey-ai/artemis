@@ -1,6 +1,6 @@
 # discovery 订阅推送 API
 
-版本: 1.0    更新时间: 2026-10-24
+版本: 1.1    更新时间: 2026-10-24
 
 > `discovery.v1` 订阅契约（`DiscoverySubscriptionService.Subscribe`，v0.3 phase-3 交付）：SDK → discovery 外部 gRPC 端口的增量订阅推送。查询契约（`DiscoveryQueryService.Query`）见 [discovery-query-api.md](discovery-query-api.md)——两者共用同一选择器语义与端口/认证/readiness 行为，本文不复制。
 
@@ -20,6 +20,7 @@
 message SubscribeRequest {
   repeated artemis.common.v1.ServiceKey services = 1;  // 空 = 全部服务（语义同 QueryRequest）
   map<string, string> labels = 2;                      // 实例级过滤（语义同 QueryRequest）
+  repeated string clusters = 3;                        // 来源 cluster 过滤（语义同 QueryRequest，v0.3 phase-5）
 }
 
 message SubscriptionEvent {
@@ -44,14 +45,16 @@ service DiscoverySubscriptionService {
 | 慢消费者 | outbound 背压（`isReady` false）时服务端断流 `RESOURCE_EXHAUSTED`（at-most-once，防无界缓冲），消费方重订阅重新基线自愈 |
 | 结束 | 流断开 = 订阅结束；增量丢失检测归 phase-4 hash 对账与 SDK 兜底轮询 |
 
-单流内按产生序有序；一流多目标（一条流承载选择器命中的全部 service）；事件携带来源 `cluster`（多集群聚合归 phase-5，届时 SDK 可按 cluster 过滤）。
+单流内按产生序有序；一流多目标（一条流承载选择器命中的全部 service）；事件携带来源 `cluster`。
+
+**多集群过滤**（v0.3 phase-5）：`clusters` 非空时只推送命中 cluster 的变更与基线（联合视图的子集）；空 = 全部 cluster（union）。事件 `cluster` 字段用于消费方归因；cluster 清单是服务端部署拓扑，未知名静默无命中。
 
 ## 错误与门控
 
 | 场景 | 行为 |
 |---|---|
 | 未就绪（首轮投影同步未完成） | `UNAVAILABLE`（readiness 拦截器，语义同 Query） |
-| 选择器校验失败（services 字段空白） | gRPC status `INVALID_ARGUMENT`（流未开，无 in-band 错误码） |
+| 选择器校验失败（services/clusters 字段空白） | gRPC status `INVALID_ARGUMENT`（流未开，无 in-band 错误码） |
 | 认证 | 与 Query 同端口同策略（BasicAuth，默认关闭） |
 
 ## 指标
@@ -62,4 +65,5 @@ service DiscoverySubscriptionService {
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-24 | phase-5：`SubscribeRequest.clusters` 来源过滤（空 = union）与 cluster 归因说明 |
 | 1.0 | 2026-10-24 | v0.3 phase-3 交付：推拉结合增量订阅契约（ADR-019） |

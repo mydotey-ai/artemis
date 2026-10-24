@@ -1,6 +1,6 @@
 # discovery 对账与新鲜度 API
 
-版本: 1.0    更新时间: 2026-10-24
+版本: 1.1    更新时间: 2026-10-24
 
 > 本文定义 discovery-service 的 hash 对账契约（`discovery.v1 DiscoveryReconciliationService`）与新鲜度标记语义（[ADR-019](../decisions/adr-019-hybrid-push-pull-subscription.md) 推拉结合三件套之三）。canonical checksum 规则的**单一来源**在本文 §3——各语言实现（Java 服务端 / SDK / v1.x Rust）照此独立实现，不得互相抄代码或依赖 protobuf 序列化字节。
 
@@ -22,9 +22,9 @@
 
 拉取 per-service **视图 checksum 表**。SDK 定期与本地视图逐 service 比对，不一致的 service 触发 `Query` 全量拉——增量丢失的显式检测，漂移窗口 = 对账周期。
 
-**请求选择器**与 `Query`/`Subscribe` 同一语义（`services` 精确集合，空 = 全部；`labels` 实例级过滤），checksum 计算于该选择器过滤后的**视图**（与 SDK 本地持有视图可比）。
+**请求选择器**与 `Query`/`Subscribe` 同一语义（`services` 精确集合，空 = 全部；`labels` 实例级过滤；`clusters` 来源过滤，空 = 全部 cluster，v0.3 phase-5），checksum 计算于该选择器过滤后的**视图**（与 SDK 本地持有视图可比）。
 
-**响应**：`data.clusters` 为 `ClusterChecksums` 列表（`cluster` 来源标识 + per-service `(key, uint32 checksum)` 条目）。
+**响应**：`data.clusters` 为 `ClusterChecksums` 列表（`cluster` 来源标识 + per-service `(key, uint32 checksum)` 条目）；`data.upstreams` 新鲜度列表同样按 `clusters` 过滤（只含所查来源）。
 
 **缺项规则**：响应只含视图中有实例的条目——**缺项 = 该服务在视图中无实例（权威空）**。SDK 本地空 + 表缺 = 一致；丢失的 `NEW` 推送必使表项出现 → 不一致 → 全量拉。absent 与 empty 在协议上等价，无歧义。
 
@@ -86,4 +86,5 @@ m（单条键值对）：
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-24 | phase-5：选择器新增 `clusters` 来源过滤；新鲜度列表同源过滤 |
 | 1.0 | 2026-10-24 | 初版：Checksum 契约、canonical 规则单一来源（golden vector）、缺项规则、新鲜度语义 |

@@ -24,4 +24,19 @@ public final class UpstreamStatuses {
         }
         return List.copyOf(snapshot);
     }
+
+    /** 选择器过滤快照（phase-5）：clusters 非空时只含命中 cluster 的新鲜度。 */
+    public List<UpstreamStatus> snapshot(DiscoverySelector selector) {
+        if (selector.clusters().isEmpty()) {
+            return snapshot();
+        }
+        List<UpstreamStatus> snapshot = new ArrayList<>(selector.clusters().size());
+        for (String cluster : selector.clusters()) {
+            UpstreamState state = states.get(cluster);
+            if (state != null) {
+                snapshot.add(new UpstreamStatus(cluster, state));
+            }
+        }
+        return List.copyOf(snapshot);
+    }
 }

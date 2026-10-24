@@ -273,8 +273,7 @@ class DiscoveryReconciliationIT {
                 "--spring.main.web-application-type=none",
                 "--management.server.port=0",
                 "--spring.grpc.server.port=0",
-                "--artemis.discovery.upstream.endpoints=127.0.0.1:" + peerPort,
-                "--artemis.discovery.upstream.clusterId=test-cluster",
+                "--artemis.discovery.registry.clusters={\"test-cluster\":\"127.0.0.1:" + peerPort + "\"}",
                 "--artemis.discovery.upstream.reconnectBackoffMinMs=100",
                 "--artemis.discovery.upstream.reconnectBackoffMaxMs=200");
     }

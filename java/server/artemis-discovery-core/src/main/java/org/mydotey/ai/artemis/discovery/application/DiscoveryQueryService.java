@@ -27,11 +27,12 @@ public final class DiscoveryQueryService {
 
     public QueryResponse query(QueryRequest request) {
         Set<ServiceKey> services = new LinkedHashSet<>(request.services());
-        DiscoverySelector selector = new DiscoverySelector(services, request.labels());
-        selector.requireExplicitServicesValid();
+        DiscoverySelector selector =
+                new DiscoverySelector(services, request.labels(), new LinkedHashSet<>(request.clusters()));
+        selector.requireValid();
         // 先快照后读表（code-review FIX-1）：与同步线程「先覆盖后 setState(SYNCED)」的发布序
         // 交错只产生保守向（陈旧标签 + 新数据），不出现夸大新鲜度（SYNCED + 陈旧数据）
-        List<UpstreamStatus> upstreams = upstreamStatuses.snapshot();
+        List<UpstreamStatus> upstreams = upstreamStatuses.snapshot(selector);
         return new QueryResponse(registry.query(selector), upstreams);
     }
 }

@@ -18,7 +18,7 @@ public final class DiscoverySubscriptionService {
     }
 
     public Subscription subscribe(DiscoverySelector selector, PushTarget target) {
-        selector.requireExplicitServicesValid();
+        selector.requireValid();
         return manager.subscribe(selector, target);
     }
 }

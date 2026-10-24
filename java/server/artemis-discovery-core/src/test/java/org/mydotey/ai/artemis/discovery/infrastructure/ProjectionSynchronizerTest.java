@@ -157,8 +157,9 @@ class ProjectionSynchronizerTest {
 
     @Test
     void should_retry_with_backoff_when_upstream_fails() {
-        startSynchronizer(Map.of("artemis.discovery.upstream.reconnectBackoffMinMs", "10"));
+        // 失败计数先于 worker 起：防首轮 open 抢在 set 前执行而成功（startSynchronizer 即 start）
         source.failNextOpens.set(2); // 前两次 open 失败（上游不可达）
+        startSynchronizer(Map.of("artemis.discovery.upstream.reconnectBackoffMinMs", "10"));
 
         TestAwait.await("retried until success", () -> {
             FakeSession session = source.latestSessionOrNull();

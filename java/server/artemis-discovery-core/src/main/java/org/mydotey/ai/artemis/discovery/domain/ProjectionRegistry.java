@@ -35,25 +35,30 @@ public final class ProjectionRegistry {
     }
 
     /** 选择器查询（D-D7）：显式 services 命中即返回条目（labels 过滤后可为空实例集）；
-     * 空条目仅产生于 labels 过滤；全量查询不返回过滤后空条目。 */
+     * 空条目仅产生于 labels 过滤；全量查询不返回过滤后空条目。clusters 非空时未命中
+     * 来源 cluster 整体跳过（phase-5 union 过滤）。 */
     public List<ClusterServiceInstances> query(DiscoverySelector selector) {
         List<ClusterServiceInstances> result = new ArrayList<>();
         for (Map.Entry<String, ClusterProjection> entry : clusters.entrySet()) {
-            entry.getValue().query(entry.getKey(), selector, result);
+            if (selector.matchesCluster(entry.getKey())) {
+                entry.getValue().query(entry.getKey(), selector, result);
+            }
         }
         return result;
     }
 
     /**
      * 对账表拉取（D-F1/D-F3）：labels 空 → 读条目缓存 checksum（零计算）；labels 非空 →
-     * 过滤视图现算。只含有实例条目，滤空缺项 = 视图无实例。
+     * 过滤视图现算。只含有实例条目，滤空缺项 = 视图无实例。clusters 过滤同 query（phase-5）。
      */
     public List<ClusterChecksums> checksums(DiscoverySelector selector) {
         List<ClusterChecksums> result = new ArrayList<>();
         for (Map.Entry<String, ClusterProjection> entry : clusters.entrySet()) {
-            List<ServiceChecksum> services = entry.getValue().checksums(selector);
-            if (!services.isEmpty()) {
-                result.add(new ClusterChecksums(entry.getKey(), services));
+            if (selector.matchesCluster(entry.getKey())) {
+                List<ServiceChecksum> services = entry.getValue().checksums(selector);
+                if (!services.isEmpty()) {
+                    result.add(new ClusterChecksums(entry.getKey(), services));
+                }
             }
         }
         return result;

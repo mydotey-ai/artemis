@@ -8,3 +8,4 @@ phase 设计文档与测试文档在各自 phase 开工（① worktree 开工）
 | phase-2-discovery-projection | [phase-2-discovery-projection.md](phase-2-discovery-projection.md) | [phase-2-discovery-projection-test.md](phase-2-discovery-projection-test.md) |
 | phase-3-subscription-push | [phase-3-subscription-push.md](phase-3-subscription-push.md) | [phase-3-subscription-push-test.md](phase-3-subscription-push-test.md) |
 | phase-4-fallback-freshness | [phase-4-fallback-freshness.md](phase-4-fallback-freshness.md) | [phase-4-fallback-freshness-test.md](phase-4-fallback-freshness-test.md) |
+| phase-5-multi-cluster | [phase-5-multi-cluster.md](phase-5-multi-cluster.md) | [phase-5-multi-cluster-test.md](phase-5-multi-cluster-test.md) |

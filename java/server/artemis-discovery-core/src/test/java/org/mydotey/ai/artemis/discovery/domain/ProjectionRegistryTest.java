@@ -151,6 +151,59 @@ class ProjectionRegistryTest {
     }
 
     @Test
+    void should_reject_blank_cluster_with_invalid_argument() {
+        DiscoveryQueryService queryService = new DiscoveryQueryService(registry, new UpstreamStatuses());
+        assertThatThrownBy(() -> queryService.query(new QueryRequest(List.of(), Map.of(), List.of(" "))))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    // ---- 多集群（phase-5）----
+
+    @Test
+    void should_filter_query_by_clusters() {
+        registry.replaceAll(CLUSTER, List.of(service(ORDER, instance("i1"))));
+        registry.replaceAll("cluster-b", List.of(service(ORDER, instance("i2")), service(USER, instance("u1"))));
+
+        // 空 = union：同 ServiceKey 双 cluster 并列 + 各自独有服务
+        QueryResponse union = query(java.util.Set.of(), Map.of(), java.util.Set.of());
+        assertThat(union.services()).hasSize(3);
+        assertThat(union.services())
+                .extracting(ClusterServiceInstances::cluster)
+                .containsExactlyInAnyOrder(CLUSTER, "cluster-b", "cluster-b");
+
+        // 精确命中：只返回命中 cluster 的条目
+        QueryResponse byCluster = query(java.util.Set.of(), Map.of(), java.util.Set.of(CLUSTER));
+        assertThat(byCluster.services()).hasSize(1);
+        assertThat(byCluster.services().get(0).cluster()).isEqualTo(CLUSTER);
+        assertThat(byCluster.services().get(0).instances().key()).isEqualTo(ORDER);
+
+        // 未知 cluster 名静默无命中
+        assertThat(query(java.util.Set.of(), Map.of(), java.util.Set.of("cluster-x"))
+                        .services())
+                .isEmpty();
+    }
+
+    @Test
+    void should_filter_checksums_by_clusters() {
+        registry.replaceAll(CLUSTER, List.of(service(ORDER, instance("i1"))));
+        registry.replaceAll("cluster-b", List.of(service(USER, instance("u1"))));
+
+        // 空 = union：每 cluster 一组
+        assertThat(registry.checksums(new DiscoverySelector(java.util.Set.of(), Map.of())))
+                .extracting(ClusterChecksums::cluster)
+                .containsExactlyInAnyOrder(CLUSTER, "cluster-b");
+
+        // 精确命中 + 未命中空表
+        List<ClusterChecksums> hit =
+                registry.checksums(new DiscoverySelector(java.util.Set.of(), Map.of(), java.util.Set.of(CLUSTER)));
+        assertThat(hit).hasSize(1);
+        assertThat(hit.get(0).cluster()).isEqualTo(CLUSTER);
+        assertThat(registry.checksums(
+                        new DiscoverySelector(java.util.Set.of(), Map.of(), java.util.Set.of("cluster-x"))))
+                .isEmpty();
+    }
+
+    @Test
     void should_maintain_cached_checksum_on_apply_and_replace_all() {
         registry.apply(CLUSTER, change(ORDER, new InstanceChange(instance("i1"), ChangeType.NEW)));
         assertThat(checksum(ORDER)).isEqualTo(ProjectionChecksum.of(find(ORDER).instances()));
@@ -221,7 +274,12 @@ class ProjectionRegistryTest {
     }
 
     private QueryResponse query(java.util.Set<ServiceKey> services, Map<String, String> labels) {
+        return query(services, labels, java.util.Set.of());
+    }
+
+    private QueryResponse query(
+            java.util.Set<ServiceKey> services, Map<String, String> labels, java.util.Set<String> clusters) {
         return new DiscoveryQueryService(registry, new UpstreamStatuses())
-                .query(new QueryRequest(List.copyOf(services), labels));
+                .query(new QueryRequest(List.copyOf(services), labels, List.copyOf(clusters)));
     }
 }

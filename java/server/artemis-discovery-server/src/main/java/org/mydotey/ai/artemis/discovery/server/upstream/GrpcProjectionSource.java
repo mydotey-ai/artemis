@@ -48,7 +48,7 @@ public final class GrpcProjectionSource implements ProjectionSource, AutoCloseab
     private static final long DEFAULT_BOOTSTRAP_TIMEOUT_MS = 60_000;
     private static final int DEFAULT_MAX_INBOUND_MESSAGE_BYTES = 16 * 1024 * 1024;
 
-    private final UpstreamConfig config;
+    private final UpstreamConfig.Upstream upstream;
     private final UpstreamAuthConfig auth;
     private final Property<String, Long> bootstrapTimeoutMs;
     private final int maxInboundMessageBytes;
@@ -56,8 +56,9 @@ public final class GrpcProjectionSource implements ProjectionSource, AutoCloseab
     private final ConcurrentHashMap<UpstreamConfig.Endpoint, ManagedChannel> channels = new ConcurrentHashMap<>();
     private final DiscoveryProtoMapper mapper = DiscoveryProtoMapper.INSTANCE;
 
-    public GrpcProjectionSource(StringProperties properties, UpstreamConfig config, UpstreamAuthConfig auth) {
-        this.config = config;
+    public GrpcProjectionSource(
+            StringProperties properties, UpstreamConfig.Upstream upstream, UpstreamAuthConfig auth) {
+        this.upstream = upstream;
         this.auth = auth;
         this.bootstrapTimeoutMs = ScfProperties.staticLong(
                 properties,
@@ -78,7 +79,7 @@ public final class GrpcProjectionSource implements ProjectionSource, AutoCloseab
 
     @Override
     public ProjectionSession open(String requesterId) {
-        List<UpstreamConfig.Endpoint> endpoints = config.endpoints();
+        List<UpstreamConfig.Endpoint> endpoints = upstream.endpoints();
         int index = Math.floorMod(nextEndpoint.getAndIncrement(), endpoints.size());
         return new GrpcProjectionSession(endpoints.get(index), requesterId);
     }

@@ -4,12 +4,12 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 
 /**
- * context 加载冒烟：上游 endpoints 为必填项（fail-fast），测试以占位端点通过配置校验
+ * context 加载冒烟：上游集群 map 为必填项（fail-fast），测试以占位端点通过配置校验
  * （可达性不属于启动校验，同步器自行退避重试）。
  */
 @SpringBootTest(
         properties = {
-            "artemis.discovery.upstream.endpoints=127.0.0.1:1",
+            "artemis.discovery.registry.clusters={\"default\":\"127.0.0.1:1\"}",
             "spring.grpc.server.port=0",
             "server.port=0",
             "management.server.port=0"

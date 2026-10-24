@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.19    更新时间: 2026-10-24
+版本: 1.20    更新时间: 2026-10-24
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -15,6 +15,7 @@
 - **服务与实例标识**：服务由 `(namespace, service)` 标识（`ServiceKey`）；实例由 `instance_id` 在服务内标识（`InstanceKey`）。
 - **实例状态**：客户端自报（服务端不做主动探测）；实例数据由客户端上报，服务端只存事实。
 - **投影分发（registry → discovery）**：registry 向 discovery 推送实例事实（全量快照 + 新增/变更/移除三值变更流）；discovery 侧投影是只读副本，discovery 不组集群。
+- **多集群聚合**：单 discovery 节点可同时订阅多个 registry 集群，各源投影本地独立维护、查询/订阅时刻合并（默认 union，可按来源 cluster 过滤）；聚合只发生在本地，无跨源污染（ADR-002）。
 
 数据模型与操作语义以仓库顶层 `proto/` 契约（单一来源：[proto 契约规范](../dev/proto-contract.md)）为准；本版契约的设计细节见 [phase-1 设计文档](../milestones/v0.1/phases/phase-1-scaffold.md)。
 
@@ -175,11 +176,11 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 
 **v0.3 phase-2（discovery 投影内核与查询）已交付**：
 
-- **投影模型**：discovery 侧按 `(cluster, namespace, service)` 组织只读投影——cluster 为来源标识（投影边界注入，ADR-014），v0.3 单集群（多集群聚合 phase-5）。存储 per-service 条目（`ConcurrentHashMap` + 不可变实例集，读路径无锁零克隆）；**条目存在性 = 服务存在性（≥1 实例）**，实例全部下线即删条目（与 registry 空服务回收语义收敛）。
+- **投影模型**：discovery 侧按 `(cluster, namespace, service)` 组织只读投影——cluster 为来源标识（投影边界注入，ADR-014），phase-2 单集群起步（多集群聚合 phase-5）。存储 per-service 条目（`ConcurrentHashMap` + 不可变实例集，读路径无锁零克隆）；**条目存在性 = 服务存在性（≥1 实例）**，实例全部下线即删条目（与 registry 空服务回收语义收敛）。
 - **上游消费**：消费 phase-1 `projection.v1` 分发流——「Watch 建立确认 → Bootstrap 全量覆盖 → 变更流应用」安全序（覆盖先于一切事件应用，无丢失）；断流/失败/慢消费（事件队列满）整轮重来：关会话 → 全抖动指数退避（1s→10s）→ 重新 Watch+Bootstrap 全量覆盖幂等自愈（每轮端点轮换，watch 与 bootstrap 同端点保同源视图）。watch 长流启用 keepalive 检测半开连接。
 - **readiness**：首轮投影同步完成前查询 `UNAVAILABLE`（空数据不作真相）；同步后上游断连不降 ready——投影继续服务（陈旧换可用），新鲜度标记出口随 phase-4。
 - **查询 API**：`discovery.v1 DiscoveryQueryService/Query`（unary，外部端口 gRPC 9095，BasicAuth 默认关闭）——选择器 `services`（精确集合，空=全部）+ `labels`（实例 metadata 全键值过滤，分组语义 ADR-013）；响应携带 cluster 来源标识。契约详见 [discovery-query-api.md](../api/discovery-query-api.md)。
-- **配置（SCF，`artemis.discovery.*`）**：`upstream.clusterId`（默认 default）、`upstream.endpoints`（**必填**，host:port 逗号分隔）、`upstream.auth.*`、`upstream.establishTimeoutMs/bootstrapTimeoutMs/reconnectBackoffMinMs/MaxMs`、`projection.queueCapacity`（默认 8192）。
+- **配置（SCF，`artemis.discovery.*`）**：上游集群 map `registry.clusters`（**必填**，详见 phase-5 节；phase-2 初版为 `upstream.clusterId` + `upstream.endpoints` 两键，phase-5 已替换）、`upstream.auth.*`、`upstream.establishTimeoutMs/bootstrapTimeoutMs/reconnectBackoffMinMs/MaxMs`、`projection.queueCapacity`（默认 8192）。
 - **工程形态**：discovery-core 16 单测（投影存储/消费安全序/选择器/mapper）+ `DiscoveryProjectionIT` 4 例（进程内真实 registry + discovery 双 context 端到端：稳态注册→查询亚秒可见、更新/删除反映、registry 重启 re-bootstrap 覆盖陈旧、未同步 UNAVAILABLE）；code-review 修复 4 项中高危（陈旧 DELETE no-op、keepalive、旧轮回调隔离 per-round 队列、DISCONNECTED 门控）。
 
 **v0.3 phase-3（discovery 订阅契约与推送）已交付**：
@@ -201,10 +202,20 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **工程形态**：单测 8 用例（canonical 抗序/字段敏感、条目缓存一致性、labels 视图、状态上报、proto 映射）+ `DiscoveryReconciliationIT` 5 例（SDK 角色独立实现 canonical 规则驱动端到端：表随注册/更新/注销一致演变、篡改本地视图对账检测后全量拉收敛、registry 关停 DISCONNECTED 标记可见且陈旧换可用、重启双面收敛、labels 视图指纹、未就绪拒绝）；code-review 双轨 6 findings（核心修复 = 快照先于读表，防「陈旧数据 + SYNCED」夸大新鲜度竞态）。
 
 
+**v0.3 phase-5（discovery 多集群聚合）已交付**：
+
+- **多集群聚合（ADR-002/014）**：单 discovery 节点独立订阅 1..N 个 registry 集群——每 cluster 独立投影表、独立同步器（端点轮换限于本集群端点）、独立退避重连与上游状态（**跨源隔离**：某集群断连只冻结该源投影并标记其新鲜度，其余集群不受影响）。聚合只在本地发生，无跨源污染。
+- **union 语义**：查询/订阅/对账默认返回全部来源 cluster 的并列条目（同 `ServiceKey` 多集群并存即并列，不冲突消解）；条目携带来源 `cluster`（ADR-014 投影边界注入）。
+- **选择器 cluster 维度**：`discovery.v1` 三 request（`QueryRequest`/`SubscribeRequest`/`ChecksumRequest`）新增 `clusters` 字段（wire 兼容只增）——空 = 全部（union），非空 = 精确集合；未知 cluster 名静默无命中（部署拓扑不耦合 SDK），空白名 `INVALID_ARGUMENT`。新鲜度列表同样按选择器过滤。
+- **上游配置**（`artemis.discovery.registry.clusters`，静态）：JSON map `{"cluster-a":"r1:9093,r2:9093","cluster-b":"r3:9093"}`——键 = clusterId、值 = 该集群端点逗号分隔列表；未配置/JSON 非法/集群名空白/端点非法均拒绝启动。集群集合启动定死（对齐 registry 静态成员哲学），上游认证全局共享（per-cluster 凭证待真实需求）。
+- **readiness 全量门**：**全部**配置上游完成首轮同步才放行查询——任一上游缺席即 union 不完整（空数据不作真相）；断连仍不降 ready（陈旧换可用）。
+- **工程形态**：discovery-core/server 单测（选择器过滤/就绪门/配置解析/mapper）+ `DiscoveryMultiClusterIT` 6 例（进程内 2 个真实 registry 集群 + 1 discovery：union 并列、cluster 过滤、订阅归因与过滤、对账过滤、新鲜度独立性、readiness 全量门）；三个既有 discovery IT 切换新配置键回归单集群语义；API 文档同步（[查询](../api/discovery-query-api.md)/[订阅](../api/discovery-subscription-api.md)/[对账](../api/discovery-reconciliation-api.md) 三文补 `clusters`）。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.20 | 2026-10-24 | v0.3 phase-5 交付：多集群聚合（union + cluster 选择器过滤、跨源隔离、JSON map 上游配置、readiness 全量门） |
 | 1.19 | 2026-10-24 | v0.3 phase-4 交付：hash 对账（canonical 规则单一来源 + golden vector）、新鲜度标记；新建 api/discovery-reconciliation-api.md |
 | 1.18 | 2026-10-24 | v0.3 phase-3 交付：推拉结合订阅推送（ADR-019：增量流 + labels 视图翻译 + diff 续推）；新建 api/discovery-subscription-api.md |
 | 1.17 | 2026-10-23 | v0.3 phase-2 交付：discovery 投影内核（消费安全序/自愈重连/readiness）与 discovery.v1 查询 API；新建 api/discovery-query-api.md |

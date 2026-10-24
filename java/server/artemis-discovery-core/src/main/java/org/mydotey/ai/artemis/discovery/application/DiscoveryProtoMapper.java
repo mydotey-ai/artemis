@@ -42,7 +42,7 @@ public final class DiscoveryProtoMapper {
         for (org.mydotey.ai.artemis.proto.common.v1.ServiceKey key : request.getServicesList()) {
             services.add(toDomain(key));
         }
-        return new QueryRequest(services, request.getLabelsMap());
+        return new QueryRequest(services, request.getLabelsMap(), request.getClustersList());
     }
 
     public org.mydotey.ai.artemis.proto.discovery.v1.QueryResponse toSuccessProto(QueryResponse response) {
@@ -74,7 +74,8 @@ public final class DiscoveryProtoMapper {
         for (org.mydotey.ai.artemis.proto.common.v1.ServiceKey key : request.getServicesList()) {
             services.add(toDomain(key));
         }
-        return new DiscoverySelector(Set.copyOf(services), request.getLabelsMap());
+        return new DiscoverySelector(
+                Set.copyOf(services), request.getLabelsMap(), Set.copyOf(request.getClustersList()));
     }
 
     /** 订阅建立确认：两字段均未设的空事件（契约语义）。 */
@@ -90,7 +91,8 @@ public final class DiscoveryProtoMapper {
         for (org.mydotey.ai.artemis.proto.common.v1.ServiceKey key : request.getServicesList()) {
             services.add(toDomain(key));
         }
-        return new DiscoverySelector(Set.copyOf(services), request.getLabelsMap());
+        return new DiscoverySelector(
+                Set.copyOf(services), request.getLabelsMap(), Set.copyOf(request.getClustersList()));
     }
 
     public org.mydotey.ai.artemis.proto.discovery.v1.ChecksumResponse toSuccessProto(ChecksumResponse response) {
