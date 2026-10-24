@@ -90,6 +90,13 @@
       <version>${revision}</version>
       <scope>test</scope>
     </dependency>
+    <!-- IT fixture：同 JVM 起真实 management-server（规则流端口，phase-6） -->
+    <dependency>
+      <groupId>org.mydotey.ai.artemis</groupId>
+      <artifactId>artemis-management-server</artifactId>
+      <version>${revision}</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>

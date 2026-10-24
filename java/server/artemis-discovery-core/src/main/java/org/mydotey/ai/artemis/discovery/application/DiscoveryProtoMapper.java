@@ -8,6 +8,7 @@ import org.mydotey.ai.artemis.discovery.domain.ChecksumResponse;
 import org.mydotey.ai.artemis.discovery.domain.ClusterChecksums;
 import org.mydotey.ai.artemis.discovery.domain.ClusterServiceInstances;
 import org.mydotey.ai.artemis.discovery.domain.DiscoverySelector;
+import org.mydotey.ai.artemis.discovery.domain.EjectionRule;
 import org.mydotey.ai.artemis.discovery.domain.Instance;
 import org.mydotey.ai.artemis.discovery.domain.InstanceChange;
 import org.mydotey.ai.artemis.discovery.domain.InstanceStatus;
@@ -189,6 +190,25 @@ public final class DiscoveryProtoMapper {
 
     public boolean isEstablishment(WatchEvent event) {
         return event.getChanges().getServicesList().isEmpty();
+    }
+
+    // ---- 摘除规则流（management.v1，toDomain 入站，phase-6）----
+
+    /** 快照事件判定（snapshot 已设，含空集；message presence 语义，D-E7）。 */
+    public boolean isSnapshot(org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent event) {
+        return event.hasSnapshot();
+    }
+
+    public List<EjectionRule> toDomain(org.mydotey.ai.artemis.proto.management.v1.EjectionRulesSnapshot snapshot) {
+        List<EjectionRule> rules = new ArrayList<>(snapshot.getRulesCount());
+        for (org.mydotey.ai.artemis.proto.management.v1.EjectionRule rule : snapshot.getRulesList()) {
+            rules.add(toDomain(rule));
+        }
+        return rules;
+    }
+
+    public EjectionRule toDomain(org.mydotey.ai.artemis.proto.management.v1.EjectionRule rule) {
+        return new EjectionRule(toDomain(rule.getService()), rule.getInstanceId(), rule.getReason());
     }
 
     // ---- 公共模型（common.v1，双向）----

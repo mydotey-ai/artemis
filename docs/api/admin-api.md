@@ -1,6 +1,6 @@
 # management-service Admin 与状态 API
 
-版本: 1.4    更新时间: 2026-10-21
+版本: 1.5    更新时间: 2026-10-24
 
 > 本文定义 management-service 对外 HTTP API（v0.1 内存态管理面）：实例管理 Admin API 与 registry 状态排障面。有效视图 = registry 只读事实 + management 摘除记录（ADR-016）；registry 不感知摘除。内部 gRPC 查询契约见 [registry-query-api.md](registry-query-api.md)。
 
@@ -32,6 +32,7 @@
 - 摘除/恢复**不修改 registry** 的注册数据、租约与心跳；registry 查询仍返回完整事实。
 - 详情默认只返回**有效实例**（已过滤摘除）；`includeEjected=true` 返回全量并逐条标注。
 - 摘除幂等：重复摘除保留首条记录（原因与时间不变）；允许摘除当前未注册实例（之后重注册的同一 `instanceId` 仍处于摘除态）。
+- **规则下发**（v0.3 phase-6）：摘除/恢复经 management 内部 gRPC 端口的**摘除规则流**推送订阅中的 discovery 节点（at-most-once，断流重连快照自愈）——discovery 对查询/推送/对账一致应用过滤。规则流契约见 [ejection-rule-stream-api.md](ejection-rule-stream-api.md)。
 - 恢复幂等：删除记录后立即回到有效视图（下一次查询生效）。
 
 ## 3. 通用约定
@@ -223,6 +224,7 @@ management 启动不依赖 registry 可用；registry 故障时管理面仍可�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.5 | 2026-10-24 | v0.3 phase-6：摘除/恢复语义补规则流下发说明（discovery 侧过滤生效） |
 | 1.4 | 2026-10-21 | v0.2 phase-4：新增 `GET /admin/v1/status/protection`（按服务保护态与节点级统计） |
 | 1.3 | 2026-10-20 | v0.2：上游单一 endpoint（无默认值）；凭证与 timeout 动态化 |
 | 1.2 | 2026-10-20 | v0.2：上游地址/端口分离（已废弃，回归单一 endpoint） |

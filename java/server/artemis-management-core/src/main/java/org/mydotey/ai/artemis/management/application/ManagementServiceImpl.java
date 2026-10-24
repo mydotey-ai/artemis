@@ -8,6 +8,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.mydotey.ai.artemis.management.domain.ConfigProperty;
 import org.mydotey.ai.artemis.management.domain.EjectionRecord;
+import org.mydotey.ai.artemis.management.domain.EjectionRulePublisher;
 import org.mydotey.ai.artemis.management.domain.EjectionStore;
 import org.mydotey.ai.artemis.management.domain.Instance;
 import org.mydotey.ai.artemis.management.domain.InstanceKey;
@@ -18,7 +19,8 @@ import org.mydotey.ai.artemis.management.domain.ServiceKey;
 import org.mydotey.ai.artemis.management.domain.ServiceSummary;
 
 /**
- * 有效视图组合：查询 registry 事实，叠加内存摘除记录；摘除/恢复只写 management 存储，不触达 registry。
+ * 有效视图组合：查询 registry 事实，叠加内存摘除记录；摘除/恢复只写 management 存储，
+ * 不触达 registry；落库后通知规则流分发（at-most-once，分发异常不影响操作）。
  */
 public final class ManagementServiceImpl implements ManagementService {
 
@@ -27,11 +29,14 @@ public final class ManagementServiceImpl implements ManagementService {
 
     private final RegistryQueryPort registry;
     private final EjectionStore ejections;
+    private final EjectionRulePublisher publisher;
     private final Clock clock;
 
-    public ManagementServiceImpl(RegistryQueryPort registry, EjectionStore ejections, Clock clock) {
+    public ManagementServiceImpl(
+            RegistryQueryPort registry, EjectionStore ejections, EjectionRulePublisher publisher, Clock clock) {
         this.registry = registry;
         this.ejections = ejections;
+        this.publisher = publisher;
         this.clock = clock;
     }
 
@@ -70,13 +75,17 @@ public final class ManagementServiceImpl implements ManagementService {
     public EjectionView eject(ServiceKey key, String instanceId, String reason) {
         EjectionRecord stored =
                 ejections.eject(new EjectionRecord(new InstanceKey(key, instanceId), reason, clock.instant()));
+        publisher.onEjected(stored);
         return new EjectionView(
                 key.namespace(), key.service(), stored.instance().instanceId(), stored.reason(), stored.ejectedAt());
     }
 
     @Override
     public void recover(ServiceKey key, String instanceId) {
-        ejections.recover(new InstanceKey(key, instanceId));
+        InstanceKey instance = new InstanceKey(key, instanceId);
+        if (ejections.recover(instance)) {
+            publisher.onRecovered(instance);
+        }
     }
 
     @Override

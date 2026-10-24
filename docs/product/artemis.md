@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.20    更新时间: 2026-10-24
+版本: 1.21    更新时间: 2026-10-24
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -211,10 +211,20 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **readiness 全量门**：**全部**配置上游完成首轮同步才放行查询——任一上游缺席即 union 不完整（空数据不作真相）；断连仍不降 ready（陈旧换可用）。
 - **工程形态**：discovery-core/server 单测（选择器过滤/就绪门/配置解析/mapper）+ `DiscoveryMultiClusterIT` 6 例（进程内 2 个真实 registry 集群 + 1 discovery：union 并列、cluster 过滤、订阅归因与过滤、对账过滤、新鲜度独立性、readiness 全量门）；三个既有 discovery IT 切换新配置键回归单集群语义；API 文档同步（[查询](../api/discovery-query-api.md)/[订阅](../api/discovery-subscription-api.md)/[对账](../api/discovery-reconciliation-api.md) 三文补 `clusters`）。
 
+**v0.3 phase-6（management 摘除规则订阅与 discovery 过滤）已交付**：
+
+- **摘除规则流**（`management.v1 EjectionRuleService/WatchEjections`，server-stream）：management 内部 gRPC 端口（条件启用——配置 `artemis.management.grpc.port` 才监听，默认不监听可独立运行；独立认证默认关闭）。首条全量快照（message presence 区分空集）→ 其后增量按产生序；服务端单锁全序免快照竞态；at-most-once（无版本/ack，v0.4 完整规则链）、慢消费者 isReady 断流；management 内存态重启清零，discovery 重连空快照即摘除消失（期 1 设计内行为）。
+- **discovery 过滤器链 SPI**（继承资产 #7，架构 §4.2）：`DiscoveryFilter`（实例可见性谓词）+ 链（逐 filter fail-open——单 filter 异常放行不中断发现服务）。查询/订阅推送/对账 checksum **三出口一致过滤**（过滤后视图口径——checksum 不过滤会使 SDK 对账永久不一致）；checksum 零计算路径保留（规则无效果时读条目缓存）。
+- **摘除过滤语义**：规则按 `(namespace, service, instanceId)` 匹配**所有来源 cluster** 同键实例（跨 cluster 生效）；投影存储保持 registry 事实（未过滤），过滤只发生在视图构成时刻（与 phase-5 聚合同构）。规则变更以**视图语义直投**推送订阅者（摘除 → `DELETE` 携带实例完整数据、恢复 → `NEW`），labels/clusters/services 订阅过滤照常。
+- **fail-open / 最后已知规则**：management 不可用时 discovery 沿用最后已知规则继续过滤（规则缓存只在收到事件时替换、断连不清空），退避重连（默认 1s→10s）恢复后重新全量覆盖收敛。
+- **0..1 可选**：discovery 未配置 `artemis.discovery.management.endpoints` 时不订阅不过滤（空链直通零开销，不建连接不启线程）。
+- **工程形态**：management-core `EjectionStore.findAll` + `EjectionRuleDispatcher`（单锁全序分发）；discovery-core 规则同步引擎 + 过滤链；单测 15 例（规则模型/链/翻译矩阵/出口过滤/断流保持/分发全序/配置）+ `EjectionRuleStreamIT` 4 例（规则流契约）+ `DiscoveryEjectionFilterIT` 3 例（registry + discovery + management 三服务端到端：摘除过滤/恢复收敛/management 停机沿用最后规则/重启空快照收敛/未配置不过滤）；API 文档新建 [ejection-rule-stream-api.md](../api/ejection-rule-stream-api.md)、discovery 三 API 与 admin API 同步。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.21 | 2026-10-24 | v0.3 phase-6 交付：management 摘除规则流 + discovery 过滤器链（三出口一致过滤、跨 cluster 规则、fail-open/最后已知规则、0..1 可选） |
 | 1.20 | 2026-10-24 | v0.3 phase-5 交付：多集群聚合（union + cluster 选择器过滤、跨源隔离、JSON map 上游配置、readiness 全量门） |
 | 1.19 | 2026-10-24 | v0.3 phase-4 交付：hash 对账（canonical 规则单一来源 + golden vector）、新鲜度标记；新建 api/discovery-reconciliation-api.md |
 | 1.18 | 2026-10-24 | v0.3 phase-3 交付：推拉结合订阅推送（ADR-019：增量流 + labels 视图翻译 + diff 续推）；新建 api/discovery-subscription-api.md |

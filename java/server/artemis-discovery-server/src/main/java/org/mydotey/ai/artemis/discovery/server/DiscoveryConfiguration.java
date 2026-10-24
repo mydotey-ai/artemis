@@ -7,9 +7,12 @@ import org.mydotey.ai.artemis.discovery.application.DiscoveryQueryService;
 import org.mydotey.ai.artemis.discovery.application.DiscoveryReadinessGate;
 import org.mydotey.ai.artemis.discovery.application.DiscoveryReconciliationService;
 import org.mydotey.ai.artemis.discovery.application.DiscoverySubscriptionService;
+import org.mydotey.ai.artemis.discovery.domain.DiscoveryFilterChain;
+import org.mydotey.ai.artemis.discovery.domain.EjectionFilter;
 import org.mydotey.ai.artemis.discovery.domain.ProjectionRegistry;
 import org.mydotey.ai.artemis.discovery.domain.SubscriptionManager;
 import org.mydotey.ai.artemis.discovery.domain.UpstreamStatuses;
+import org.mydotey.ai.artemis.discovery.infrastructure.EjectionRuleSynchronizer;
 import org.mydotey.ai.artemis.discovery.server.auth.AuthConfig;
 import org.mydotey.ai.artemis.discovery.server.config.DiscoveryConfigurationSources;
 import org.mydotey.ai.artemis.discovery.server.grpc.DiscoveryQueryGrpcService;
@@ -18,6 +21,9 @@ import org.mydotey.ai.artemis.discovery.server.grpc.DiscoverySubscriptionGrpcSer
 import org.mydotey.ai.artemis.discovery.server.grpc.GrpcAuthInterceptor;
 import org.mydotey.ai.artemis.discovery.server.grpc.ReadinessInterceptor;
 import org.mydotey.ai.artemis.discovery.server.health.DiscoveryReadinessHealthIndicator;
+import org.mydotey.ai.artemis.discovery.server.upstream.GrpcEjectionRuleSource;
+import org.mydotey.ai.artemis.discovery.server.upstream.ManagementAuthConfig;
+import org.mydotey.ai.artemis.discovery.server.upstream.ManagementConfig;
 import org.mydotey.ai.artemis.discovery.server.upstream.UpstreamAuthConfig;
 import org.mydotey.ai.artemis.discovery.server.upstream.UpstreamConfig;
 import org.mydotey.ai.artemis.discovery.server.upstream.UpstreamSynchronizers;
@@ -54,9 +60,30 @@ public class DiscoveryConfiguration {
         return new ProjectionRegistry();
     }
 
+    /** 过滤器链（phase-6，D-E4）：未配置 management = 空链直通（零过滤零开销）。 */
     @Bean
-    SubscriptionManager subscriptionManager(ProjectionRegistry registry) {
-        return new SubscriptionManager(registry);
+    ManagementConfig managementConfig(StringProperties properties) {
+        return new ManagementConfig(properties);
+    }
+
+    @Bean
+    ManagementAuthConfig managementAuthConfig(StringProperties properties) {
+        return new ManagementAuthConfig(properties);
+    }
+
+    @Bean
+    EjectionFilter ejectionFilter() {
+        return new EjectionFilter();
+    }
+
+    @Bean
+    DiscoveryFilterChain discoveryFilterChain(ManagementConfig managementConfig, EjectionFilter ejectionFilter) {
+        return managementConfig.enabled() ? DiscoveryFilterChain.of(ejectionFilter) : DiscoveryFilterChain.empty();
+    }
+
+    @Bean
+    SubscriptionManager subscriptionManager(ProjectionRegistry registry, DiscoveryFilterChain chain) {
+        return new SubscriptionManager(registry, chain);
     }
 
     /** 上游同步状态表（D-F5）：同步引擎上报、查询/对账响应装饰新鲜度。 */
@@ -96,9 +123,34 @@ public class DiscoveryConfiguration {
                 upstreamStatuses);
     }
 
+    /** 规则流 gRPC 源（channel 池随 context 关闭释放；未启用时惰性零连接）。 */
+    @Bean(destroyMethod = "close")
+    GrpcEjectionRuleSource grpcEjectionRuleSource(
+            StringProperties properties, ManagementConfig managementConfig, ManagementAuthConfig managementAuthConfig) {
+        return new GrpcEjectionRuleSource(properties, managementConfig, managementAuthConfig);
+    }
+
+    /** 规则同步引擎（phase-6）：未配置 management 时不启动线程（0..1，D-E4/D-E3）。 */
+    @Bean(initMethod = "start", destroyMethod = "close")
+    EjectionRuleSynchronizer ejectionRuleSynchronizer(
+            StringProperties properties,
+            ManagementConfig managementConfig,
+            GrpcEjectionRuleSource ejectionRuleSource,
+            EjectionFilter ejectionFilter,
+            ProjectionRegistry registry,
+            SubscriptionManager subscriptionManager) {
+        EjectionRuleSynchronizer synchronizer = new EjectionRuleSynchronizer(
+                properties, ejectionRuleSource, ejectionFilter, registry, subscriptionManager);
+        if (!managementConfig.enabled()) {
+            synchronizer.disable(); // 0..1：不建连接不启线程
+        }
+        return synchronizer;
+    }
+
     @Bean
-    DiscoveryQueryService discoveryQueryService(ProjectionRegistry registry, UpstreamStatuses upstreamStatuses) {
-        return new DiscoveryQueryService(registry, upstreamStatuses);
+    DiscoveryQueryService discoveryQueryService(
+            ProjectionRegistry registry, DiscoveryFilterChain chain, UpstreamStatuses upstreamStatuses) {
+        return new DiscoveryQueryService(registry, chain, upstreamStatuses);
     }
 
     @Bean
@@ -108,8 +160,8 @@ public class DiscoveryConfiguration {
 
     @Bean
     DiscoveryReconciliationService discoveryReconciliationService(
-            ProjectionRegistry registry, UpstreamStatuses upstreamStatuses) {
-        return new DiscoveryReconciliationService(registry, upstreamStatuses);
+            ProjectionRegistry registry, DiscoveryFilterChain chain, UpstreamStatuses upstreamStatuses) {
+        return new DiscoveryReconciliationService(registry, chain, upstreamStatuses);
     }
 
     @Bean

@@ -19,15 +19,24 @@ import java.util.function.Function;
  * <p>翻译（D-S3）：labels 订阅收到的是视图语义变更——匹配态矩阵把实例进出视图翻译为
  * NEW/DELETE，SDK 无脑 apply；旧匹配态经 {@code oldValues} lookup 取得（稳态 = 投影当前值
  * 于 apply 前，覆盖 = 覆盖前旧投影），「旧值在本批应用前」由调用方（同步线程）保证。
+ *
+ * <p>过滤链（D-E1/D-E6）：视图判定 = labels 匹配 && chain.isVisible（基线/增量同链同语义）；
+ * 规则变更扇出走 {@link #onViewChanges}（视图语义直投，chain 不再判定——batch 已是视图效果）。
  */
 public final class SubscriptionManager {
 
     private final ProjectionRegistry registry;
+    private final DiscoveryFilterChain chain;
     private final ConcurrentHashMap<SubscriptionImpl, DiscoverySelector> subscriptions = new ConcurrentHashMap<>();
     private final Object fanoutLock = new Object();
 
     public SubscriptionManager(ProjectionRegistry registry) {
+        this(registry, DiscoveryFilterChain.empty());
+    }
+
+    public SubscriptionManager(ProjectionRegistry registry, DiscoveryFilterChain chain) {
         this.registry = registry;
+        this.chain = chain;
     }
 
     /** 订阅登记 + 确认 + 基线（表锁内，D-S6）：基线 = 选择器命中的当前实例集全 NEW 批。 */
@@ -72,6 +81,22 @@ public final class SubscriptionManager {
         }
     }
 
+    /**
+     * 视图语义变更直投（规则变更扇出，D-E6）：batch 已是视图效果（ejected-now → DELETE、
+     * recovered-now → NEW，DELETE 携带投影实例完整数据），chain 不再判定；labels/cluster/
+     * services 过滤照做。表锁内调用（经 {@link #runWithFanout}），与投影扇出/基线互斥。
+     */
+    public void onViewChanges(String cluster, List<ServiceChange> batch) {
+        if (subscriptions.isEmpty()) {
+            return;
+        }
+        synchronized (fanoutLock) {
+            for (Map.Entry<SubscriptionImpl, DiscoverySelector> entry : subscriptions.entrySet()) {
+                entry.getKey().deliverViewChanges(cluster, batch);
+            }
+        }
+    }
+
     /** 活跃订阅数（指标/排障用）。 */
     public int size() {
         return subscriptions.size();
@@ -105,13 +130,13 @@ public final class SubscriptionManager {
             subscriptions.remove(this);
         }
 
-        /** 基线：确认 + 命中条目全 NEW（per-service 分条；labels 全滤空的命中条目无变更可推）。 */
+        /** 基线：确认 + 命中条目全 NEW（per-service 分条；过滤后全空的命中条目无变更可推）。 */
         private void baseline() {
             if (closed) {
                 return;
             }
             target.established();
-            for (ClusterServiceInstances service : registry.query(selector)) {
+            for (ClusterServiceInstances service : registry.query(selector, chain)) {
                 if (!service.instances().instances().isEmpty()) {
                     target.accept(service.cluster(), toNew(service.instances()));
                 }
@@ -135,15 +160,47 @@ public final class SubscriptionManager {
             }
         }
 
+        /** 规则变更扇出（D-E6）：视图语义直投，只做 labels 过滤（chain 效果已在 batch 内）。 */
+        private void deliverViewChanges(String cluster, List<ServiceChange> batch) {
+            if (!selector.matchesCluster(cluster)) {
+                return;
+            }
+            Set<ServiceKey> services = selector.services();
+            for (ServiceChange service : batch) {
+                if (!services.isEmpty() && !services.contains(service.key())) {
+                    continue;
+                }
+                List<InstanceChange> changes = null;
+                for (InstanceChange change : service.changes()) {
+                    if (change.type() == ChangeType.UNKNOWN || !matchesLabels(change.instance())) {
+                        continue;
+                    }
+                    if (changes == null) {
+                        changes = new ArrayList<>();
+                    }
+                    changes.add(change);
+                }
+                if (changes != null && !changes.isEmpty() && !closed) {
+                    target.accept(cluster, new ServiceChange(service.key(), changes));
+                }
+            }
+        }
+
         /** labels 视图语义翻译（D-S3）：新值匹配态定 NEW/UPDATE，旧值匹配态定退出视图 DELETE。 */
         private ServiceChange translate(ServiceChange service, Map<String, Instance> oldById) {
             List<InstanceChange> out = null;
             for (InstanceChange change : service.changes()) {
                 InstanceChange translated = switch (change.type()) {
                     case NEW, UPDATE ->
-                        translateUpsert(change, oldById.get(change.instance().instanceId()));
+                        translateUpsert(
+                                service.key(),
+                                change,
+                                oldById.get(change.instance().instanceId()));
                     case DELETE ->
-                        translateDelete(change, oldById.get(change.instance().instanceId()));
+                        translateDelete(
+                                service.key(),
+                                change,
+                                oldById.get(change.instance().instanceId()));
                     case UNKNOWN -> null; // 不可执行，丢弃（语义同投影 apply）
                 };
                 if (translated != null) {
@@ -157,24 +214,30 @@ public final class SubscriptionManager {
         }
 
         /** NEW/UPDATE → 视图语义：进入视图 NEW / 视图内更新 UPDATE / 退出视图 DELETE（携带旧实例）。 */
-        private InstanceChange translateUpsert(InstanceChange change, Instance previous) {
-            boolean oldMatch = previous != null && matches(previous);
+        private InstanceChange translateUpsert(ServiceKey key, InstanceChange change, Instance previous) {
+            boolean oldMatch = previous != null && matches(key, previous);
             if (change.type() == ChangeType.NEW) {
-                return matches(change.instance()) ? new InstanceChange(change.instance(), ChangeType.NEW) : null;
+                return matches(key, change.instance()) ? new InstanceChange(change.instance(), ChangeType.NEW) : null;
             }
-            if (matches(change.instance())) {
+            if (matches(key, change.instance())) {
                 // UPDATE：旧值曾入视图 = 视图内更新；否则 = 视图加入（NEW）
                 return new InstanceChange(change.instance(), oldMatch ? ChangeType.UPDATE : ChangeType.NEW);
             }
             return oldMatch ? new InstanceChange(previous, ChangeType.DELETE) : null;
         }
 
-        private InstanceChange translateDelete(InstanceChange change, Instance previous) {
+        private InstanceChange translateDelete(ServiceKey key, InstanceChange change, Instance previous) {
             // DELETE 的 change.instance 只带 instanceId，匹配判定用旧实例完整字段
-            return previous != null && matches(previous) ? new InstanceChange(previous, ChangeType.DELETE) : null;
+            return previous != null && matches(key, previous) ? new InstanceChange(previous, ChangeType.DELETE) : null;
         }
 
-        private boolean matches(Instance instance) {
+        /** 视图判定（D-E1）：labels 匹配 && 过滤链可见。 */
+        private boolean matches(ServiceKey key, Instance instance) {
+            return matchesLabels(instance) && chain.isVisible(key, instance);
+        }
+
+        /** labels 匹配（不含 chain——规则扇出直投用，D-E6）。 */
+        private boolean matchesLabels(Instance instance) {
             return selector.labels().isEmpty()
                     || instance.metadata()
                             .entrySet()

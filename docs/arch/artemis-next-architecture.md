@@ -1,6 +1,6 @@
 # 新一代 Artemis 架构设计
 
-版本: 1.36    更新时间: 2026-10-23
+版本: 1.37    更新时间: 2026-10-24
 
 > 本文是新一代 Artemis（重设计产品）的架构设计基线：总体架构、核心机制、技术栈策略与关键决策记录。产品定位与版本切分见 [产品规划与路线图](../product/artemis-next-roadmap.md)；设计输入来自 [原产品能力基线](../legacy/legacy-product-analysis.md)（§5 可继承资产 / §6 局限清单）与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -69,6 +69,8 @@
 | console / Admin API | HTTP | management 外部端口（v0.1 起；实例管理 + 状态 API） |
 
 v0.1 端口落点：registry 外部 gRPC + 外部 HTTP（辅助通道）+ 管理 HTTP（actuator：health/readiness/metrics，默认仅绑本机）；management 外部 HTTP（Admin/状态 API）+ 管理 HTTP。v0.1 management → registry 的只读事实查询复用 registry 外部 gRPC 端口（受默认认证保护，ADR-016）。
+
+v0.3 端口落点：management 增设内部 gRPC 端口承载摘除规则流（`management.v1 EjectionRuleService`，discovery 消费）——配置 `artemis.management.grpc.port` 才启用（未配置不监听，management 可无 discovery 依赖独立运行），独立认证账户默认关闭（同 registry 内部端口哲学）；discovery 侧经 `artemis.discovery.management.endpoints` 配置订阅（0..1：未配置不过滤）。
 
 v0.2 端口落点：registry 起两个 gRPC 监听——外部端口承载 SDK（四操作/心跳）与**对外节点状态 API**（`replication.v1.NodeStatusService.GetNodeStatus`，返回成员对外端点与探测态；保留外部认证、按方法名豁免 readiness 以便观察 STARTING）；内部 peer 端口（`artemis.registry.internal.*`，端口固定默认 9093，地址无默认值、未配置时绑所有网卡以保证 peer 跨节点可达）承载 peer 复制/成员状态与 management 只读事实查询。内部端口使用独立认证账户且**默认关闭**（启用时须显式配置凭证），与外部账户互不通用；关闭认证的部署必须以网络策略隔离内部端口。只读查询保留 readiness 门控；内部 `GetNodeStatus` 在未就绪时仍可应答（供 peer 判定 UP），`Replicate`/`Bootstrap` 未就绪返回 UNAVAILABLE（未就绪节点不接收复制、也不充当数据源）。外部 HTTP 辅助端口新增 `GET /cluster/nodes`（SDK 前置寻址发现端点，phase-5）：**readiness 门控（未就绪 503）**——未就绪节点不作寻址应答者，SDK 按 url 列表重试其它地址（单地址=域名/LB 退避重试原址）；与 gRPC 观测 API 的 readiness 豁免（供 peer 探测/观察 STARTING）区分：豁免只属观测面，寻址数据面不豁免。
 
@@ -262,6 +264,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.37 | 2026-10-24 | v0.3 phase-6 设计定案：§2.2 补 v0.3 端口落点（management 内部 gRPC 规则流端口，条件启用、独立认证默认关闭；D-E11） |
 | 1.36 | 2026-10-23 | v0.3 phase-3 二轮 review 定案：上游覆盖改 diff 续推（订阅流与上游状态解耦），ADR-019 v1.1 同步 |
 | 1.35 | 2026-10-23 | v0.3 phase-3 设计 review 定案：§4.2 推送模型改推拉结合（增量流 + hash 对账，D19/ADR-019；D7 订阅通道形态被取代、快照单元语义保留），三层兜底轮询段并入对账表述 |
 | 1.34 | 2026-10-23 | v0.3 phase-1 收尾：§7 增 D18（ADR-018 投影分发契约——三值事件、at-most-once + 建立确认、保护态不进契约） |

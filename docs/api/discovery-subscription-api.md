@@ -1,6 +1,6 @@
 # discovery 订阅推送 API
 
-版本: 1.1    更新时间: 2026-10-24
+版本: 1.2    更新时间: 2026-10-24
 
 > `discovery.v1` 订阅契约（`DiscoverySubscriptionService.Subscribe`，v0.3 phase-3 交付）：SDK → discovery 外部 gRPC 端口的增量订阅推送。查询契约（`DiscoveryQueryService.Query`）见 [discovery-query-api.md](discovery-query-api.md)——两者共用同一选择器语义与端口/认证/readiness 行为，本文不复制。
 
@@ -42,6 +42,7 @@ service DiscoverySubscriptionService {
 | 建立 | 订阅登记后**首条空事件**（两字段均未设）= 建立确认；随后按选择器命中**逐 service 推送基线**（该服务当前实例集全 `NEW` 批，per-service 分条） |
 | 稳态 | 上游变更以**视图语义增量**推送：`services` 过滤 service 级（空 = 全部），`labels` 由服务端翻译为**视图语义**——实例进出 labels 视图显式翻译为 `NEW`/`DELETE`，SDK 收到即 apply，无需自行判断匹配态 |
 | 上游重连 | registry↔discovery 断连重连对订阅方**透明**：断连期间流静默（投影冻结，陈旧换可用），重连覆盖差异以 **diff 增量续推**（消失服务全 `DELETE`、新建全 `NEW`），流不断 |
+| 规则变更 | 摘除规则（v0.3 phase-6）变化时以**视图语义直投**推送：摘除 → `DELETE`（携带实例完整数据）、恢复 → `NEW`；`labels`/`clusters`/`services` 订阅过滤照常生效，消费方无需感知规则存在（见 [ejection-rule-stream-api.md](ejection-rule-stream-api.md)） |
 | 慢消费者 | outbound 背压（`isReady` false）时服务端断流 `RESOURCE_EXHAUSTED`（at-most-once，防无界缓冲），消费方重订阅重新基线自愈 |
 | 结束 | 流断开 = 订阅结束；增量丢失检测归 phase-4 hash 对账与 SDK 兜底轮询 |
 
@@ -65,5 +66,6 @@ service DiscoverySubscriptionService {
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.2 | 2026-10-24 | v0.3 phase-6：流语义补规则变更直投（摘除 DELETE / 恢复 NEW，视图语义） |
 | 1.1 | 2026-10-24 | phase-5：`SubscribeRequest.clusters` 来源过滤（空 = union）与 cluster 归因说明 |
 | 1.0 | 2026-10-24 | v0.3 phase-3 交付：推拉结合增量订阅契约（ADR-019） |

@@ -10,6 +10,7 @@ import org.mydotey.ai.artemis.discovery.domain.ChecksumResponse;
 import org.mydotey.ai.artemis.discovery.domain.ClusterChecksums;
 import org.mydotey.ai.artemis.discovery.domain.ClusterServiceInstances;
 import org.mydotey.ai.artemis.discovery.domain.DiscoverySelector;
+import org.mydotey.ai.artemis.discovery.domain.EjectionRule;
 import org.mydotey.ai.artemis.discovery.domain.Instance;
 import org.mydotey.ai.artemis.discovery.domain.InstanceStatus;
 import org.mydotey.ai.artemis.discovery.domain.QueryResponse;
@@ -188,5 +189,51 @@ class DiscoveryProtoMapperTest {
                 mapper.toErrorChecksumProto(ErrorCodes.INVALID_ARGUMENT, "blank key");
         assertThat(checksumError.getStatus().getAck()).isEqualTo(Ack.ACK_FAIL);
         assertThat(checksumError.getStatus().getError().getCode()).isEqualTo("INVALID_ARGUMENT");
+    }
+
+    @Test
+    void should_map_ejection_rule_events_by_presence() {
+        // 快照（含空集判定，D-E7）：snapshot 已设 = 快照事件
+        org.mydotey.ai.artemis.proto.common.v1.ServiceKey protoKey =
+                org.mydotey.ai.artemis.proto.common.v1.ServiceKey.newBuilder()
+                        .setNamespace("default")
+                        .setService("order-service")
+                        .build();
+        org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent snapshot =
+                org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent.newBuilder()
+                        .setSnapshot(org.mydotey.ai.artemis.proto.management.v1.EjectionRulesSnapshot.newBuilder()
+                                .addRules(org.mydotey.ai.artemis.proto.management.v1.EjectionRule.newBuilder()
+                                        .setService(protoKey)
+                                        .setInstanceId("i1")
+                                        .setReason("maintenance")
+                                        .build())
+                                .build())
+                        .build();
+        assertThat(mapper.isSnapshot(snapshot)).isTrue();
+        List<EjectionRule> rules = mapper.toDomain(snapshot.getSnapshot());
+        assertThat(rules)
+                .containsExactly(new EjectionRule(new ServiceKey("default", "order-service"), "i1", "maintenance"));
+
+        // 空快照（snapshot 已设、rules 空）
+        org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent empty =
+                org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent.newBuilder()
+                        .setSnapshot(org.mydotey.ai.artemis.proto.management.v1.EjectionRulesSnapshot.newBuilder())
+                        .build();
+        assertThat(mapper.isSnapshot(empty)).isTrue();
+        assertThat(mapper.toDomain(empty.getSnapshot())).isEmpty();
+
+        // 增量（snapshot 未设）
+        org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent delta =
+                org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent.newBuilder()
+                        .setEjected(org.mydotey.ai.artemis.proto.management.v1.EjectionRule.newBuilder()
+                                .setService(org.mydotey.ai.artemis.proto.common.v1.ServiceKey.newBuilder()
+                                        .setNamespace("default")
+                                        .setService("order-service"))
+                                .setInstanceId("i2")
+                                .build())
+                        .build();
+        assertThat(mapper.isSnapshot(delta)).isFalse();
+        assertThat(mapper.toDomain(delta.getEjected()))
+                .isEqualTo(new EjectionRule(new ServiceKey("default", "order-service"), "i2", ""));
     }
 }

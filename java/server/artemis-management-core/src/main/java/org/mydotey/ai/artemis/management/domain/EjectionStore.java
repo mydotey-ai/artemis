@@ -19,4 +19,7 @@ public interface EjectionStore {
 
     /** 按 service 聚合记录数（单次遍历，供服务列表）。 */
     Map<ServiceKey, Long> countByService();
+
+    /** 全部摘除记录（规则流快照），按 (namespace, service, instanceId) 升序（确定性）。 */
+    List<EjectionRecord> findAll();
 }

@@ -11,7 +11,9 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.mydotey.ai.artemis.management.domain.ConfigProperty;
+import org.mydotey.ai.artemis.management.domain.EjectionRecord;
 import org.mydotey.ai.artemis.management.domain.Instance;
+import org.mydotey.ai.artemis.management.domain.InstanceKey;
 import org.mydotey.ai.artemis.management.domain.InstanceStatus;
 import org.mydotey.ai.artemis.management.domain.LeaseDetail;
 import org.mydotey.ai.artemis.management.domain.LeaseStatus;
@@ -21,6 +23,7 @@ import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
 import org.mydotey.ai.artemis.management.domain.ServiceProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceSummary;
+import org.mydotey.ai.artemis.management.infrastructure.EjectionRuleDispatcher;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryEjectionStore;
 
 class ManagementServiceImplTest {
@@ -30,8 +33,9 @@ class ManagementServiceImplTest {
 
     private final FakeRegistry registry = new FakeRegistry();
     private final InMemoryEjectionStore ejections = new InMemoryEjectionStore();
+    private final EjectionRuleDispatcher dispatcher = new EjectionRuleDispatcher(ejections);
     private final ManagementServiceImpl service =
-            new ManagementServiceImpl(registry, ejections, Clock.fixed(NOW, ZoneOffset.UTC));
+            new ManagementServiceImpl(registry, ejections, dispatcher, Clock.fixed(NOW, ZoneOffset.UTC));
 
     @Test
     void should_filter_ejected_instances_when_get_service() {
@@ -169,8 +173,77 @@ class ManagementServiceImplTest {
         assertThat(service.configStatus()).isSameAs(properties);
     }
 
+    @Test
+    void should_notify_dispatcher_on_eject_and_recover() {
+        RecordingSubscriber subscriber = new RecordingSubscriber();
+        dispatcher.subscribe(subscriber);
+
+        EjectionView view = service.eject(SERVICE, "i1", "maintenance");
+        service.recover(SERVICE, "i1");
+
+        assertThat(subscriber.events)
+                .containsExactly("snapshot:0", "ejected:" + view.instanceId(), "recovered:" + view.instanceId());
+    }
+
+    @Test
+    void should_not_fail_operation_when_publish_fails() {
+        registry.instances.put(SERVICE, List.of(instance("i1")));
+        dispatcher.subscribe(new ThrowingSubscriber());
+
+        assertThat(service.eject(SERVICE, "i1", "r")).isNotNull();
+        assertThat(service.getService(SERVICE, true).ejectedCount()).isEqualTo(1);
+        service.recover(SERVICE, "i1");
+        assertThat(service.getService(SERVICE, true).ejectedCount()).isZero();
+    }
+
     private static Instance instance(String instanceId) {
         return new Instance(instanceId, "10.0.0.1", 8080, InstanceStatus.UP, 100, Map.of());
+    }
+
+    private static final class RecordingSubscriber
+            implements org.mydotey.ai.artemis.management.domain.EjectionRuleSubscriber {
+
+        final List<String> events = new ArrayList<>();
+
+        @Override
+        public void onSnapshot(List<EjectionRecord> records) {
+            events.add("snapshot:" + records.size());
+        }
+
+        @Override
+        public void onEjected(EjectionRecord record) {
+            events.add("ejected:" + record.instance().instanceId());
+        }
+
+        @Override
+        public void onRecovered(InstanceKey instance) {
+            events.add("recovered:" + instance.instanceId());
+        }
+
+        @Override
+        public void close() {}
+    }
+
+    private static final class ThrowingSubscriber
+            implements org.mydotey.ai.artemis.management.domain.EjectionRuleSubscriber {
+
+        @Override
+        public void onSnapshot(List<EjectionRecord> records) {
+            throw new IllegalStateException("boom");
+        }
+
+        @Override
+        public void onEjected(EjectionRecord record) {
+            throw new IllegalStateException("boom");
+        }
+
+        @Override
+        public void onRecovered(InstanceKey instance) {
+            throw new IllegalStateException("boom");
+        }
+
+        @Override
+        public void close() {}
     }
 
     private static final class FakeRegistry implements RegistryQueryPort {

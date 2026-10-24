@@ -282,4 +282,73 @@ class ProjectionRegistryTest {
         return new DiscoveryQueryService(registry, new UpstreamStatuses())
                 .query(new QueryRequest(List.copyOf(services), labels, List.copyOf(clusters)));
     }
+
+    // ---- 摘除过滤（phase-6，D-E1/D-E5/D-E8）----
+
+    @Test
+    void should_filter_query_and_checksums_with_chain() {
+        registry.replaceAll(CLUSTER, List.of(service(ORDER, instance("i1"), instance("i2"))));
+        EjectionFilter filter = new EjectionFilter();
+        filter.replace(EjectionRules.of(List.of(new EjectionRule(ORDER, "i1", "test"))));
+        DiscoveryFilterChain chain = DiscoveryFilterChain.of(filter);
+        DiscoverySelector all = new DiscoverySelector(java.util.Set.of(), Map.of());
+
+        // 全量查询：过滤后仍有实例 → 返回过滤视图
+        List<ClusterServiceInstances> queried = registry.query(all, chain);
+        assertThat(queried).hasSize(1);
+        assertThat(queried.get(0).instances().instances())
+                .extracting(Instance::instanceId)
+                .containsExactly("i2");
+
+        // 显式命中：过滤后仍有实例 → 返回过滤视图（i1 已摘除、i2 在）
+        List<ClusterServiceInstances> explicit =
+                registry.query(new DiscoverySelector(java.util.Set.of(ORDER), Map.of()), chain);
+        assertThat(explicit).hasSize(1);
+        assertThat(explicit.get(0).instances().instances())
+                .extracting(Instance::instanceId)
+                .containsExactly("i2");
+
+        // checksum 过滤后口径（D-E1）：= 过滤视图 [i2] 的指纹
+        List<ServiceChecksum> checksums = registry.checksums(all, chain).stream()
+                .flatMap(cluster -> cluster.services().stream())
+                .toList();
+        assertThat(checksums)
+                .containsExactly(new ServiceChecksum(
+                        ORDER, ProjectionChecksum.of(new ServiceInstances(ORDER, List.of(instance("i2"))))));
+
+        // 全部实例摘除：显式命中 → 空实例集条目（对齐 labels 语义）；全量查询无条目
+        filter.replace(EjectionRules.of(
+                List.of(new EjectionRule(ORDER, "i1", "test"), new EjectionRule(ORDER, "i2", "test"))));
+        List<ClusterServiceInstances> emptied =
+                registry.query(new DiscoverySelector(java.util.Set.of(ORDER), Map.of()), chain);
+        assertThat(emptied).hasSize(1);
+        assertThat(emptied.get(0).instances().instances()).isEmpty();
+        assertThat(registry.query(all, chain)).isEmpty();
+    }
+
+    @Test
+    void should_read_cached_checksum_when_chain_has_no_effect() {
+        registry.replaceAll(CLUSTER, List.of(service(ORDER, instance("i1"), instance("i2"))));
+        EjectionFilter filter = new EjectionFilter(); // 空规则
+        DiscoveryFilterChain chain = DiscoveryFilterChain.of(filter);
+        DiscoverySelector all = new DiscoverySelector(java.util.Set.of(), Map.of());
+
+        int unfiltered = checksum(ORDER);
+        assertThat(unfiltered).isNotZero();
+
+        // 空规则（无过滤效果）→ 原引用 → 读条目缓存（D-E8）
+        List<ServiceChecksum> withChain = registry.checksums(all, chain).stream()
+                .flatMap(cluster -> cluster.services().stream())
+                .filter(service -> service.key().equals(ORDER))
+                .toList();
+        assertThat(withChain).containsExactly(new ServiceChecksum(ORDER, unfiltered));
+
+        // 摘除不命中任何投影实例 → 仍无效果 → 缓存
+        filter.replace(EjectionRules.of(List.of(new EjectionRule(USER, "u1", "test"))));
+        List<ServiceChecksum> missChain = registry.checksums(all, chain).stream()
+                .flatMap(cluster -> cluster.services().stream())
+                .filter(service -> service.key().equals(ORDER))
+                .toList();
+        assertThat(missChain).containsExactly(new ServiceChecksum(ORDER, unfiltered));
+    }
 }

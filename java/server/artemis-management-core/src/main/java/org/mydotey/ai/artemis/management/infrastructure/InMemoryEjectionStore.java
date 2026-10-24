@@ -19,6 +19,9 @@ import org.mydotey.ai.artemis.management.domain.ServiceKey;
  */
 public final class InMemoryEjectionStore implements EjectionStore {
 
+    private static final Comparator<ServiceKey> SERVICE_ORDER =
+            Comparator.comparing(ServiceKey::namespace).thenComparing(ServiceKey::service);
+
     private final ConcurrentMap<InstanceKey, EjectionRecord> records = new ConcurrentHashMap<>();
 
     @Override
@@ -44,5 +47,14 @@ public final class InMemoryEjectionStore implements EjectionStore {
     public Map<ServiceKey, Long> countByService() {
         return records.values().stream()
                 .collect(Collectors.groupingBy(record -> record.instance().service(), Collectors.counting()));
+    }
+
+    @Override
+    public List<EjectionRecord> findAll() {
+        return records.values().stream()
+                .sorted(Comparator.comparing(
+                                (EjectionRecord record) -> record.instance().service(), SERVICE_ORDER)
+                        .thenComparing(record -> record.instance().instanceId()))
+                .toList();
     }
 }

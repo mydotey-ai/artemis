@@ -34,34 +34,45 @@ public final class ProjectionRegistry {
         projection(cluster).apply(batch);
     }
 
-    /** 选择器查询（D-D7）：显式 services 命中即返回条目（labels 过滤后可为空实例集）；
-     * 空条目仅产生于 labels 过滤；全量查询不返回过滤后空条目。clusters 非空时未命中
-     * 来源 cluster 整体跳过（phase-5 union 过滤）。 */
-    public List<ClusterServiceInstances> query(DiscoverySelector selector) {
+    /** 选择器查询（D-D7）：显式 services 命中即返回条目（labels/过滤链过滤后可为空实例集）；
+     * 全量查询不返回过滤后空条目。clusters 非空时未命中来源 cluster 整体跳过（phase-5
+     * union 过滤）。过滤链口径 = 发现视图（D-E1，labels 与 chain 串联、顺序可交换）。 */
+    public List<ClusterServiceInstances> query(DiscoverySelector selector, DiscoveryFilterChain chain) {
         List<ClusterServiceInstances> result = new ArrayList<>();
         for (Map.Entry<String, ClusterProjection> entry : clusters.entrySet()) {
             if (selector.matchesCluster(entry.getKey())) {
-                entry.getValue().query(entry.getKey(), selector, result);
+                entry.getValue().query(entry.getKey(), selector, chain, result);
             }
         }
         return result;
     }
 
+    /** 便捷重载（无过滤链 = 空链直通，供测试/内部路径）。 */
+    public List<ClusterServiceInstances> query(DiscoverySelector selector) {
+        return query(selector, DiscoveryFilterChain.empty());
+    }
+
     /**
-     * 对账表拉取（D-F1/D-F3）：labels 空 → 读条目缓存 checksum（零计算）；labels 非空 →
-     * 过滤视图现算。只含有实例条目，滤空缺项 = 视图无实例。clusters 过滤同 query（phase-5）。
+     * 对账表拉取（D-F1/D-F3）：labels 空且过滤链无效果（原引用）→ 读条目缓存 checksum
+     * （零计算，D-E8）；否则过滤视图现算。只含有实例条目，滤空缺项 = 视图无实例。
+     * clusters 过滤同 query（phase-5）。
      */
-    public List<ClusterChecksums> checksums(DiscoverySelector selector) {
+    public List<ClusterChecksums> checksums(DiscoverySelector selector, DiscoveryFilterChain chain) {
         List<ClusterChecksums> result = new ArrayList<>();
         for (Map.Entry<String, ClusterProjection> entry : clusters.entrySet()) {
             if (selector.matchesCluster(entry.getKey())) {
-                List<ServiceChecksum> services = entry.getValue().checksums(selector);
+                List<ServiceChecksum> services = entry.getValue().checksums(selector, chain);
                 if (!services.isEmpty()) {
                     result.add(new ClusterChecksums(entry.getKey(), services));
                 }
             }
         }
         return result;
+    }
+
+    /** 便捷重载（无过滤链 = 空链直通，供测试/内部路径）。 */
+    public List<ClusterChecksums> checksums(DiscoverySelector selector) {
+        return checksums(selector, DiscoveryFilterChain.empty());
     }
 
     public Set<String> clusterIds() {
@@ -195,17 +206,17 @@ public final class ProjectionRegistry {
             return List.copyOf(services);
         }
 
-        List<ServiceChecksum> checksums(DiscoverySelector selector) {
+        List<ServiceChecksum> checksums(DiscoverySelector selector, DiscoveryFilterChain chain) {
             List<ServiceChecksum> result = new ArrayList<>();
             if (selector.services().isEmpty()) {
                 for (Map.Entry<ServiceKey, Entry> entry : table.entrySet()) {
-                    addChecksum(result, entry.getKey(), entry.getValue(), selector);
+                    addChecksum(result, entry.getKey(), entry.getValue(), selector, chain);
                 }
             } else {
                 for (ServiceKey key : selector.services()) {
                     Entry entry = table.get(key);
                     if (entry != null) {
-                        addChecksum(result, key, entry, selector);
+                        addChecksum(result, key, entry, selector, chain);
                     }
                 }
             }
@@ -213,45 +224,66 @@ public final class ProjectionRegistry {
         }
 
         private static void addChecksum(
-                List<ServiceChecksum> result, ServiceKey key, Entry entry, DiscoverySelector selector) {
+                List<ServiceChecksum> result,
+                ServiceKey key,
+                Entry entry,
+                DiscoverySelector selector,
+                DiscoveryFilterChain chain) {
             if (selector.labels().isEmpty()) {
-                result.add(new ServiceChecksum(key, entry.checksum())); // 读缓存（零计算，D-F3）
+                List<Instance> filtered = chain.filter(key, entry.instances().instances());
+                if (filtered == entry.instances().instances()) {
+                    result.add(new ServiceChecksum(key, entry.checksum())); // 读缓存（零计算，D-F3/D-E8）
+                } else if (!filtered.isEmpty()) { // 滤空缺项 = 视图无实例（D-F1）
+                    result.add(new ServiceChecksum(key, ProjectionChecksum.of(new ServiceInstances(key, filtered))));
+                }
                 return;
             }
-            ServiceInstances filtered = filter(entry.instances(), selector.labels());
-            if (!filtered.instances().isEmpty()) { // 滤空缺项 = 视图无实例（D-F1）
+            ServiceInstances filtered = filter(entry.instances(), selector.labels(), chain);
+            if (!filtered.instances().isEmpty()) {
                 result.add(new ServiceChecksum(key, ProjectionChecksum.of(filtered)));
             }
         }
 
-        void query(String cluster, DiscoverySelector selector, List<ClusterServiceInstances> result) {
+        void query(
+                String cluster,
+                DiscoverySelector selector,
+                DiscoveryFilterChain chain,
+                List<ClusterServiceInstances> result) {
             if (!selector.services().isEmpty()) {
-                // 显式集合（已去重）：命中条目即返回（labels 过滤后可为空实例集）；条目不存在不返回
+                // 显式集合（已去重）：命中条目即返回（过滤后可为空实例集）；条目不存在不返回
                 for (ServiceKey key : selector.services()) {
                     ServiceInstances service = instances(key);
                     if (service != null) {
-                        result.add(new ClusterServiceInstances(cluster, filter(service, selector.labels())));
+                        result.add(new ClusterServiceInstances(cluster, filter(service, selector.labels(), chain)));
                     }
                 }
                 return;
             }
             // 全量查询：过滤后为空不返回（防响应膨胀）
             for (Entry entry : table.values()) {
-                ServiceInstances filtered = filter(entry.instances(), selector.labels());
+                ServiceInstances filtered = filter(entry.instances(), selector.labels(), chain);
                 if (!filtered.instances().isEmpty()) {
                     result.add(new ClusterServiceInstances(cluster, filtered));
                 }
             }
         }
 
-        private static ServiceInstances filter(ServiceInstances service, Map<String, String> labels) {
+        /** labels + 过滤链串联（交集可交换，D-E1）；双双无效果返回原 ServiceInstances。 */
+        private static ServiceInstances filter(
+                ServiceInstances service, Map<String, String> labels, DiscoveryFilterChain chain) {
+            List<Instance> candidates;
             if (labels.isEmpty()) {
-                return service;
+                candidates = service.instances();
+            } else {
+                candidates = service.instances().stream()
+                        .filter(instance -> instance.metadata().entrySet().containsAll(labels.entrySet()))
+                        .toList();
             }
-            List<Instance> matched = service.instances().stream()
-                    .filter(instance -> instance.metadata().entrySet().containsAll(labels.entrySet()))
-                    .toList();
-            return new ServiceInstances(service.key(), matched);
+            List<Instance> filtered = chain.filter(service.key(), candidates);
+            if (filtered == candidates) {
+                return labels.isEmpty() ? service : new ServiceInstances(service.key(), candidates);
+            }
+            return new ServiceInstances(service.key(), filtered);
         }
     }
 }

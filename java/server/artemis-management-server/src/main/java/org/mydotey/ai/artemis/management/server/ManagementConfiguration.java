@@ -5,6 +5,7 @@ import org.mydotey.ai.artemis.management.application.ManagementService;
 import org.mydotey.ai.artemis.management.application.ManagementServiceImpl;
 import org.mydotey.ai.artemis.management.domain.EjectionStore;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryPort;
+import org.mydotey.ai.artemis.management.infrastructure.EjectionRuleDispatcher;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryEjectionStore;
 import org.mydotey.ai.artemis.management.server.auth.ManagementAuthConfig;
 import org.mydotey.ai.artemis.management.server.config.ManagementConfigurationSources;
@@ -19,7 +20,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 
 /**
- * 装配层（IoC）：SCF 配置、摘除存储、registry 查询客户端、应用服务与 HTTP 认证。
+ * 装配层（IoC）：SCF 配置、摘除存储与规则分发、registry 查询客户端、应用服务与 HTTP 认证。
+ * 规则流 gRPC 装配条件启用（{@code ManagementGrpcConfiguration}）。
  */
 @Configuration(proxyBeanMethods = false)
 public class ManagementConfiguration {
@@ -46,6 +48,12 @@ public class ManagementConfiguration {
         return new InMemoryEjectionStore();
     }
 
+    /** 规则分发无条件装配（无 gRPC 端口时零订阅者，摘除/恢复通知为空操作）。 */
+    @Bean(destroyMethod = "close")
+    EjectionRuleDispatcher ejectionRuleDispatcher(EjectionStore ejectionStore) {
+        return new EjectionRuleDispatcher(ejectionStore);
+    }
+
     @Bean
     ManagementAuthConfig managementAuthConfig(StringProperties properties) {
         return new ManagementAuthConfig(properties);
@@ -62,8 +70,12 @@ public class ManagementConfiguration {
     }
 
     @Bean
-    ManagementService managementService(RegistryQueryPort registryQueryPort, EjectionStore ejectionStore, Clock clock) {
-        return new ManagementServiceImpl(registryQueryPort, ejectionStore, clock);
+    ManagementService managementService(
+            RegistryQueryPort registryQueryPort,
+            EjectionStore ejectionStore,
+            EjectionRuleDispatcher ejectionRuleDispatcher,
+            Clock clock) {
+        return new ManagementServiceImpl(registryQueryPort, ejectionStore, ejectionRuleDispatcher, clock);
     }
 
     @Bean

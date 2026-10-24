@@ -55,4 +55,21 @@ class InMemoryEjectionStoreTest {
         assertThat(records).extracting(record -> record.instance().instanceId()).containsExactly("i1", "i2");
         assertThat(store.countByService()).containsEntry(SERVICE, 2L).containsEntry(new ServiceKey("ns", "other"), 1L);
     }
+
+    @Test
+    void should_find_all_sorted_by_service_then_instance() {
+        store.eject(new EjectionRecord(new InstanceKey(SERVICE, "i2"), "r2", NOW));
+        store.eject(new EjectionRecord(new InstanceKey(new ServiceKey("a", "first"), "z1"), "r", NOW));
+        store.eject(new EjectionRecord(new InstanceKey(SERVICE, "i1"), "r1", NOW));
+
+        assertThat(store.findAll())
+                .extracting(
+                        record -> record.instance().service().namespace(),
+                        record -> record.instance().service().service(),
+                        record -> record.instance().instanceId())
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple("a", "first", "z1"),
+                        org.assertj.core.groups.Tuple.tuple("ns", "svc", "i1"),
+                        org.assertj.core.groups.Tuple.tuple("ns", "svc", "i2"));
+    }
 }

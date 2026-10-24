@@ -1,6 +1,6 @@
 # discovery 查询 API
 
-版本: 1.2    更新时间: 2026-10-24
+版本: 1.3    更新时间: 2026-10-24
 
 > 本文定义 discovery-service 的查询契约（`discovery.v1`，SDK 与控制面消费）。v0.3 phase-2 交付 unary 查询；订阅推送 rpc 随 phase-3 以新增 rpc 演进（wire 兼容）。
 
@@ -34,6 +34,8 @@
 
 **新鲜度元信息**（v0.3 phase-4）：`data.upstreams` 为 `UpstreamStatus` 列表（`cluster` + `UpstreamSyncState`：`SYNCED` 实时 / `SYNCING`、`DISCONNECTED` 投影冻结陈旧）——**非 `SYNCED` 即数据可能陈旧**（消费方感知数据降级；快照顺序不保证，按 cluster 键控消费）。语义细节与枚举值见 [discovery-reconciliation-api.md](discovery-reconciliation-api.md) §4。
 
+**摘除过滤**（v0.3 phase-6）：配置 management 上游（`management.endpoints`）时，响应为**摘除规则过滤后的视图**——规则按 `(namespace, service, instanceId)` 匹配所有来源 cluster 的同键实例（跨 cluster 生效）；management 不可用时沿用最后已知规则（fail-open）。未配置 = 不过滤。规则流契约见 [ejection-rule-stream-api.md](ejection-rule-stream-api.md)。
+
 **空条目规则**（条目存在性 = 服务存在性，≥1 实例）：
 
 | 场景 | 返回 |
@@ -51,6 +53,10 @@
 | `upstream.establishTimeoutMs` | 10000 | watch 建立确认超时（静态） |
 | `upstream.bootstrapTimeoutMs` | 60000 | bootstrap 流 deadline（静态） |
 | `upstream.reconnectBackoffMinMs/MaxMs` | 1000/10000 | 断流重连全抖动指数退避（静态） |
+| `management.endpoints` | —（可选） | management 规则流端点 `host:port` 逗号分隔（v0.3 phase-6，0..1）：未配置 = 不订阅不过滤；配置 = 订阅摘除规则并对查询/推送/对账一致过滤；端点非法启动失败（静态） |
+| `management.auth.enabled/username/password` | `false`/—/— | management 内部端口凭证（动态） |
+| `management.reconnectBackoffMinMs/MaxMs` | 1000/10000 | 规则流断连重连退避（静态） |
+| `management.maxInboundMessageBytes` | 16777216 | 规则流 channel 消息上限（静态；快照超限 = 重连循环，须调大） |
 | `projection.queueCapacity` | 8192 | 变更事件队列容量（静态；满 = 慢消费断流重连） |
 
 管理端口（actuator health/readiness/prometheus）默认 9096 仅绑本机。
@@ -59,6 +65,7 @@
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.3 | 2026-10-24 | v0.3 phase-6：查询语义补摘除过滤（跨 cluster 生效 + fail-open）；配置表补 `management.*` 四键 |
 | 1.2 | 2026-10-24 | phase-5：选择器新增 `clusters` 来源过滤（空 = union）；上游配置改 JSON map `registry.clusters`（替换 `upstream.clusterId`/`upstream.endpoints`） |
 | 1.1 | 2026-10-24 | phase-4：`QueryResponseData.upstreams` 新鲜度元信息字段（wire 兼容只增） |
 | 1.0 | 2026-10-23 | 初版：discovery.v1 查询契约（选择器语义、空条目规则、readiness/认证、上游配置） |

@@ -17,6 +17,9 @@ class SubscriptionManagerTest {
 
     private final ProjectionRegistry registry = new ProjectionRegistry();
     private final SubscriptionManager manager = new SubscriptionManager(registry);
+    private final EjectionFilter ejectionFilter = new EjectionFilter();
+    private final SubscriptionManager filteredManager =
+            new SubscriptionManager(registry, DiscoveryFilterChain.of(ejectionFilter));
 
     // ---- 基线（D-S6）----
 
@@ -171,6 +174,91 @@ class SubscriptionManagerTest {
         manager.subscribe(new DiscoverySelector(Set.of(), Map.of(), Set.of(CLUSTER)), target);
 
         assertThat(target.events).containsExactly("established", "default/order-service:[i1=NEW]");
+    }
+
+    // ---- 摘除过滤（phase-6，D-E1/D-E6）----
+
+    @Test
+    void should_baseline_only_visible_instances_when_filtered() {
+        registry.replaceAll(CLUSTER, List.of(service(ORDER, instance("i1", "a"), instance("i2", "a"))));
+        ejectionFilter.replace(EjectionRules.of(List.of(new EjectionRule(ORDER, "i1", "test"))));
+
+        RecordingTarget target = new RecordingTarget();
+        filteredManager.subscribe(allServices(), target);
+
+        assertThat(target.events).containsExactly("established", "default/order-service:[i2=NEW]");
+    }
+
+    @Test
+    void should_translate_projection_changes_with_ejection_filter() {
+        RecordingTarget target = new RecordingTarget();
+        filteredManager.subscribe(allServices(), target);
+        target.events.clear();
+
+        ejectionFilter.replace(EjectionRules.of(List.of(new EjectionRule(ORDER, "i2", "test"))));
+
+        // NEW 已摘除：无事件
+        filteredManager.onChanges(CLUSTER, List.of(batch(change(instance("i2", "a"), ChangeType.NEW))), key -> null);
+        assertThat(target.events).isEmpty();
+
+        // UPDATE 转为摘除（新值不可见、旧值可见）：退出视图 DELETE(previous)
+        registry.replaceAll(CLUSTER, List.of(service(ORDER, instance("i2", "a"))));
+        ejectionFilter.replace(EjectionRules.EMPTY);
+        filteredManager.onChanges(
+                CLUSTER,
+                List.of(batch(change(instance("i2", "a"), ChangeType.UPDATE))),
+                key -> registry.service(CLUSTER, key));
+        assertThat(target.events).containsExactly("default/order-service:[i2=UPDATE]");
+        target.events.clear();
+
+        ejectionFilter.replace(EjectionRules.of(List.of(new EjectionRule(ORDER, "i2", "test"))));
+        // UPDATE 已摘除实例：previous/new 同为摘除态（同一实例、同一规则快照），无视图效果
+        filteredManager.onChanges(
+                CLUSTER,
+                List.of(batch(change(instance("i2", "a"), ChangeType.UPDATE))),
+                key -> registry.service(CLUSTER, key));
+        assertThat(target.events).isEmpty();
+
+        // DELETE 已摘除实例：无事件（不在视图，删除无效果）
+        target.events.clear();
+        filteredManager.onChanges(
+                CLUSTER,
+                List.of(batch(change(new Instance("i2", "", 0, null, 0, Map.of()), ChangeType.DELETE))),
+                key -> registry.service(CLUSTER, key));
+        assertThat(target.events).isEmpty();
+    }
+
+    @Test
+    void should_deliver_view_changes_on_rules_change() {
+        registry.replaceAll(CLUSTER, List.of(service(ORDER, instance("i1", "a"), instance("i2", "b"))));
+        registry.replaceAll("cluster-b", List.of(service(ORDER, instance("i1", "a"))));
+
+        RecordingTarget all = new RecordingTarget();
+        RecordingTarget grouped = new RecordingTarget();
+        RecordingTarget clusterOnly = new RecordingTarget();
+        filteredManager.subscribe(allServices(), all);
+        filteredManager.subscribe(labels("group", "a"), grouped);
+        filteredManager.subscribe(new DiscoverySelector(Set.of(), Map.of(), Set.of("cluster-b")), clusterOnly);
+        all.events.clear();
+        grouped.events.clear();
+        clusterOnly.events.clear();
+
+        // 视图语义直投（D-E6）：eject i1 → DELETE、recover i2 → NEW；labels/cluster 过滤照做
+        filteredManager.runWithFanout(() -> filteredManager.onViewChanges(
+                CLUSTER,
+                List.of(
+                        batch(change(instance("i1", "a"), ChangeType.DELETE)),
+                        batch(change(instance("i2", "b"), ChangeType.NEW)))));
+
+        assertThat(all.events).containsExactly("default/order-service:[i1=DELETE]", "default/order-service:[i2=NEW]");
+        // labels: i1 匹配 group=a 收 DELETE、i2 group=b 不匹配不推
+        assertThat(grouped.events).containsExactly("default/order-service:[i1=DELETE]");
+        // cluster: cluster-b 订阅者收本 cluster 的视图变更（同一 service 逐 cluster 独立投递）
+        assertThat(clusterOnly.events).isEmpty();
+
+        filteredManager.runWithFanout(() -> filteredManager.onViewChanges(
+                "cluster-b", List.of(batch(change(instance("i1", "a"), ChangeType.DELETE)))));
+        assertThat(clusterOnly.events).containsExactly("default/order-service:[i1=DELETE]");
     }
 
     // ---- 设施 ----
