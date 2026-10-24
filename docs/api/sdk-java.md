@@ -1,6 +1,6 @@
 # Artemis Java SDK（注册侧）
 
-版本: 1.4    更新时间: 2026-10-24
+版本: 1.5    更新时间: 2026-10-24
 
 > `artemis-client` 的注册侧 Java 8 SDK（v0.3 phase-8 起类型更名 `ArtemisClient` → `RegistryClient`）：本地实例集为唯一事实源，显式操作 + 心跳全量上报。协议契约（`registry.v1`）见[proto 契约规范](../dev/proto-contract.md)，内部只读查询契约见 [registry-query-api.md](registry-query-api.md)。**发现侧（消费方）SDK 见 [sdk-java-discovery.md](sdk-java-discovery.md)**——两者共用同一 artifact。
 
@@ -64,13 +64,14 @@ client.close();                                  // 优雅下线：停心跳 →
 
 ### Spring Boot 自动装配
 
-引入 starter 后无需手工创建 client：
+引入 starter 后无需手工创建 client（v0.3 phase-9 起 starter 双用途：注册/发现两侧按各自 `addresses` 是否配置独立装配，两侧可共存）：
 
 ```properties
 # application.properties（也支持 YAML kebab-case：artemis.client.registry.addresses）
 artemis.client.registry.addresses=http://artemis.example.com
 artemis.client.auth.username=artemis
 artemis.client.auth.password=artemis
+# 只做发现的消费方不必配 registry 地址，配 artemis.client.discovery.addresses 即可（见 sdk-java-discovery.md）
 ```
 
 ```java
@@ -79,9 +80,10 @@ client.register(instance);
 ```
 
 - 自动接管生命周期（`start`/`close`；关闭经 `ContextClosedEvent` 在容器关闭第一时机主动注销）、把 Boot/actuator 的 `MeterRegistry` 注入 SDK（无 registry 或多个同型 bean 时回落 `Metrics.globalRegistry`）。
-- `artemis.client.enabled=false` 关闭自动装配；宿主自定义 `RegistryClient` bean 时自动装配让位。
-- 自动配置类名保持 `ArtemisClientAutoConfiguration`（v0.3 phase-8 用户确认；bean 返回类型为 `RegistryClient`）。
-- 未配置 `registry.addresses` 时启动 fail-fast（`IllegalArgumentException`），不会静默不注册。
+- `artemis.client.enabled=false` 关闭两侧自动装配；宿主自定义 `RegistryClient` / `DiscoveryClient` bean 时对应侧让位（独立）。
+- 自动配置类名保持 `ArtemisClientAutoConfiguration`（v0.3 phase-8 用户确认）。
+- **条件语义（v0.3 phase-9 修订）**：各侧按「对应 `addresses` 是否配置」装配——缺地址不创建该侧 client（不再 fail-fast，starter 双用途后只做发现的消费方不应被迫配 registry 地址）；地址**已配置但非法**仍在 client 构造期 fail-fast（`IllegalArgumentException`）。`addresses` 为逗号分隔字符串键（YAML 列表写法不被支持）。
+- **配置桥让位**：starter 的 SCF 配置桥 bean 名 `artemisClientStringProperties`——宿主定义**同名** bean 即接管 SCF source 链（client 自动跟随接管 bean）；宿主定义**异名** `StringProperties` bean（其它用途）时与 starter 桥共存，client 按名绑定 starter 桥不误注入。宿主接管 source 且 `addresses` 不经 Spring 配置面时，请同时自定义 client bean（装配条件只看 Spring `Environment`）。
 
 ## 3. 配置
 
@@ -157,12 +159,13 @@ client.register(instance);
 - 同 JVM 多 client 共用缺省配置源时同键共享；多 client 场景请注入隔离的 `StringProperties` 并配置不同 `artemis.client.clientId`（否则指标与发现侧快照目录会混用）。
 - 注册侧不做磁盘快照（注册事实源是业务代码，重启重注册 + 心跳幂等收敛自愈）。
 - `InstanceStatus` 相对早期版本新增 `UNSPECIFIED`/`UNKNOWN`（additive；注册侧仍以 UP/DOWN 上报，发现侧保留 wire 原值）。
-- 服务发现（消费方）SDK 已随 v0.3 phase-8 交付，见 [sdk-java-discovery.md](sdk-java-discovery.md)；发现侧 starter 自动装配归 phase-9。
+- 服务发现（消费方）SDK 已随 v0.3 phase-8 交付，见 [sdk-java-discovery.md](sdk-java-discovery.md)；发现侧 starter 自动装配随 v0.3 phase-9 交付（同一 starter 双侧装配）。
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.5 | 2026-10-24 | v0.3 phase-9：starter 双用途条件装配（缺地址不再 fail-fast，非法仍 fail-fast）、配置桥 `artemisClientStringProperties` 同名让位/异名共存按名绑定、关闭监听只关 starter 自建 bean |
 | 1.4 | 2026-10-24 | v0.3 phase-8：`ArtemisClient` → `RegistryClient`、`newClient` → `newRegistryClient`；新增 `artemis.client.clientId`；`InstanceStatus` 增 UNSPECIFIED/UNKNOWN；链接发现侧 SDK 文档；自动配置类名保持不变 |
 | 1.3 | 2026-10-23 | v0.2 phase-6：starter 关闭改由 `ContextClosedEvent` 第一时机触发 `close()`（注销提前到程序可用时），destroyMethod 为幂等兜底 |
 | 1.2 | 2026-10-23 | v0.2 phase-5：地址改前置寻址 url（`registry.addresses`，原 `serverAddresses` 弃用）；新增「地址与容灾」三级管线与 TTL 轮换节；配置表补 registry.* 六键；指标补 rotation/circuit/nodelist |

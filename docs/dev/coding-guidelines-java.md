@@ -1,6 +1,6 @@
 # Java 开发规范
 
-版本: 1.25    更新时间: 2026-10-20
+版本: 1.26    更新时间: 2026-10-24
 
 > 本文是新一代 Artemis Java 实现的开发规范：包结构、代码风格、并发与线程、错误处理、日志、测试、proto 兼容、SDK 特殊约束与配置管理。技术选型（组件与版本）见[Java 技术选型](tech-stack-java.md)；Git 分支与 commit 规范见 `.claude/rules/git.md`，不在此重复。
 
@@ -111,7 +111,7 @@ proto 的 wire 兼容规则与变更流程是**跨语言不变量**，单一来�
 - 回调有界队列（修复原产品局限 #13「单线程无界队列，慢消费者拖垮全部通知」）：订阅回调在 SDK 专属 executor 执行，队列有界、满时按配置丢弃最旧 + 计数，不阻塞推送线程。
 - 生命周期 API（close/优雅下线）是 v0.1 交付物，资源（连接、线程、磁盘快照句柄）在 close 全量释放，禁止遗留非 daemon 线程。
 - starter 自动装配双注册（`AutoConfiguration.imports` + `spring.factories`），配置项前缀统一 `artemis.client.*`。
-- starter 编译基线 Spring Boot **2.7.18**（2.x 末版，Java 8 兼容；版本在 `artemis-client-parent` 自钉、不 import SB BOM）。自动配置类用 `@Configuration(proxyBeanMethods=false)` 而非 `@AutoConfiguration`（后者 2.7 才引入，会破坏老 2.x 运行时）；配置经 Spring `Environment` source 进 SCF，**不用** `@ConfigurationProperties`/`@Value`（自定义配置的 SCF 单一来源纪律，§10）。`StringProperties` 由 starter 独占创建（不按 missing-bean 复用宿主通用实例），覆盖出口是自定义 `ArtemisClient` bean。
+- starter 编译基线 Spring Boot **2.7.18**（2.x 末版，Java 8 兼容；版本在 `artemis-client-parent` 自钉、不 import SB BOM）。自动配置类用 `@Configuration(proxyBeanMethods=false)` 而非 `@AutoConfiguration`（后者 2.7 才引入，会破坏老 2.x 运行时）；配置经 Spring `Environment` source 进 SCF，**不用** `@ConfigurationProperties`/`@Value`（自定义配置的 SCF 单一来源纪律，§10）。`StringProperties` 配置桥按名让位：宿主定义同名 bean `artemisClientStringProperties` 即接管 SCF source 链，client 经 `@Qualifier` 按名绑定（同名跟随接管、异名共存不误注入，v0.3 phase-9 定案）；client 覆盖出口是自定义 `RegistryClient` / `DiscoveryClient` bean（对应侧独立让位）。
 
 ## 10. 配置管理规范（SCF）
 
@@ -151,6 +151,7 @@ proto 的 wire 兼容规则与变更流程是**跨语言不变量**，单一来�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.26 | 2026-10-24 | v0.3 phase-9：§9 修正 starter 装配措辞——`StringProperties` 配置桥同名 bean 让位 + client `@Qualifier` 按名绑定、覆盖出口改 `RegistryClient`/`DiscoveryClient`（对应侧独立让位） |
 | 1.25 | 2026-10-20 | v0.2 phase-1：§1 补多监听端口装配纪律（官方 factory/lifecycle + 主 server 排除内部服务） |
 | 1.24 | 2026-10-19 | §9 补 starter 编译基线（SB 2.7.18、双注册、`@Configuration` 而非 `@AutoConfiguration`、配置走 SCF 不用 `@ConfigurationProperties`） |
 | 1.23 | 2026-10-19 | §9 SDK 依赖清单补 micrometer-core（Micrometer 库模式替换自建 metrics 接口，技术选型 #34） |

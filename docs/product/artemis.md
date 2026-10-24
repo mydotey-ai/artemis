@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.23    更新时间: 2026-10-24
+版本: 1.24    更新时间: 2026-10-24
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -51,11 +51,12 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 | `artemis-discovery-core` / `-server` | 25 | discovery 投影内核 / Spring Boot 装配 |
 | `artemis-management-core` / `-server` | 25 | 治理面内核 / Spring Boot 装配 |
 | `artemis-client` | 8 | 注册 + 发现统一 SDK（零 Spring） |
-| `spring-boot-starter-artemis-client` | 8 | client 的 Spring Boot 集成（自动装配、生命周期托管、MeterRegistry 注入） |
+| `spring-boot-starter-artemis-client` | 8 | client 的 Spring Boot 集成（双侧自动装配、生命周期托管、MeterRegistry 注入） |
+| `artemis-dist` | 25 | all-in-one 组合入口：同 JVM 起 registry + discovery 双上下文，产出单包可执行 jar |
 
 ## 4. 交付状态
 
-**v0.2（registry 集群）已交付**（2026-10-23 版本收尾，验收对照见 `docs/milestones/v0.2/plan.md`）；v0.3（discovery）进行中，phase-1–8 已交付，phase-9（发现侧 starter + all-in-one 打包 + 版本验收）待收尾；进度以 `docs/milestones/dev-state.md` 为准。
+**v0.2（registry 集群）已交付**（2026-10-23 版本收尾，验收对照见 `docs/milestones/v0.2/plan.md`）；v0.3（discovery）进行中，phase-1–9 已交付（版本验收收尾中）；进度以 `docs/milestones/dev-state.md` 为准。
 
 **phase-1（脚手架 + proto 契约骨架）已交付**：`java/` 十模块 Maven reactor 骨架（parent + 各 core/server/client/starter）与 `proto/` 六组契约骨架（v0.1 定稿 `common.v1` + `registry.v1`，其余四组占位）；`mvn -f java/pom.xml verify` 全绿，enforcer 模块边界断言（core 禁 Spring、client 禁服务端模块）生效。
 
@@ -237,12 +238,19 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **discovery 静态节点目录**：`artemis.discovery.nodes`（`host:port` 列表，无节点 id/self，地址即标识；未配置 = 空目录）+ 外部 HTTP `GET /cluster/nodes`（`discovery.v1 DiscoveryNodesResponse` protobuf、复用外部 Basic、未就绪 503）。仍是部署声明：不组集群、无节点间协议、无存活探测（ADR-020 修订 ADR-002）。
 - **统一 client 身份**：`artemis.client.clientId`（默认 `default`），注册/发现共用，作为指标 `client` 标签与快照目录隔离键；注册侧公开接口更名 `ArtemisClient` → `RegistryClient`、`newClient` → `newRegistryClient`（starter 自动配置类名保持 `ArtemisClientAutoConfiguration`）。
 - **契约与文档**：`discovery.v1` 增 `DiscoveryNode`/`DiscoveryNodesResponse`（只增，无新 service）；新增 [discovery-nodes-api.md](../api/discovery-nodes-api.md)、[sdk-java-discovery.md](../api/sdk-java-discovery.md)，注册侧 [sdk-java.md](../api/sdk-java.md) 同步更名/clientId。
-- **工程形态**：client 63 单测 + 7 进程内 fake discovery IT（真实 gRPC + 真实 HTTP 节点目录：推送、断连收敛、换址、快照回放、全挂兜底、checksum 自愈、多订阅隔离）；discovery-server 9 单测 + 2 节点目录 HTTP IT；全量 `dev-test.sh all` 绿。发现侧 Spring Boot starter 自动装配仍归 phase-9。
+- **工程形态**：client 63 单测 + 7 进程内 fake discovery IT（真实 gRPC + 真实 HTTP 节点目录：推送、断连收敛、换址、快照回放、全挂兜底、checksum 自愈、多订阅隔离）；discovery-server 9 单测 + 2 节点目录 HTTP IT；全量 `dev-test.sh all` 绿。发现侧 Spring Boot starter 自动装配随 phase-9 交付（见下）。
+
+**v0.3 phase-9（发现侧 starter + all-in-one 打包）已交付**：
+
+- **starter 双用途**（`spring-boot-starter-artemis-client` 不变）：注册/发现两侧按「对应 `addresses` 是否配置」独立装配、可共存——只做发现的消费方不必配 registry 地址；缺地址不再 fail-fast（v0.1 语义修订），已配置但非法仍构造期 fail-fast；两侧独立让位宿主自定义 `RegistryClient`/`DiscoveryClient` bean。SCF 配置桥 `artemisClientStringProperties` 同名 bean 让位（接管 source 链）、异名共存时 client `@Qualifier` 按名绑定不误注入；关停监听只关 starter 自建 bean、关闭失败不阻断另一侧。发现侧只建 client 不代建订阅。用法见 [sdk-java.md](../api/sdk-java.md) / [sdk-java-discovery.md](../api/sdk-java-discovery.md)。
+- **all-in-one 单进程**（新增 `artemis-dist` 模块）：`artemis-dist-<version>-exec.jar` 单包起 registry + discovery——同 JVM 两个独立 Spring 上下文、端口全独立（registry 9090/8080/9091/9093、discovery 9095/8090/9096）、彼此走标准网络协议不进程内直连（ADR-001）；上游固定同进程 registry、多集群聚合不在该形态提供；组合端口经 `artemis.dist.*`（SCF：系统属性 > 环境变量 > 工作目录 `artemis.properties`，非法 fail-fast）；启动失败回滚不留半启进程、SIGTERM 按 discovery → registry 优雅关停。单服务入口与打包不变。详见 [all-in-one.md](../api/all-in-one.md)。
+- **工程形态**：starter 17 单测（双侧条件/让位/接管/共存/关闭语义）；dist 3 服务级 IT（双端口起停、registry 注册 → discovery 网络可见、幂等关停）；单包冒烟（7 端口监听 + 双 actuator 200 + SIGTERM 11s 优雅退出）；全量 `dev-test.sh all` 绿。
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.24 | 2026-10-24 | v0.3 phase-9 交付：starter 双用途条件装配（缺地址不 fail-fast、配置桥同名让位/按名绑定）、`artemis-dist` all-in-one 单包（同 JVM 双上下文、`artemis.dist.*`）；新建 api/all-in-one.md |
 | 1.23 | 2026-10-24 | v0.3 phase-8 交付：发现侧 Java 8 SDK（订阅/缓存/快照/兜底/地址容灾）、discovery 静态节点目录（ADR-020）、`RegistryClient` 更名与 `clientId`；新建 api/sdk-java-discovery.md、api/discovery-nodes-api.md |
 | 1.22 | 2026-10-24 | v0.3 phase-7 交付：discovery 只读发现管理面（订阅关系/服务视图/上游与规则源状态）；新建 api/discovery-admin-api.md |
 | 1.21 | 2026-10-24 | v0.3 phase-6 交付：management 摘除规则流 + discovery 过滤器链（三出口一致过滤、跨 cluster 规则、fail-open/最后已知规则、0..1 可选） |

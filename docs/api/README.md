@@ -12,4 +12,5 @@
 | [discovery-admin-api.md](discovery-admin-api.md) | v0.3 | discovery 只读发现管理面 HTTP API（订阅关系/服务视图/上游与规则源状态） |
 | [discovery-nodes-api.md](discovery-nodes-api.md) | v0.3 | discovery 静态节点目录 HTTP API（SDK 前置寻址，ADR-020：`GET /cluster/nodes`、Basic、readiness 503） |
 | [sdk-java.md](sdk-java.md) | v0.1 | Java 8 **注册侧** SDK：`RegistryClient` 公开 API、SCF 配置项、fire-and-forget 语义、生命周期、Micrometer 指标与 Spring Boot starter 自动装配 |
-| [sdk-java-discovery.md](sdk-java-discovery.md) | v0.3 | Java 8 **发现侧** SDK：订阅推送/本地视图/磁盘快照/兜底拉取/地址容灾、`DiscoveryClient`/`Subscription` API、配置与指标 |
+| [sdk-java-discovery.md](sdk-java-discovery.md) | v0.3 | Java 8 **发现侧** SDK：订阅推送/本地视图/磁盘快照/兜底拉取/地址容灾、`DiscoveryClient`/`Subscription` API、配置与指标、starter 自动装配 |
+| [all-in-one.md](all-in-one.md) | v0.3 | all-in-one 单进程部署：registry + discovery 同 JVM 双上下文组合入口、端口表、`artemis.dist.*` 组合配置键与限制 |

@@ -19,6 +19,7 @@
     <module>artemis-discovery-server</module>
     <module>artemis-management-core</module>
     <module>artemis-management-server</module>
+    <module>artemis-dist</module>
   </modules>
 
   <properties>

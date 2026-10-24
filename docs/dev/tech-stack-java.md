@@ -1,6 +1,6 @@
 # Java 技术选型
 
-版本: 1.23    更新时间: 2026-10-22
+版本: 1.24    更新时间: 2026-10-24
 
 > 本文是新一代 Artemis Java 实现的技术选型基线：语言与运行时、工程结构、全量技术组件清单与依赖冲突策略。设计依据为[架构设计](../arch/artemis-next-architecture.md)（§3 技术栈策略、§7 关键决策 D8），开发规范见[Java 开发规范](coding-guidelines-java.md)。Rust 实现（v1.x 混合集群）直接消费仓库顶层 `proto/` 契约目录（见[proto 契约规范](proto-contract.md)），不受本文 Java 组件约束。
 
@@ -42,12 +42,12 @@ java/                            单 reactor 单构建入口（mvn -f java/pom.x
 │   ├── artemis-discovery-core       discovery 投影内核 (Java 25)
 │   ├── artemis-discovery-server     Spring Boot 装配 (Java 25)
 │   ├── artemis-management-core      治理面内核 (Java 25)
-│   └── artemis-management-server    Spring Boot 装配 (Java 25)
+│   ├── artemis-management-server    Spring Boot 装配 (Java 25)
+│   └── artemis-dist                 all-in-one 组合入口：同 JVM 双 Spring 上下文 (Java 25, v0.3 phase-9)
 └── client/                      SDK 线（parent = artemis-client-parent：独立版本线 + 独立依赖管理，见 §2.3）
     ├── pom.xml
     ├── artemis-client               注册 + 发现统一 SDK，零 Spring (Java 8)
     └── spring-boot-starter-artemis-client   Spring 集成 (Java 8)
-└── (artemis-dist 打包模块 v0.3 起引入，不影响边界)
 ```
 
 ### 2.2 proto 契约模型
@@ -191,6 +191,7 @@ shaded 版将 netty 重打包进 `io.grpc.netty.shaded.*` 命名空间，与宿�
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
 | 1.22 | 2026-10-20 | v0.2 phase-1：§4.7 补双监听装配纪律（factory 不作 bean、全量 BindableService 发现需 service filter）、测试端口解析；`@LocalGrpcServerPort` 在双 server 下不适用 |
+| 1.24 | 2026-10-24 | v0.3 phase-9：§2.1 模块树落位 `artemis-dist`（all-in-one 组合入口，同 JVM 双 Spring 上下文；依赖与编译基线不变） |
 | 1.23 | 2026-10-22 | v0.2 phase-5 设计定案：client 生成矩阵扩 replication.v1（SDK 前置寻址消费 GetNodeStatusResponse 消息类，HTTP 端点响应解析） |
 | 1.21 | 2026-10-19 | v0.1 phase-8 设计定案：组件总表新增 #35 Spring Boot 2.x starter 基线（2.7.18，Java 8 兼容，client 线自钉不 import BOM） |
 | 1.20 | 2026-10-19 | v0.1 phase-7 设计 review 定案：组件总表新增 #34 Micrometer（client 库模式，SDK 可观测标准端口，替换自建 ClientMetrics）；#17/#30 同步 |

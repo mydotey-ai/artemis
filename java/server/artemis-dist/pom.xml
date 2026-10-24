@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.mydotey.ai.artemis</groupId>
+    <artifactId>artemis-server-parent</artifactId>
+    <version>${revision}</version>
+  </parent>
+
+  <artifactId>artemis-dist</artifactId>
+  <description>all-in-one 单进程组合入口：同 JVM 起 registry + discovery 两个 Spring 上下文、各自端口，网络互访不进程内直连（v0.3 phase-9）</description>
+
+  <dependencyManagement>
+    <dependencies>
+      <!-- server 测试线随 SB 4.1 原生 JUnit 6（SpringExtension 依赖 6 的 Store API）；
+           全局默认 JUnit 5（Java 8 兼容线，client/starter/core） -->
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>${junit-server.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <!-- 两个单服务模块作为独立 Spring 上下文组合（compile：IT 起真实双上下文）。
+         二者共享 artemis-common 单份 proto 生成类，无 FQCN 冲突 -->
+    <dependency>
+      <groupId>org.mydotey.ai.artemis</groupId>
+      <artifactId>artemis-registry-server</artifactId>
+      <version>${revision}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.mydotey.ai.artemis</groupId>
+      <artifactId>artemis-discovery-server</artifactId>
+      <version>${revision}</version>
+    </dependency>
+    <!-- 组合期端口键 artemis.dist.* 的 SCF source/manager 装配（复用 common 配置 source） -->
+    <dependency>
+      <groupId>org.mydotey.scf</groupId>
+      <artifactId>scf-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.mydotey.scf</groupId>
+      <artifactId>scf-simple</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!-- 可执行 fat jar（「单包起」交付物）。classpath 上有两个 @SpringBootApplication，必须显式 mainClass -->
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <version>${spring-boot.version}</version>
+        <configuration>
+          <classifier>exec</classifier>
+          <mainClass>org.mydotey.ai.artemis.dist.ArtemisAllInOneServer</mainClass>
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- failsafe：AllInOneIT 进 verify 生命周期，dev-test.sh integration|all 模式经此覆盖 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>integration-test</goal>
+              <goal>verify</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

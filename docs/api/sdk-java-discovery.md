@@ -1,6 +1,6 @@
 # Artemis Java SDK（发现侧）
 
-版本: 1.0    更新时间: 2026-10-24
+版本: 1.1    更新时间: 2026-10-24
 
 > `artemis-client` 中的消费方发现 SDK（v0.3 phase-8）：订阅推送 + 本地视图 + 磁盘快照 + 兜底拉取 + discovery 专属地址容灾。协议契约见 [discovery-query-api.md](discovery-query-api.md) / [discovery-subscription-api.md](discovery-subscription-api.md) / [discovery-reconciliation-api.md](discovery-reconciliation-api.md)；节点目录端点见 [discovery-nodes-api.md](discovery-nodes-api.md)。注册侧 SDK 见 [sdk-java.md](sdk-java.md)。
 
@@ -16,7 +16,7 @@
 </dependency>
 ```
 
-运行时依赖封闭清单不变：grpc-netty-shaded / grpc-stub / grpc-protobuf / scf-simple / SLF4J API / micrometer-core。发现侧 starter 自动装配归 phase-9；当前手工创建：
+运行时依赖封闭清单不变：grpc-netty-shaded / grpc-stub / grpc-protobuf / scf-simple / SLF4J API / micrometer-core。Spring Boot 宿主可用 starter 自动装配（v0.3 phase-9 起）；库模式手工创建：
 
 ```java
 DiscoveryClient client = ArtemisClients.newDiscoveryClient();
@@ -156,12 +156,30 @@ HTTP 引导地址（discovery.addresses）
 - 磁盘快照不过期，回放数据可能陈旧；用 `status.isSnapshotReplay()` / `upstreamStates()` 判断降级。
 - 同 `clientId` + 同选择器的重复订阅共享快照文件（内容语义等价）；多 client 请配置不同 `clientId`。
 - 多订阅共享同一 gRPC channel：地址级故障影响全部订阅（失败计数按流去重，仍由成功事件清零）。
-- 发现侧 Spring Boot starter 自动装配归 phase-9；本 phase 手工创建 client。
+- 发现侧 Spring Boot starter 自动装配已随 v0.3 phase-9 交付（见下节）。
 - 不做客户端负载均衡与 TLS（TLS 归 v1.0）。
 - 服务端必须配置节点目录（`artemis.discovery.nodes`），否则 `/cluster/nodes` 返回空列表、SDK 无地址可用。
+
+## 9. Spring Boot 自动装配（v0.3 phase-9）
+
+与注册侧共用同一 starter（`spring-boot-starter-artemis-client`），按配置条件独立装配：
+
+```properties
+# application.properties（只做发现的消费方不必配 registry 地址）
+artemis.client.discovery.addresses=http://artemis.example.com:8090
+```
+
+```java
+@Autowired DiscoveryClient client;   // 容器启动即 start()，关闭时自动 close
+Subscription subscription = client.subscribe(selector);   // 订阅时机归宿主业务（starter 不代建订阅）
+```
+
+- **条件**：配了 `artemis.client.discovery.addresses` 才创建 `DiscoveryClient`；地址非法仍构造期 fail-fast。两侧地址都配则两个 client 共存，共享同一 SCF 配置桥与 `MeterRegistry`。
+- 配置桥让位、宿主 client bean 让位、`artemis.client.enabled=false`、生命周期与指标注入语义与注册侧一致（详见 [sdk-java.md](sdk-java.md) §Spring Boot 自动装配）。
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-24 | v0.3 phase-9：新增 §9 Spring Boot 自动装配（与注册侧共用 starter，按 discovery.addresses 条件装配、不代建订阅） |
 | 1.0 | 2026-10-24 | v0.3 phase-8 初版：发现侧 SDK 公开 API、配置、同步语义、磁盘快照、地址容灾与指标 |
