@@ -11,9 +11,9 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mydotey.ai.artemis.client.ArtemisClient;
 import org.mydotey.ai.artemis.client.FakeRegistryServer;
 import org.mydotey.ai.artemis.client.InstanceId;
+import org.mydotey.ai.artemis.client.RegistryClient;
 import org.mydotey.ai.artemis.client.ServiceId;
 import org.mydotey.ai.artemis.client.ServiceInstance;
 import org.mydotey.ai.artemis.client.TestAwait;
@@ -22,13 +22,13 @@ import org.mydotey.ai.artemis.proto.common.v1.ServiceInstances;
 import org.mydotey.ai.artemis.proto.registry.v1.HeartbeatRequest;
 
 /** SDK 公共行为（fire-and-forget）：操作不返回成败，断言一律经假 gRPC 服务观察上报与自愈。 */
-class DefaultArtemisClientTest {
+class DefaultRegistryClientTest {
 
     private static final ServiceId ORDER =
             ServiceId.newBuilder().namespace("default").service("order-service").build();
 
     private FakeRegistryServer server;
-    private ArtemisClient client;
+    private RegistryClient client;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -37,7 +37,7 @@ class DefaultArtemisClientTest {
         System.setProperty("artemis.client.reconnect.maxDelayMs", "2000");
         server = new FakeRegistryServer();
         server.start();
-        client = newClient(Metrics.globalRegistry, fixedFetcher(server.address()));
+        client = newRegistryClient(Metrics.globalRegistry, fixedFetcher(server.address()));
     }
 
     @AfterEach
@@ -52,9 +52,9 @@ class DefaultArtemisClientTest {
     }
 
     /** 测试构造：注入 fake 寻址传输（节点列表直供，绕过 HTTP 发现）。 */
-    private static ArtemisClient newClient(
+    private static RegistryClient newRegistryClient(
             io.micrometer.core.instrument.MeterRegistry registry, NodeListFetcher fetcher) {
-        return new DefaultArtemisClient(systemProperties(), registry, fetcher);
+        return new DefaultRegistryClient(systemProperties(), registry, fetcher);
     }
 
     private static NodeListFetcher fixedFetcher(final String... addresses) {
@@ -130,7 +130,7 @@ class DefaultArtemisClientTest {
         System.setProperty("artemis.client.operation.retryIntervalMs", "100");
         io.micrometer.core.instrument.simple.SimpleMeterRegistry meters =
                 new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
-        ArtemisClient retryingClient = newClient(meters, fixedFetcher(server.address()));
+        RegistryClient retryingClient = newRegistryClient(meters, fixedFetcher(server.address()));
         try {
             retryingClient.start();
             server.rejectAll = true; // UNAVAILABLE：瞬态可重试
@@ -230,7 +230,7 @@ class DefaultArtemisClientTest {
     void should_sendBasicAuthHeader_when_credentialsConfigured() {
         System.setProperty("artemis.client.auth.username", "artemis");
         System.setProperty("artemis.client.auth.password", "secret");
-        ArtemisClient authenticated = newClient(Metrics.globalRegistry, fixedFetcher(server.address()));
+        RegistryClient authenticated = newRegistryClient(Metrics.globalRegistry, fixedFetcher(server.address()));
         try {
             authenticated.start();
             authenticated.register(instance("i-1"));
@@ -283,9 +283,10 @@ class DefaultArtemisClientTest {
     void should_failoverToOtherNode_when_currentNodeDies() throws Exception {
         FakeRegistryServer backup = new FakeRegistryServer();
         backup.start();
-        ArtemisClient failoverClient = null;
+        RegistryClient failoverClient = null;
         try {
-            failoverClient = newClient(Metrics.globalRegistry, fixedFetcher(server.address(), backup.address()));
+            failoverClient =
+                    newRegistryClient(Metrics.globalRegistry, fixedFetcher(server.address(), backup.address()));
             failoverClient.start();
             failoverClient.register(instance("i-1"));
 
@@ -318,7 +319,7 @@ class DefaultArtemisClientTest {
         // 冷启动寻址未就绪（列表不可得）：操作不抛、心跳退避自愈；列表就绪后自动恢复上报
         final java.util.concurrent.atomic.AtomicReference<List<NodeEndpoint>> available =
                 new java.util.concurrent.atomic.AtomicReference<>(new ArrayList<NodeEndpoint>());
-        ArtemisClient pendingClient = newClient(Metrics.globalRegistry, new NodeListFetcher() {
+        RegistryClient pendingClient = newRegistryClient(Metrics.globalRegistry, new NodeListFetcher() {
             @Override
             public List<NodeEndpoint> fetch() {
                 List<NodeEndpoint> current = available.get();
@@ -355,9 +356,9 @@ class DefaultArtemisClientTest {
         FakeRegistryServer ready = new FakeRegistryServer();
         ready.start();
         final java.util.concurrent.atomic.AtomicInteger fetchCount = new java.util.concurrent.atomic.AtomicInteger();
-        ArtemisClient failoverClient = null;
+        RegistryClient failoverClient = null;
         try {
-            failoverClient = newClient(Metrics.globalRegistry, new NodeListFetcher() {
+            failoverClient = newRegistryClient(Metrics.globalRegistry, new NodeListFetcher() {
                 @Override
                 public List<NodeEndpoint> fetch() {
                     // 首轮只见拒绝节点（强制起点），其后寻址刷新（熔断触发 refreshNow）扩为双节点

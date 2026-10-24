@@ -76,6 +76,20 @@
           </execution>
         </executions>
       </plugin>
+      <!-- failsafe：*IT 服务级集成测试（进程内 fake discovery + 真实 gRPC/HTTP）进 verify 生命周期，
+           dev-test.sh integration|all 模式经此覆盖；JDK 8 toolchain 在 parent 统一配置 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>integration-test</goal>
+              <goal>verify</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
       <!-- surefire（JDK 8 toolchain fork）与 SDK 边界 enforcer 均在 artemis-client-parent 统一配置 -->
     </plugins>
   </build>

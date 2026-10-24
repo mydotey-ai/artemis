@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.22    更新时间: 2026-10-24
+版本: 1.23    更新时间: 2026-10-24
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -55,7 +55,7 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 
 ## 4. 交付状态
 
-**v0.2（registry 集群）已交付**（2026-10-23 版本收尾，验收对照见 `docs/milestones/v0.2/plan.md`）；v0.3（discovery）进行中，进度以 `docs/milestones/dev-state.md` 为准。
+**v0.2（registry 集群）已交付**（2026-10-23 版本收尾，验收对照见 `docs/milestones/v0.2/plan.md`）；v0.3（discovery）进行中，phase-1–8 已交付，phase-9（发现侧 starter + all-in-one 打包 + 版本验收）待收尾；进度以 `docs/milestones/dev-state.md` 为准。
 
 **phase-1（脚手架 + proto 契约骨架）已交付**：`java/` 十模块 Maven reactor 骨架（parent + 各 core/server/client/starter）与 `proto/` 六组契约骨架（v0.1 定稿 `common.v1` + `registry.v1`，其余四组占位）；`mvn -f java/pom.xml verify` 全绿，enforcer 模块边界断言（core 禁 Spring、client 禁服务端模块）生效。
 
@@ -100,7 +100,7 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 
 **phase-7（Java 8 SDK 注册侧）已交付**：
 
-- **公开 API**：`ArtemisClient`（`start`/`register`/`update`/`deregister`/`close`）+ 不可变值类型 `ServiceId`/`InstanceId`/`ServiceInstance`/`InstanceStatus`；入口 `ArtemisClients.newClient(...)`（无 builder）。完整用法见 [sdk-java.md](../api/sdk-java.md)。
+- **公开 API**：`ArtemisClient`（v0.3 phase-8 起更名 `RegistryClient`；`start`/`register`/`update`/`deregister`/`close`）+ 不可变值类型 `ServiceId`/`InstanceId`/`ServiceInstance`/`InstanceStatus`；入口 `ArtemisClients.newClient(...)`（phase-8 起 `newRegistryClient`，无 builder）。完整用法见 [sdk-java.md](../api/sdk-java.md)。
 - **操作语义**：fire-and-forget——本地集同步更新后异步上报，失败内部重试 + 心跳自愈，调用方不处理操作结果；重试前重读本地集，防陈旧状态重放。
 - **心跳与容错**：gRPC bidi 流全量上报（默认 5s），seq/ack、指数退避重连、ack 看门狗与 keepAlive 感知半开连接；地址经前置寻址发现管线（v0.2 phase-5 升级为三级容灾 + TTL 轮换，见下）。
 - **生命周期**：`start`/`close` 幂等；close 先停心跳、等待在途上报，再全量注销——优雅下线实例即刻消失；零非 daemon 线程遗留。
@@ -110,7 +110,7 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 
 **phase-8（Spring Boot starter + CI + Dockerfile）已交付**：
 
-- **starter**：`spring-boot-starter-artemis-client`（Java 8 / Spring Boot 2.7+）自动装配——`spring.factories`（老 2.x）+ `AutoConfiguration.imports`（2.7+）双注册；配置经 Spring Environment 进 SCF（application.properties/YAML、命令行、系统属性/环境变量，键写法 camelCase/kebab/snake 均可）；`initMethod=start` / `destroyMethod=close` 托管生命周期；自动注入 Boot `MeterRegistry`（无 registry 或多个同型 bean 时回落 `Metrics.globalRegistry`）；`artemis.client.enabled=false` 可关闭，宿主自定义 `ArtemisClient` 时让位。用法见 [sdk-java.md](../api/sdk-java.md#spring-boot-自动装配)。
+- **starter**：`spring-boot-starter-artemis-client`（Java 8 / Spring Boot 2.7+）自动装配——`spring.factories`（老 2.x）+ `AutoConfiguration.imports`（2.7+）双注册；配置经 Spring Environment 进 SCF（application.properties/YAML、命令行、系统属性/环境变量，键写法 camelCase/kebab/snake 均可）；`initMethod=start` / `destroyMethod=close` 托管生命周期；自动注入 Boot `MeterRegistry`（无 registry 或多个同型 bean 时回落 `Metrics.globalRegistry`）；`artemis.client.enabled=false` 可关闭，宿主自定义 `RegistryClient` 时让位。用法见 [sdk-java.md](../api/sdk-java.md#spring-boot-自动装配)。
 - **CI**：GitHub Actions 按路径触发（`java/**`、`proto/**`、Dockerfile/workflow 变更）；`java` job 以 JDK 25 构建、经 Maven toolchains fork JDK 8 跑 client/starter 测试，强制 spotless:check + enforcer + 单测/集成测试；`docker` job 构建镜像。
 - **镜像**：仓库根多阶段 Dockerfile（`maven:3.9-eclipse-temurin-25` → `eclipse-temurin:25-jre`），`docker build .` 一条命令产出 registry 单服务镜像；非 root 运行，快照目录 `/app/data` 可写；暴露外部 gRPC 9090 / HTTP 8080。
 
@@ -228,10 +228,22 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **上游状态/规则源状态**：`/admin/v1/upstreams` 输出各 registry 来源 `SYNCING/SYNCED/DISCONNECTED`，以及 management 规则源 `DISABLED/SYNCING/SYNCED/DISCONNECTED`（phase-6 D-E9 出口；断连/停机时规则冻结、最后已知规则继续生效）。
 - **工程形态**：无 proto/wire 变更、无新增配置键；discovery-core 12 单测（订阅快照/视图聚合与过滤/规则源状态转移）+ `DiscoveryAdminIT` 6 例（认证、订阅出现与取消移除、视图/详情、上游与规则源状态、客户端错误）。契约详见 [discovery-admin-api.md](../api/discovery-admin-api.md)。
 
+**v0.3 phase-8（消费方 SDK + discovery 静态节点目录）已交付**：
+
+- **发现侧 Java 8 SDK**（并入既有 `artemis-client`）：`DiscoveryClient.subscribe(DiscoverySelector, listener)` 按选择器（services/labels/clusters，空集 = 全部）建立**独立订阅**（各自流/视图/对账/快照），client 级共享地址寻址、gRPC 连接、applier、调度与监听队列。本地视图为来源 cluster 的 union，不可变快照 + 零拷贝读；推送为视图语义，SDK 直接 apply。
+- **同步与兜底**（ADR-019 推拉结合）：订阅确认后 bootstrap 全量 Query 整体替换视图（期间推送缓冲后重放，断连期间消失的服务可被删除且不制造空窗）；稳态实时增量 + **60s checksum 对账**（不一致触发全量刷新）+ **15min 全量刷新**；server 全挂时最后视图继续服务。监听回调有界队列（满丢最旧 + 计数）。
+- **磁盘快照**：每订阅 `<dir>/<clientId>/selector-<fingerprint>.snapshot`，**随视图变更异步落盘**（合并写 + close 终写、原子替换）；冷启动回放、server 全挂兜底；不过期，`DiscoveryStatus.isSnapshotReplay()` 暴露降级。
+- **发现专属地址容灾**（与 registry 同管线，ADR-020）：HTTP 引导地址 → discovery 静态节点目录 → 历史最近成功优先 + 随机 + 熔断换址；慢消费者断流不熔断/不换址。配置键与 registry 对称（`artemis.client.discovery.*`）。
+- **discovery 静态节点目录**：`artemis.discovery.nodes`（`host:port` 列表，无节点 id/self，地址即标识；未配置 = 空目录）+ 外部 HTTP `GET /cluster/nodes`（`discovery.v1 DiscoveryNodesResponse` protobuf、复用外部 Basic、未就绪 503）。仍是部署声明：不组集群、无节点间协议、无存活探测（ADR-020 修订 ADR-002）。
+- **统一 client 身份**：`artemis.client.clientId`（默认 `default`），注册/发现共用，作为指标 `client` 标签与快照目录隔离键；注册侧公开接口更名 `ArtemisClient` → `RegistryClient`、`newClient` → `newRegistryClient`（starter 自动配置类名保持 `ArtemisClientAutoConfiguration`）。
+- **契约与文档**：`discovery.v1` 增 `DiscoveryNode`/`DiscoveryNodesResponse`（只增，无新 service）；新增 [discovery-nodes-api.md](../api/discovery-nodes-api.md)、[sdk-java-discovery.md](../api/sdk-java-discovery.md)，注册侧 [sdk-java.md](../api/sdk-java.md) 同步更名/clientId。
+- **工程形态**：client 63 单测 + 7 进程内 fake discovery IT（真实 gRPC + 真实 HTTP 节点目录：推送、断连收敛、换址、快照回放、全挂兜底、checksum 自愈、多订阅隔离）；discovery-server 9 单测 + 2 节点目录 HTTP IT；全量 `dev-test.sh all` 绿。发现侧 Spring Boot starter 自动装配仍归 phase-9。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.23 | 2026-10-24 | v0.3 phase-8 交付：发现侧 Java 8 SDK（订阅/缓存/快照/兜底/地址容灾）、discovery 静态节点目录（ADR-020）、`RegistryClient` 更名与 `clientId`；新建 api/sdk-java-discovery.md、api/discovery-nodes-api.md |
 | 1.22 | 2026-10-24 | v0.3 phase-7 交付：discovery 只读发现管理面（订阅关系/服务视图/上游与规则源状态）；新建 api/discovery-admin-api.md |
 | 1.21 | 2026-10-24 | v0.3 phase-6 交付：management 摘除规则流 + discovery 过滤器链（三出口一致过滤、跨 cluster 规则、fail-open/最后已知规则、0..1 可选） |
 | 1.20 | 2026-10-24 | v0.3 phase-5 交付：多集群聚合（union + cluster 选择器过滤、跨源隔离、JSON map 上游配置、readiness 全量门） |

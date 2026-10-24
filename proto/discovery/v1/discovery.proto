@@ -139,3 +139,17 @@ service DiscoveryReconciliationService {
   // 未就绪 UNAVAILABLE（readiness 拦截器，语义同 Query/Subscribe）。
   rpc Checksum(ChecksumRequest) returns (ChecksumResponse);
 }
+
+// ---- 静态节点目录（SDK 前置寻址；v0.3 phase-8，ADR-020）----
+
+// 静态节点目录（部署声明）：不做存活探测、无节点 id（地址即标识）。
+// 各节点配置同一份部署声明、原样返回；连通性由客户端失败上报 + 熔断兜底。
+message DiscoveryNode {
+  string host = 1;   // 对外 gRPC 端点；IPv6 带方括号
+  int32 port = 2;
+}
+
+message DiscoveryNodesResponse {
+  artemis.common.v1.ResponseStatus status = 1;
+  repeated DiscoveryNode nodes = 2;
+}

@@ -23,3 +23,4 @@
 | [adr-017-self-protection-two-layer.md](adr-017-self-protection-two-layer.md) | Accepted | D17：自我保护 2.0——节点级兜底 + 服务级双层保护、显式状态与超时回落 |
 | [adr-018-projection-distribution-contract.md](adr-018-projection-distribution-contract.md) | Accepted | D18：registry → discovery 投影分发契约——三值事件、at-most-once、订阅建立确认、保护态不进契约 |
 | [adr-019-hybrid-push-pull-subscription.md](adr-019-hybrid-push-pull-subscription.md) | Accepted | D19：订阅推送推拉结合——实时增量流 + 全量拉兜底 + hash 对账（取代 D7 订阅通道快照形态） |
+| [adr-020-discovery-static-node-directory.md](adr-020-discovery-static-node-directory.md) | Accepted | D20：discovery 静态节点目录与客户端前置寻址（仍不组集群） |

@@ -1,14 +1,8 @@
 package org.mydotey.ai.artemis.client.internal;
 
-import io.grpc.CallOptions;
-import io.grpc.Channel;
-import io.grpc.ClientCall;
 import io.grpc.ClientInterceptor;
-import io.grpc.ForwardingClientCall;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
-import io.grpc.Metadata;
-import io.grpc.MethodDescriptor;
 import io.grpc.StatusRuntimeException;
 import io.grpc.stub.StreamObserver;
 import java.util.List;
@@ -29,7 +23,6 @@ import org.mydotey.ai.artemis.proto.registry.v1.RegisterResponse;
 import org.mydotey.ai.artemis.proto.registry.v1.RegistryServiceGrpc;
 import org.mydotey.ai.artemis.proto.registry.v1.UpdateRequest;
 import org.mydotey.ai.artemis.proto.registry.v1.UpdateResponse;
-import org.mydotey.scf.Property;
 import org.mydotey.scf.facade.StringProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -72,37 +65,10 @@ final class GrpcRegistryClient {
 
     GrpcRegistryClient(ServerAddressProvider addressProvider, StringProperties properties) {
         this.addressProvider = addressProvider;
-        Property<String, String> username = ClientProperties.authUsername(properties);
-        Property<String, String> password = ClientProperties.authPassword(properties);
         // 凭证默认空：未配置不发认证头，认证裁决归服务端（显式配置方可认证，与服务端对称）；
-        // 每次请求重读（变更运行时生效）；半配置（只配一项）几乎必是失误，WARN 提示
-        if (ClientProperties.isNonBlank(username.getValue()) != ClientProperties.isNonBlank(password.getValue())) {
-            LOG.warn("artemis.client.auth.username/password must be set together; authentication header not sent");
-        }
-        this.authInterceptor = authInterceptor(username, password);
-    }
-
-    private static ClientInterceptor authInterceptor(
-            final Property<String, String> username, final Property<String, String> password) {
-        return new ClientInterceptor() {
-            @Override
-            public <ReqT, RespT> ClientCall<ReqT, RespT> interceptCall(
-                    MethodDescriptor<ReqT, RespT> method, CallOptions options, Channel next) {
-                return new ForwardingClientCall.SimpleForwardingClientCall<ReqT, RespT>(next.newCall(method, options)) {
-                    @Override
-                    public void start(Listener<RespT> listener, Metadata headers) {
-                        String usernameValue = username.getValue();
-                        String passwordValue = password.getValue();
-                        if (ClientProperties.isNonBlank(usernameValue) && ClientProperties.isNonBlank(passwordValue)) {
-                            headers.put(
-                                    Metadata.Key.of(ClientBasicAuth.HEADER, Metadata.ASCII_STRING_MARSHALLER),
-                                    ClientBasicAuth.headerValue(usernameValue, passwordValue));
-                        }
-                        super.start(listener, headers);
-                    }
-                };
-            }
-        };
+        // 每次请求重读（变更运行时生效）；半配置 WARN 由共用 AuthInterceptor 统一发出
+        this.authInterceptor = new AuthInterceptor(
+                ClientProperties.authUsername(properties), ClientProperties.authPassword(properties));
     }
 
     /** 当前 channel（无则按选址建立；认证 interceptor 挂 channel 级，全部 RPC 覆盖）。close 后不再建立。 */

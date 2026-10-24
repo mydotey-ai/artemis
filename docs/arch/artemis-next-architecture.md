@@ -1,6 +1,6 @@
 # 新一代 Artemis 架构设计
 
-版本: 1.38    更新时间: 2026-10-24
+版本: 1.39    更新时间: 2026-10-24
 
 > 本文是新一代 Artemis（重设计产品）的架构设计基线：总体架构、核心机制、技术栈策略与关键决策记录。产品定位与版本切分见 [产品规划与路线图](../product/artemis-next-roadmap.md)；设计输入来自 [原产品能力基线](../legacy/legacy-product-analysis.md)（§5 可继承资产 / §6 局限清单）与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -53,7 +53,7 @@
 要点：
 
 - **统一网络协议**：无论 all-in-one 还是分拆部署，三服务之间一律走网络协议（gRPC）通信，不做进程内直连优化。all-in-one 只是「同一进程内起三个 server、各自端口」的打包形态。
-- **discovery 不组集群**：每个 discovery 节点是一个独立投影副本，实例间零协议。任一节点故障由消费方 SDK 地址容灾消化——discovery 无集群状态、不提供「存活节点列表」API，SDK 以**配置地址列表 + 历史成功连接缓存 + 熔断换址**容灾（registry 侧才保留服务端节点列表的完整三级容灾）；新节点冷启动独立 bootstrap。多集群聚合 = 单节点订阅多个 registry 集群后本地合并，聚合逻辑只发生在本地，无跨源污染。
+- **discovery 不组集群**：每个 discovery 节点是一个独立投影副本，实例间零协议。任一节点故障由消费方 SDK 地址容灾消化——discovery 无集群状态、无节点间协议；提供**静态节点目录**（`artemis.discovery.nodes` 配置 + 外部 HTTP `GET /cluster/nodes`，部署声明、非存活探测，[ADR-020](../decisions/adr-020-discovery-static-node-directory.md)）供 SDK 前置寻址，SDK 走与 registry 相同的管线（HTTP 引导地址 → 节点列表 → 历史成功连接缓存 + 熔断换址）；新节点冷启动独立 bootstrap。多集群聚合 = 单节点订阅多个 registry 集群后本地合并，聚合逻辑只发生在本地，无跨源污染。
 - **discovery ↔ management 是双向数据流而非循环依赖**：规则下行（management → discovery，版本 + ack 生效确认）；状态上行（discovery → management，订阅关系与生效水位）。
 
 ### 2.2 端口与协议
@@ -70,7 +70,7 @@
 
 v0.1 端口落点：registry 外部 gRPC + 外部 HTTP（辅助通道）+ 管理 HTTP（actuator：health/readiness/metrics，默认仅绑本机）；management 外部 HTTP（Admin/状态 API）+ 管理 HTTP。v0.1 management → registry 的只读事实查询复用 registry 外部 gRPC 端口（受默认认证保护，ADR-016）。
 
-v0.3 端口落点：management 增设内部 gRPC 端口承载摘除规则流（`management.v1 EjectionRuleService`，discovery 消费）——配置 `artemis.management.grpc.port` 才启用（未配置不监听，management 可无 discovery 依赖独立运行），独立认证账户默认关闭（同 registry 内部端口哲学）；discovery 侧经 `artemis.discovery.management.endpoints` 配置订阅（0..1：未配置不过滤）。discovery 外部 HTTP 端口（`server.port`，默认 8090）承载只读发现管理 API `/admin/v1`（订阅关系/服务视图/上游新鲜度与规则源状态，phase-7）：复用 discovery 外部账户（`artemis.discovery.auth.*`，默认关闭），**不做 readiness 门控**（启动期可排障，未同步由状态字段自解释）——数据面 gRPC 的未就绪 UNAVAILABLE 语义不变。
+v0.3 端口落点：management 增设内部 gRPC 端口承载摘除规则流（`management.v1 EjectionRuleService`，discovery 消费）——配置 `artemis.management.grpc.port` 才启用（未配置不监听，management 可无 discovery 依赖独立运行），独立认证账户默认关闭（同 registry 内部端口哲学）；discovery 侧经 `artemis.discovery.management.endpoints` 配置订阅（0..1：未配置不过滤）。discovery 外部 HTTP 端口（`server.port`，默认 8090）承载只读发现管理 API `/admin/v1`（订阅关系/服务视图/上游新鲜度与规则源状态，phase-7）：复用 discovery 外部账户（`artemis.discovery.auth.*`，默认关闭），**不做 readiness 门控**（启动期可排障，未同步由状态字段自解释）——数据面 gRPC 的未就绪 UNAVAILABLE 语义不变。同一端口新增 SDK 前置寻址端点 `GET /cluster/nodes`（v0.3 phase-8，ADR-020）：返回 `discovery.v1 DiscoveryNodesResponse`（静态节点目录，无探测态），复用外部 Basic 认证，**readiness 门控**（未就绪 503——未就绪节点不作寻址应答者，与 `/admin/v1` 免门控排障面区分）。
 
 v0.2 端口落点：registry 起两个 gRPC 监听——外部端口承载 SDK（四操作/心跳）与**对外节点状态 API**（`replication.v1.NodeStatusService.GetNodeStatus`，返回成员对外端点与探测态；保留外部认证、按方法名豁免 readiness 以便观察 STARTING）；内部 peer 端口（`artemis.registry.internal.*`，端口固定默认 9093，地址无默认值、未配置时绑所有网卡以保证 peer 跨节点可达）承载 peer 复制/成员状态与 management 只读事实查询。内部端口使用独立认证账户且**默认关闭**（启用时须显式配置凭证），与外部账户互不通用；关闭认证的部署必须以网络策略隔离内部端口。只读查询保留 readiness 门控；内部 `GetNodeStatus` 在未就绪时仍可应答（供 peer 判定 UP），`Replicate`/`Bootstrap` 未就绪返回 UNAVAILABLE（未就绪节点不接收复制、也不充当数据源）。外部 HTTP 辅助端口新增 `GET /cluster/nodes`（SDK 前置寻址发现端点，phase-5）：**readiness 门控（未就绪 503）**——未就绪节点不作寻址应答者，SDK 按 url 列表重试其它地址（单地址=域名/LB 退避重试原址）；与 gRPC 观测 API 的 readiness 豁免（供 peer 探测/观察 STARTING）区分：豁免只属观测面，寻址数据面不豁免。
 
@@ -227,6 +227,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 | D17 | 自我保护 2.0：节点级兜底 + 服务级双层保护、显式状态与超时回落 | [adr-017](../decisions/adr-017-self-protection-two-layer.md) |
 | D18 | registry → discovery 投影分发契约：三值事件、at-most-once + 断流、订阅建立确认、保护态不进契约 | [adr-018](../decisions/adr-018-projection-distribution-contract.md) |
 | D19 | 订阅推送推拉结合：实时增量流 + 全量拉兜底 + hash 对账（取代 D7 订阅通道快照形态；快照单元保留） | [adr-019](../decisions/adr-019-hybrid-push-pull-subscription.md) |
+| D20 | discovery 静态节点目录与客户端前置寻址（仍不组集群、无存活探测） | [adr-020](../decisions/adr-020-discovery-static-node-directory.md) |
 
 ## 8. 与原产品的对照（资产继承与局限修复）
 
@@ -264,6 +265,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.39 | 2026-10-24 | v0.3 phase-8 设计定案：§2.1 修订 discovery 容灾为静态节点目录 + 与 registry 相同的前置寻址管线；§2.2 补 `GET /cluster/nodes`；§7 增 D20（ADR-020） |
 | 1.38 | 2026-10-24 | v0.3 phase-7 交付：§2.2 补 discovery HTTP 只读管理面端口落点（复用外部账户、不做 readiness 门控；D-A1/D-A4） |
 | 1.37 | 2026-10-24 | v0.3 phase-6 设计定案：§2.2 补 v0.3 端口落点（management 内部 gRPC 规则流端口，条件启用、独立认证默认关闭；D-E11） |
 | 1.36 | 2026-10-23 | v0.3 phase-3 二轮 review 定案：上游覆盖改 diff 续推（订阅流与上游状态解耦），ADR-019 v1.1 同步 |

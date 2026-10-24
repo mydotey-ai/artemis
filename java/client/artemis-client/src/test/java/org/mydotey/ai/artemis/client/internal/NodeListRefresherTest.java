@@ -32,7 +32,14 @@ class NodeListRefresherTest {
         fetcher.next = endpoints("n1:1", "n2:2");
         FailoverAddressProvider provider = startRefresher(fetcher, "refreshIntervalMs=1000");
 
-        TestAwait.await("initial list applied", 3000, () -> provider.select(null) != null);
+        TestAwait.await("initial list applied", 3000, () -> {
+            try {
+                provider.select(null);
+                return true;
+            } catch (NoAddressException e) {
+                return false; // 首轮寻址尚未完成（异步），继续等
+            }
+        });
         fetcher.next = null; // 后续刷新全部失败
 
         TestAwait.await("failed refresh attempted", 5000, () -> fetcher.calls.get() >= 2);
@@ -128,7 +135,7 @@ class NodeListRefresherTest {
 
     // ---- 设施 ----
 
-    /** provider + refresher 同源 properties 装配（对齐 DefaultArtemisClient 组装），返回 provider 供断言。 */
+    /** provider + refresher 同源 properties 装配（对齐 DefaultRegistryClient 组装），返回 provider 供断言。 */
     private FailoverAddressProvider startRefresher(NodeListFetcher fetcher, String config) {
         StringProperties properties = properties(config);
         FailoverAddressProvider provider =

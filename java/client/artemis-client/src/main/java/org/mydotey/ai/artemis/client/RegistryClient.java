@@ -11,7 +11,7 @@ package org.mydotey.ai.artemis.client;
  * 心跳无限兜底（架构 §4.1「SDK 无需重试状态机」——心跳即重试）。失败不向用户抛出或返回，
  * 代之以 WARN 日志与 Micrometer 指标计数（见 ArtemisClients 指标集说明）；用户无需（也无法）判断操作结果。
  */
-public interface ArtemisClient extends AutoCloseable {
+public interface RegistryClient extends AutoCloseable {
 
     void start();
 

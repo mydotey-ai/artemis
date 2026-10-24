@@ -14,18 +14,25 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 三级地址容灾选址实现：选址池 = 前置寻址刷新的节点列表（{@link #updateNodes}），
- * 高优先级组（UP &gt; UNKNOWN/STARTING &gt; DOWN）内随机；同一节点连续失败达阈值熔断
- * （select 跳过、窗口到期惰性恢复），**全部熔断仍全量随机**（降权不清零，可用性优先）；
- * 熔断触发时回调 circuitListener（DefaultArtemisClient 接 NodeListRefresher::refreshNow，
- * 立即重新前置寻址）。时钟经 {@link LongSupplier} 注入（测试可控）。
+ * 地址容灾选址实现（registry/discovery 共用，v0.3 phase-8 泛化）：选址池 = 前置寻址刷新的
+ * 节点列表（{@link #updateNodes}），高优先级组（UP &gt; UNKNOWN/STARTING &gt; DOWN）内随机；
+ * {@code preferLastSuccessful} 开启时（发现侧，ADR-020）粘滞最近一次成功地址（未熔断且在
+ * 列表中才命中）。同一节点连续失败达阈值熔断（select 跳过、窗口到期惰性恢复），**全部熔断
+ * 仍全量随机**（降权不清零，可用性优先）；熔断触发时回调 circuitListener（接
+ * NodeListRefresher::refreshNow，立即重新前置寻址）。配置键前缀参数化。
+ * 时钟经 {@link LongSupplier} 注入（测试可控）。
  */
 final class FailoverAddressProvider implements ServerAddressProvider {
 
     private static final Logger LOG = LoggerFactory.getLogger(FailoverAddressProvider.class);
 
-    static final String KEY_CIRCUIT_THRESHOLD = "artemis.client.registry.address.circuitThreshold";
-    static final String KEY_CIRCUIT_OPEN_MS = "artemis.client.registry.address.circuitOpenMs";
+    static final String REGISTRY_ADDRESS_PREFIX = "artemis.client.registry.address";
+    static final String DISCOVERY_ADDRESS_PREFIX = "artemis.client.discovery.address";
+
+    /** registry 侧键（测试与文档引用）。 */
+    static final String KEY_CIRCUIT_THRESHOLD = REGISTRY_ADDRESS_PREFIX + ".circuitThreshold";
+
+    static final String KEY_CIRCUIT_OPEN_MS = REGISTRY_ADDRESS_PREFIX + ".circuitOpenMs";
 
     private static final int DEFAULT_CIRCUIT_THRESHOLD = 3;
     private static final long DEFAULT_CIRCUIT_OPEN_MS = 30_000;
@@ -41,13 +48,32 @@ final class FailoverAddressProvider implements ServerAddressProvider {
     private final LongSupplier clock;
     private final MeterRegistry meterRegistry;
     private final String clientId;
+    private final boolean preferLastSuccessful;
+    private final boolean discoveryChannel;
+    /** 最近一次成功地址（发现侧选址粘滞；registry 侧不启用，保持优先级组内随机）。 */
+    private volatile String lastSuccessful;
+
     private final ConcurrentHashMap<String, CircuitState> circuits = new ConcurrentHashMap<>();
 
     private volatile List<NodeEndpoint> nodes = new ArrayList<>();
     private volatile Runnable circuitListener;
 
     FailoverAddressProvider(StringProperties properties, MeterRegistry registry, String clientId) {
-        this(properties, registry, clientId, new LongSupplier() {
+        this(properties, registry, clientId, REGISTRY_ADDRESS_PREFIX, false);
+    }
+
+    /** 兼容既有测试：registry 键前缀 + 可注入时钟。 */
+    FailoverAddressProvider(StringProperties properties, MeterRegistry registry, String clientId, LongSupplier clock) {
+        this(properties, registry, clientId, REGISTRY_ADDRESS_PREFIX, false, clock);
+    }
+
+    FailoverAddressProvider(
+            StringProperties properties,
+            MeterRegistry registry,
+            String clientId,
+            String addressKeyPrefix,
+            boolean preferLastSuccessful) {
+        this(properties, registry, clientId, addressKeyPrefix, preferLastSuccessful, new LongSupplier() {
             @Override
             public long getAsLong() {
                 return System.currentTimeMillis();
@@ -55,14 +81,22 @@ final class FailoverAddressProvider implements ServerAddressProvider {
         });
     }
 
-    FailoverAddressProvider(StringProperties properties, MeterRegistry registry, String clientId, LongSupplier clock) {
+    FailoverAddressProvider(
+            StringProperties properties,
+            MeterRegistry registry,
+            String clientId,
+            String addressKeyPrefix,
+            boolean preferLastSuccessful,
+            LongSupplier clock) {
         this.circuitThreshold = properties.getIntProperty(
-                KEY_CIRCUIT_THRESHOLD, new RangeValueConfig<>(DEFAULT_CIRCUIT_THRESHOLD, 1, 100));
+                addressKeyPrefix + ".circuitThreshold", new RangeValueConfig<>(DEFAULT_CIRCUIT_THRESHOLD, 1, 100));
         this.circuitOpenMs = properties.getLongProperty(
-                KEY_CIRCUIT_OPEN_MS, new RangeValueConfig<>(DEFAULT_CIRCUIT_OPEN_MS, 1000L, 600_000L));
+                addressKeyPrefix + ".circuitOpenMs", new RangeValueConfig<>(DEFAULT_CIRCUIT_OPEN_MS, 1000L, 600_000L));
         this.clock = clock;
         this.meterRegistry = registry;
         this.clientId = clientId;
+        this.preferLastSuccessful = preferLastSuccessful;
+        this.discoveryChannel = addressKeyPrefix.contains("discovery");
     }
 
     /** 熔断触发回调（立即重寻址）；须在 refresher 构造后注入（构造顺序解耦）。 */
@@ -74,7 +108,7 @@ final class FailoverAddressProvider implements ServerAddressProvider {
     public String select(String exclude) {
         List<NodeEndpoint> pool = nodes;
         if (pool.isEmpty()) {
-            throw new NoAddressException("registry node list unavailable (bootstrap pending or empty)");
+            throw new NoAddressException("node list unavailable (bootstrap pending or empty)");
         }
         List<NodeEndpoint> candidates = pool;
         if (exclude != null && pool.size() > 1) {
@@ -83,6 +117,12 @@ final class FailoverAddressProvider implements ServerAddressProvider {
         List<NodeEndpoint> notCircuited = filterCircuited(candidates);
         if (!notCircuited.isEmpty()) {
             candidates = notCircuited; // 全熔断时保留全量（降权不清零）
+        }
+        if (preferLastSuccessful) {
+            String sticky = lastSuccessful;
+            if (sticky != null && containsAddress(candidates, sticky)) {
+                return sticky; // 粘滞最近成功地址（ADR-020：历史成功连接缓存优先）
+            }
         }
         return randomFromTopPriority(candidates);
     }
@@ -99,10 +139,24 @@ final class FailoverAddressProvider implements ServerAddressProvider {
         if (failures >= threshold) {
             state.openUntil.set(clock.getAsLong() + circuitOpenMs.getValue());
             if (!wasCircuited) { // 熔断打开事件（未开→开，含动态降阈值后首次达标）：只计一次、只触发一次重寻址
-                // tag address（节点归因；序列数以集群节点数为上界，有界）
-                meterRegistry
-                        .counter("artemis.client.address.circuit.opened", "client", clientId, "address", address)
-                        .increment();
+                // tag address（节点归因；序列数以集群节点数为上界，有界）；发现侧补 channel 维度
+                // 与 registry 区分（registry 既有标签保持不变）
+                if (discoveryChannel) {
+                    meterRegistry
+                            .counter(
+                                    "artemis.client.address.circuit.opened",
+                                    "client",
+                                    clientId,
+                                    "channel",
+                                    "discovery",
+                                    "address",
+                                    address)
+                            .increment();
+                } else {
+                    meterRegistry
+                            .counter("artemis.client.address.circuit.opened", "client", clientId, "address", address)
+                            .increment();
+                }
                 LOG.warn(
                         "node {} failed {} times consecutively, circuit opened for {}ms",
                         address,
@@ -120,6 +174,7 @@ final class FailoverAddressProvider implements ServerAddressProvider {
     public void markSucceeded(String address) {
         if (address != null) {
             circuits.remove(address);
+            lastSuccessful = address;
         }
     }
 

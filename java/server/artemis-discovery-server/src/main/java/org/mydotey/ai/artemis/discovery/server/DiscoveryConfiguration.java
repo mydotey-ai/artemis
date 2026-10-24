@@ -28,6 +28,7 @@ import org.mydotey.ai.artemis.discovery.server.http.HttpBasicAuthFilter;
 import org.mydotey.ai.artemis.discovery.server.upstream.GrpcEjectionRuleSource;
 import org.mydotey.ai.artemis.discovery.server.upstream.ManagementAuthConfig;
 import org.mydotey.ai.artemis.discovery.server.upstream.ManagementConfig;
+import org.mydotey.ai.artemis.discovery.server.upstream.NodeDirectoryConfig;
 import org.mydotey.ai.artemis.discovery.server.upstream.UpstreamAuthConfig;
 import org.mydotey.ai.artemis.discovery.server.upstream.UpstreamConfig;
 import org.mydotey.ai.artemis.discovery.server.upstream.UpstreamSynchronizers;
@@ -216,9 +217,15 @@ public class DiscoveryConfiguration {
     FilterRegistrationBean<HttpBasicAuthFilter> discoveryAdminAuthFilter(AuthConfig auth) {
         FilterRegistrationBean<HttpBasicAuthFilter> registration =
                 new FilterRegistrationBean<>(new HttpBasicAuthFilter(auth));
-        registration.addUrlPatterns("/admin/*");
+        registration.addUrlPatterns("/admin/*", "/cluster/nodes");
         registration.setName("discoveryAdminAuthFilter");
         return registration;
+    }
+
+    /** 静态节点目录（ADR-020，SDK 前置寻址）：未配置 = 空目录。 */
+    @Bean
+    NodeDirectoryConfig nodeDirectoryConfig(StringProperties properties) {
+        return new NodeDirectoryConfig(properties);
     }
 
     /** 调用方地址捕获（D-A2）：订阅关系登记在管理面可见。 */

@@ -12,8 +12,8 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
-import org.mydotey.ai.artemis.client.ArtemisClient;
 import org.mydotey.ai.artemis.client.InstanceId;
+import org.mydotey.ai.artemis.client.RegistryClient;
 import org.mydotey.ai.artemis.client.ServiceId;
 import org.mydotey.ai.artemis.client.ServiceInstance;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -33,9 +33,9 @@ class ArtemisClientAutoConfigurationTest {
 
     @Test
     void should_create_started_client_when_addresses_configured() {
-        AtomicReference<ArtemisClient> client = new AtomicReference<>();
+        AtomicReference<RegistryClient> client = new AtomicReference<>();
         runner.withPropertyValues(ADDRESS).run(context -> {
-            ArtemisClient bean = context.getBean(ArtemisClient.class);
+            RegistryClient bean = context.getBean(RegistryClient.class);
             client.set(bean);
             // 已由 initMethod 启动：再次 start 报 already started
             assertThatThrownBy(bean::start)
@@ -54,7 +54,7 @@ class ArtemisClientAutoConfigurationTest {
             // context close 第一时机（bean 销毁前）手动发布事件：注销在程序还可用时主动执行
             context.publishEvent(new ContextClosedEvent(context));
 
-            ArtemisClient bean = context.getBean(ArtemisClient.class);
+            RegistryClient bean = context.getBean(RegistryClient.class);
             assertThatThrownBy(() -> bean.register(instance()))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("closed");
@@ -99,7 +99,7 @@ class ArtemisClientAutoConfigurationTest {
     @Test
     void should_not_create_client_when_enabled_false() {
         runner.withPropertyValues(ADDRESS, "artemis.client.enabled=false")
-                .run(context -> assertThat(context).doesNotHaveBean(ArtemisClient.class));
+                .run(context -> assertThat(context).doesNotHaveBean(RegistryClient.class));
     }
 
     @Test
@@ -108,7 +108,7 @@ class ArtemisClientAutoConfigurationTest {
                 .withUserConfiguration(HostClientConfiguration.class, ArtemisClientAutoConfiguration.class)
                 .withPropertyValues(ADDRESS)
                 .run(context ->
-                        assertThat(context.getBean(ArtemisClient.class)).isSameAs(HostClientConfiguration.CLIENT));
+                        assertThat(context.getBean(RegistryClient.class)).isSameAs(HostClientConfiguration.CLIENT));
     }
 
     @Test
@@ -158,7 +158,7 @@ class ArtemisClientAutoConfigurationTest {
                 .build();
     }
 
-    private static final class StubClient implements ArtemisClient {
+    private static final class StubClient implements RegistryClient {
 
         @Override
         public void start() {}
@@ -182,7 +182,7 @@ class ArtemisClientAutoConfigurationTest {
         static final StubClient CLIENT = new StubClient();
 
         @Bean
-        ArtemisClient customClient() {
+        RegistryClient customClient() {
             return CLIENT;
         }
     }

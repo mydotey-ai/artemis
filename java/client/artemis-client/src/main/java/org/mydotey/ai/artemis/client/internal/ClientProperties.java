@@ -15,6 +15,7 @@ final class ClientProperties {
 
     static final String KEY_AUTH_USERNAME = "artemis.client.auth.username";
     static final String KEY_AUTH_PASSWORD = "artemis.client.auth.password";
+    static final String KEY_CLIENT_ID = "artemis.client.clientId";
 
     private ClientProperties() {}
 
@@ -46,5 +47,27 @@ final class ClientProperties {
     static Property<String, String> authPassword(StringProperties properties) {
         return stringProperty(
                 properties, KEY_AUTH_PASSWORD, null, "auth password (both set = Basic auth, absent = no header)");
+    }
+
+    /**
+     * client 身份（静态，构造期固化）：指标 {@code client} 标签与发现侧快照目录的隔离键。
+     * 同 JVM 多 client 必须配置不同值；限制为安全文件名字符集（clientId 参与快照路径，防穿越）。
+     */
+    static String clientId(StringProperties properties) {
+        String value = stringProperty(
+                        properties,
+                        KEY_CLIENT_ID,
+                        "default",
+                        "client identity for metrics tag and snapshot dir isolation")
+                .getValue();
+        if (value == null || value.trim().isEmpty()) {
+            throw new IllegalArgumentException(KEY_CLIENT_ID + " must not be blank");
+        }
+        String trimmed = value.trim();
+        if (!trimmed.matches("[A-Za-z0-9._-]+") || trimmed.equals(".") || trimmed.equals("..")) {
+            throw new IllegalArgumentException(
+                    KEY_CLIENT_ID + " must match [A-Za-z0-9._-]+ and not be . or ..: " + trimmed);
+        }
+        return trimmed;
     }
 }

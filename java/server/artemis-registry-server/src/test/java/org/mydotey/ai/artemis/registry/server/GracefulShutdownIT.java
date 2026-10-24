@@ -14,8 +14,8 @@ import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.mydotey.ai.artemis.client.ArtemisClient;
 import org.mydotey.ai.artemis.client.ArtemisClients;
+import org.mydotey.ai.artemis.client.RegistryClient;
 import org.mydotey.ai.artemis.client.ServiceId;
 import org.mydotey.ai.artemis.client.ServiceInstance;
 import org.mydotey.ai.artemis.registry.TestAwait;
@@ -50,7 +50,7 @@ class GracefulShutdownIT {
     private final List<ConfigurableApplicationContext> contexts = new ArrayList<>();
     private List<Integer> ports;
     private String members;
-    private ArtemisClient client;
+    private RegistryClient client;
 
     @Test
     void should_refuseNewTrafficButServeEstablishedStreams_when_draining() throws Exception {
@@ -204,7 +204,7 @@ class GracefulShutdownIT {
         System.setProperty("artemis.client.registry.connection.ttlMs", "0"); // 聚焦停机换址，禁轮换
         System.setProperty("artemis.client.auth.username", "artemis");
         System.setProperty("artemis.client.auth.password", "artemis");
-        client = ArtemisClients.newClient();
+        client = ArtemisClients.newRegistryClient();
         client.start();
     }
 

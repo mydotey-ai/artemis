@@ -1,6 +1,6 @@
 # v0.3 版本规划
 
-版本: 1.4    更新时间: 2026-10-24
+版本: 1.5    更新时间: 2026-10-24
 
 ## 目标
 
@@ -23,7 +23,7 @@
 | phase-5-multi-cluster | 1..N registry 集群订阅、独立上游状态、查询并集 + 选择器过滤（cluster/namespace） | 2 | IT：多集群 union 查询、按 cluster 过滤、单源故障不影响他源 |
 | phase-6-ejection-filter | management 摘除规则订阅流（`management.v1` 扩展）+ discovery 过滤器链 SPI + 摘除过滤 + fail-open/最后已知规则 | 3 | IT：摘除后查询与推送视图被过滤、management 不可用沿用最后规则、恢复后收敛 |
 | phase-7-discovery-admin-api | 发现管理 API：订阅关系查看、服务视图、上游状态/新鲜度查询 | 2 | IT：订阅关系、服务视图、上游状态与新鲜度可查 |
-| phase-8-consumer-sdk | Java 8 消费方 SDK：订阅、本地缓存、磁盘快照、兜底轮询、地址容灾（配置地址 + 历史成功连接缓存 + 熔断换址） | 3 | SDK 单测 + 对接 discovery 的 IT：订阅推送、断连自愈、冷启动回放快照、server 全挂兜底、换址 |
+| phase-8-consumer-sdk | Java 8 消费方 SDK：订阅、本地缓存、磁盘快照、兜底轮询、地址容灾（HTTP 引导地址 + discovery 静态节点目录 + 历史成功连接缓存 + 熔断换址）；discovery 服务端补静态节点目录 | 3 | SDK 单测 + 对接 discovery 的 IT：订阅推送、断连自愈、冷启动回放快照、server 全挂兜底、换址；服务端节点目录 HTTP IT |
 | phase-9-starter-all-in-one | 发现侧 Spring Boot starter 自动装配 + registry + discovery all-in-one 打包 + 版本验收场景收尾 | 2 | starter 自动装配测试；all-in-one 单进程双端口起停 IT；推送亚秒/断连自愈/多集群 union 端到端场景全绿 |
 
 phase-1 说明：`projection.v1` 一次定稿两类报文——全量 bootstrap（server-stream 分片，流正常结束 = 同步完成）与变更流（订阅后增量推送，at-most-once、无 ack/版本，断流即重连 re-bootstrap 全量覆盖自愈）；契约只承载实例事实（bootstrap 复用 `common.ServiceInstances`，变更三值 NEW/UPDATE/DELETE），registry 保护态不进契约（v0.4 再演进为规则版本 + ack 的规则流，与本数据面流无关）。数据分发 service 绑定 registry 内部 peer 端口（架构 §2.2），独立认证、未就绪返回 UNAVAILABLE。变更事件复用既有 `ChangeListener` 出口——回调在聚合锁内，必须排队移交专属有界 executor，不在回调内做 IO；入站零事件防回环语义不变。
@@ -40,7 +40,7 @@ phase-6 说明：v0.3 只接**摘除规则**（发现侧过滤链路）：manage
 
 phase-7 说明：治理期 2 的发现管理面——订阅关系查看（调用方视角）、服务视图查询、上游状态/新鲜度。只读 API，落 discovery 外部端口（形态随 ③ 设计定稿）。
 
-phase-8 说明：消费方 SDK 补全注册侧 SDK 的发现能力——订阅、本地缓存（订阅快照引用，避免深克隆）、磁盘快照（冷启动回放、server 全挂兜底）、兜底轮询；地址容灾为 discovery 专属形态：**配置地址列表 + 历史成功连接缓存 + 熔断换址**（discovery 无服务端存活列表 API，ADR-002）。SDK 并入既有 `artemis-client` artifact（复用 Java 8 生成线与地址容灾基础）还是新增模块由 ③ 设计定稿；如新增模块须同步技术选型 §2.1/§2.2 与 reactor。
+phase-8 说明：消费方 SDK 补全注册侧 SDK 的发现能力——订阅、本地缓存（订阅快照引用，避免深克隆）、磁盘快照（冷启动回放、server 全挂兜底）、兜底轮询；地址容灾与 registry 同管线：**HTTP 引导地址 → discovery 静态节点目录 → 历史成功连接缓存 + 熔断换址**（ADR-020）。为支撑前置寻址，discovery 服务端新增静态节点目录（`artemis.discovery.nodes` 配置 + `GET /cluster/nodes`，部署声明、不组集群、无探测）。SDK 并入既有 `artemis-client` artifact；选择器为 `subscribe` API 参数（多订阅）。注册侧接口同 phase 更名 `RegistryClient`。设计细节由 ③ 定稿并与技术选型 §2.1/§2.2 同步（如需）。
 
 phase-9 说明：发现侧 starter 自动装配（与注册侧共存，按配置条件装配）；all-in-one 打包 = 同进程起 registry + discovery 两个 server、各自端口（架构 §2.1 统一网络协议，不做进程内直连优化），模块/入口形态由 ③ 设计定稿并同步技术选型；本 phase 收口 roadmap v0.3 验收要点的端到端场景，验收对照表在版本收尾时填写。
 
@@ -57,6 +57,7 @@ phase-9 说明：发现侧 starter 自动装配（与注册侧共存，按配置
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.5 | 2026-10-24 | phase-8 设计 review 定案：discovery 补静态节点目录（ADR-020），消费方 SDK 走与 registry 相同的前置寻址管线；选择器改 API 参数；注册侧接口更名 `RegistryClient` |
 | 1.4 | 2026-10-24 | phase-4 设计 review 定案：checksum 视图语义（对账吸收空服务层）、新鲜度出口只在查询/对账响应（「推送快照」为 phase-3 改增量前残留措辞，移除） |
 | 1.3 | 2026-10-23 | phase-3 二轮 review 定案：上游覆盖改 diff 续推（订阅流与上游解耦，ADR-019 v1.1） |
 | 1.2 | 2026-10-23 | phase-3 设计 review 定案：订阅推送改推拉结合（ADR-019）——phase-3 改增量推送、phase-4 补 hash 对账 API；目标段 ADR 引用更新 |

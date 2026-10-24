@@ -71,7 +71,8 @@ public final class UpstreamConfig {
         return List.copyOf(result);
     }
 
-    private static Endpoint endpoint(String trimmed) {
+    /** 端点解析（host:port；节点目录配置复用，ADR-020）。 */
+    static Endpoint endpoint(String trimmed) {
         int colon = trimmed.lastIndexOf(':');
         if (colon <= 0 || colon == trimmed.length() - 1) {
             throw new IllegalStateException("invalid upstream endpoint (expect host:port): " + trimmed);
@@ -84,6 +85,17 @@ public final class UpstreamConfig {
         } catch (NumberFormatException e) {
             throw new IllegalStateException("invalid upstream endpoint port '" + portText + "': " + trimmed);
         }
+        if (port < 1 || port > 65535) {
+            throw new IllegalStateException("invalid upstream endpoint port '" + portText + "' (1..65535): " + trimmed);
+        }
+        if (host.isEmpty() || host.chars().anyMatch(Character::isWhitespace)) {
+            throw new IllegalStateException("invalid upstream endpoint host: " + trimmed);
+        }
+        // 裸 IPv6 含多个冒号无法区分 host/port，必须用括号；括号必须成对
+        boolean bracketed = host.startsWith("[") && host.endsWith("]");
+        if (host.startsWith("[") != host.endsWith("]") || (host.contains(":") && !bracketed)) {
+            throw new IllegalStateException("invalid upstream endpoint host (IPv6 must be bracketed): " + trimmed);
+        }
         return new Endpoint(host, port);
     }
 
@@ -91,5 +103,5 @@ public final class UpstreamConfig {
     record Upstream(String clusterId, List<Endpoint> endpoints) {}
 
     /** 上游端点（host 不带方括号；IPv6 字面量同 peer 成员表处理约定）。 */
-    record Endpoint(String host, int port) {}
+    public record Endpoint(String host, int port) {}
 }

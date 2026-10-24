@@ -10,4 +10,6 @@
 | [node-status-api.md](node-status-api.md) | v0.2 | registry 对外节点状态 gRPC API（节点就绪态、成员端点与后台探测观测态；SDK 节点列表来源） |
 | [admin-api.md](admin-api.md) | v0.1 | management-service Admin 与状态 HTTP API（实例列表/详情/摘除/恢复、租约/配置排障面、有效视图语义） |
 | [discovery-admin-api.md](discovery-admin-api.md) | v0.3 | discovery 只读发现管理面 HTTP API（订阅关系/服务视图/上游与规则源状态） |
-| [sdk-java.md](sdk-java.md) | v0.1 | Java 8 注册侧 SDK：公开 API、SCF 配置项、fire-and-forget 语义、生命周期、Micrometer 指标与 Spring Boot starter 自动装配 |
+| [discovery-nodes-api.md](discovery-nodes-api.md) | v0.3 | discovery 静态节点目录 HTTP API（SDK 前置寻址，ADR-020：`GET /cluster/nodes`、Basic、readiness 503） |
+| [sdk-java.md](sdk-java.md) | v0.1 | Java 8 **注册侧** SDK：`RegistryClient` 公开 API、SCF 配置项、fire-and-forget 语义、生命周期、Micrometer 指标与 Spring Boot starter 自动装配 |
+| [sdk-java-discovery.md](sdk-java-discovery.md) | v0.3 | Java 8 **发现侧** SDK：订阅推送/本地视图/磁盘快照/兜底拉取/地址容灾、`DiscoveryClient`/`Subscription` API、配置与指标 |

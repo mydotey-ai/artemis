@@ -7,8 +7,8 @@ import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mydotey.ai.artemis.client.ArtemisClient;
 import org.mydotey.ai.artemis.client.ArtemisClients;
+import org.mydotey.ai.artemis.client.RegistryClient;
 import org.mydotey.ai.artemis.client.ServiceId;
 import org.mydotey.ai.artemis.client.ServiceInstance;
 import org.mydotey.ai.artemis.registry.InMemorySnapshotStore;
@@ -70,7 +70,7 @@ class ClientSdkIT {
     @Autowired
     private MutableClock clock;
 
-    private ArtemisClient client;
+    private RegistryClient client;
 
     @BeforeEach
     void setUp() {
@@ -82,7 +82,7 @@ class ClientSdkIT {
         System.setProperty("artemis.client.registry.addresses", "http://127.0.0.1:" + HTTP_PORT);
         System.setProperty("artemis.client.auth.username", "artemis");
         System.setProperty("artemis.client.auth.password", "artemis");
-        client = ArtemisClients.newClient();
+        client = ArtemisClients.newRegistryClient();
     }
 
     @AfterEach
@@ -173,7 +173,7 @@ class ClientSdkIT {
     @Test
     void should_reject_when_wrongCredentials() throws Exception {
         System.setProperty("artemis.client.auth.password", "wrong-password"); // username 沿用正确值
-        ArtemisClient unauthorized = ArtemisClients.newClient();
+        RegistryClient unauthorized = ArtemisClients.newRegistryClient();
         try {
             unauthorized.start();
 

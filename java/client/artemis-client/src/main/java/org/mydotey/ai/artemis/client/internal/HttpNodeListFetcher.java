@@ -18,14 +18,22 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * HTTP 前置寻址传输：依次对配置 url 调 {@code GET <url>/cluster/nodes}（Basic 认证、
- * 响应体 = GetNodeStatusResponse protobuf bytes）解析节点 gRPC 端点与观测态优先级。
+ * HTTP 前置寻址传输（registry/discovery 共用，v0.3 phase-8 泛化）：依次对配置 url 调
+ * {@code GET <url>/cluster/nodes}（Basic 认证、响应体 = protobuf bytes），经注入的
+ * {@link ResponseDecoder} 解析节点 gRPC 端点——registry 为 GetNodeStatusResponse
+ * （含观测态优先级），discovery 为 DiscoveryNodesResponse（ADR-020，全部 UP）。
  * url 列表与凭证为 SCF 配置使用时重读；url 必配在构造期 fail-fast。
  * HttpURLConnection（JDK 自带，Java 8 零新增依赖）——低频 GET（5min 周期/退避重试）不引入 http client 组件。
  */
 final class HttpNodeListFetcher implements NodeListFetcher {
 
+    /** 响应体（protobuf bytes）→ 节点端点列表；两侧各持一个解析器实例。 */
+    interface ResponseDecoder {
+        List<NodeEndpoint> decode(byte[] body) throws Exception;
+    }
+
     static final String KEY_REGISTRY_ADDRESSES = "artemis.client.registry.addresses";
+    static final String KEY_DISCOVERY_ADDRESSES = "artemis.client.discovery.addresses";
 
     private static final Logger LOG = LoggerFactory.getLogger(HttpNodeListFetcher.class);
 
@@ -34,35 +42,53 @@ final class HttpNodeListFetcher implements NodeListFetcher {
     private static final int READ_TIMEOUT_MS = 5_000;
     private static final int MAX_BODY_BYTES = 1 << 20;
 
+    private final String addressesKey;
     private final Property<String, List<String>> addresses;
     private final Property<String, String> username;
     private final Property<String, String> password;
+    private final ResponseDecoder decoder;
 
     HttpNodeListFetcher(StringProperties properties) {
-        this.addresses = addressesProperty(properties);
+        this(properties, KEY_REGISTRY_ADDRESSES, registryDecoder());
+    }
+
+    HttpNodeListFetcher(StringProperties properties, String addressesKey, ResponseDecoder decoder) {
+        this.addressesKey = addressesKey;
+        this.addresses = addressesProperty(properties, addressesKey);
         this.username = ClientProperties.authUsername(properties);
         this.password = ClientProperties.authPassword(properties);
+        this.decoder = decoder;
         // 创建期必配校验（fail-fast，对齐原 serverAddresses 语义；非法值被 SCF filter 丢弃后同样为 null——
         // 消息同时覆盖缺失与非法，被拒值的具体原因见 validateAddresses 的 WARN）
         List<String> initial = addresses.getValue();
         if (initial == null || initial.isEmpty()) {
             throw new IllegalArgumentException(
-                    KEY_REGISTRY_ADDRESSES
+                    addressesKey
                             + " must be set to valid http(s) url(s), e.g. http://artemis.example.com (missing or invalid — check WARN log for rejected values)");
         }
     }
 
+    /** registry 解析器：GetNodeStatusResponse → 成员 external 端点 + 观测态优先级。 */
+    static ResponseDecoder registryDecoder() {
+        return new ResponseDecoder() {
+            @Override
+            public List<NodeEndpoint> decode(byte[] body) throws Exception {
+                return toEndpoints(GetNodeStatusResponse.parseFrom(body));
+            }
+        };
+    }
+
     /** string 源值经 SCF ListConverter 转成 url 列表，valueFilter 校验 http(s) url（非法整值丢弃 + WARN）。 */
     @SuppressWarnings("unchecked")
-    static Property<String, List<String>> addressesProperty(StringProperties properties) {
+    static Property<String, List<String>> addressesProperty(StringProperties properties, String key) {
         return properties
                 .getManager()
                 .getProperty(ConfigurationProperties.<String, List<String>>newConfigBuilder()
-                        .setKey(KEY_REGISTRY_ADDRESSES)
+                        .setKey(key)
                         .setValueType((Class<List<String>>) (Class<?>) List.class)
                         .addValueConverter(StringToListConverter.DEFAULT)
                         .setValueFilter(HttpNodeListFetcher::validateAddresses)
-                        .setDoc("registry cluster bootstrap http urls, comma separated (required)")
+                        .setDoc(key + " bootstrap http urls, comma separated (required)")
                         .build());
     }
 
@@ -70,8 +96,7 @@ final class HttpNodeListFetcher implements NodeListFetcher {
     public List<NodeEndpoint> fetch() throws Exception {
         List<String> urls = addresses.getValue();
         if (urls == null || urls.isEmpty()) {
-            throw new IllegalStateException(
-                    KEY_REGISTRY_ADDRESSES + " must be set to valid http(s) url(s) (missing or invalid)");
+            throw new IllegalStateException(addressesKey + " must be set to valid http(s) url(s) (missing or invalid)");
         }
         Exception last = null;
         for (String url : urls) {
@@ -101,8 +126,7 @@ final class HttpNodeListFetcher implements NodeListFetcher {
             throw new IOException("GET " + nodesUrl(url) + " returned " + status);
         }
         try {
-            GetNodeStatusResponse response = GetNodeStatusResponse.parseFrom(readBody(connection));
-            return toEndpoints(response);
+            return decoder.decode(readBody(connection));
         } finally {
             connection.disconnect();
         }
@@ -114,28 +138,20 @@ final class HttpNodeListFetcher implements NodeListFetcher {
         return trimmed + NODES_PATH;
     }
 
-    private List<NodeEndpoint> toEndpoints(GetNodeStatusResponse response) {
+    /** registry 解析：external 端点非法（host 空/端口越界）跳过该成员（防御服务端异常配置）。 */
+    private static List<NodeEndpoint> toEndpoints(GetNodeStatusResponse response) {
         List<NodeEndpoint> endpoints = new ArrayList<>();
         if (!response.hasData()) {
             return endpoints;
         }
         for (ClusterMember member : response.getData().getMembersList()) {
-            String address = memberAddress(member);
-            if (address != null) {
-                endpoints.add(new NodeEndpoint(address, priorityOf(member.getState())));
+            String host = member.getExternalHost();
+            int port = member.getExternalPort();
+            if (host != null && !host.isEmpty() && port >= 1 && port <= 65535) {
+                endpoints.add(new NodeEndpoint(host + ":" + port, priorityOf(member.getState())));
             }
         }
         return endpoints;
-    }
-
-    /** external 端点非法（host 空/端口越界）跳过该成员（防御服务端异常配置）。 */
-    private static String memberAddress(ClusterMember member) {
-        String host = member.getExternalHost();
-        int port = member.getExternalPort();
-        if (host == null || host.isEmpty() || port < 1 || port > 65535) {
-            return null;
-        }
-        return host + ":" + port;
     }
 
     static int priorityOf(NodeState state) {
@@ -206,7 +222,6 @@ final class HttpNodeListFetcher implements NodeListFetcher {
     }
 
     private static IllegalArgumentException invalid(String url) {
-        return new IllegalArgumentException(
-                "invalid bootstrap url '" + url + "' (expected http(s)://host[:port]) in " + KEY_REGISTRY_ADDRESSES);
+        return new IllegalArgumentException("invalid bootstrap url '" + url + "' (expected http(s)://host[:port])");
     }
 }

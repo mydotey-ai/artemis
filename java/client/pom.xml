@@ -141,8 +141,13 @@
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-failsafe-plugin</artifactId>
           <version>3.6.0</version>
-          <!-- 仅锁版本：SDK 线暂无 *IT；dev-test.sh integration 模式对全 reactor 直调 goal，
-               无锁则本线模块的 failsafe 版本退化为远端最新元数据（与服务端分叉） -->
+          <configuration>
+            <!-- 与 surefire 同法：SDK 的 *IT 统一 fork JDK 8（Java 8 运行时兼容验证），
+                 有 *IT 的模块在各自 build 声明 executions -->
+            <jdkToolchain>
+              <version>8</version>
+            </jdkToolchain>
+          </configuration>
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>

@@ -46,6 +46,8 @@ final class NodeListRefresher {
     private final Property<String, Long> retryBaseMs;
     private final Property<String, Long> retryMaxMs;
 
+    private final String threadName;
+
     private final AtomicInteger attempt = new AtomicInteger();
     private final AtomicBoolean pending = new AtomicBoolean();
     /** refreshNow 已排立即任务：运行中 refresh 的尾部不再自续（单链让位）。 */
@@ -61,19 +63,55 @@ final class NodeListRefresher {
             StringProperties properties,
             MeterRegistry registry,
             String clientId) {
+        this(fetcher, provider, properties, registry, clientId, "artemis.client.registry.address", "registry-address");
+    }
+
+    NodeListRefresher(
+            NodeListFetcher fetcher,
+            ServerAddressProvider provider,
+            StringProperties properties,
+            MeterRegistry registry,
+            String clientId,
+            String keyPrefix,
+            String threadName) {
         this.fetcher = fetcher;
         this.provider = provider;
         this.refreshIntervalMs = properties.getLongProperty(
-                KEY_REFRESH_INTERVAL_MS, new RangeValueConfig<>(DEFAULT_REFRESH_INTERVAL_MS, 1000L, 3_600_000L));
+                keyPrefix + ".refreshIntervalMs",
+                new RangeValueConfig<>(DEFAULT_REFRESH_INTERVAL_MS, 1000L, 3_600_000L));
         this.retryBaseMs = properties.getLongProperty(
-                KEY_RETRY_BASE_MS, new RangeValueConfig<>(DEFAULT_RETRY_BASE_MS, 100L, 60_000L));
+                keyPrefix + ".retryBaseMs", new RangeValueConfig<>(DEFAULT_RETRY_BASE_MS, 100L, 60_000L));
         this.retryMaxMs = properties.getLongProperty(
-                KEY_RETRY_MAX_MS, new RangeValueConfig<>(DEFAULT_RETRY_MAX_MS, 1000L, 600_000L));
-        this.refreshSuccess =
-                registry.counter("artemis.client.nodelist.refresh", "client", clientId, "outcome", "success");
-        this.refreshFailure =
-                registry.counter("artemis.client.nodelist.refresh", "client", clientId, "outcome", "failure");
-        this.refreshEmpty = registry.counter("artemis.client.nodelist.refresh", "client", clientId, "outcome", "empty");
+                keyPrefix + ".retryMaxMs", new RangeValueConfig<>(DEFAULT_RETRY_MAX_MS, 1000L, 600_000L));
+        this.threadName = threadName;
+        if (keyPrefix.contains("discovery")) {
+            this.refreshSuccess = registry.counter(
+                    "artemis.client.nodelist.refresh",
+                    "client",
+                    clientId,
+                    "channel",
+                    "discovery",
+                    "outcome",
+                    "success");
+            this.refreshFailure = registry.counter(
+                    "artemis.client.nodelist.refresh",
+                    "client",
+                    clientId,
+                    "channel",
+                    "discovery",
+                    "outcome",
+                    "failure");
+            this.refreshEmpty = registry.counter(
+                    "artemis.client.nodelist.refresh", "client", clientId, "channel", "discovery", "outcome", "empty");
+        } else {
+            // registry 既有指标标签保持不变（不新增 channel 维度，避免既有看板/告警失配）
+            this.refreshSuccess =
+                    registry.counter("artemis.client.nodelist.refresh", "client", clientId, "outcome", "success");
+            this.refreshFailure =
+                    registry.counter("artemis.client.nodelist.refresh", "client", clientId, "outcome", "failure");
+            this.refreshEmpty =
+                    registry.counter("artemis.client.nodelist.refresh", "client", clientId, "outcome", "empty");
+        }
     }
 
     /** 启动：立即寻址一次（冷启动列表就绪），随后自续周期。 */
@@ -83,7 +121,7 @@ final class NodeListRefresher {
         }
         if (scheduler == null) {
             scheduler = new BoundedScheduledExecutor(
-                    "registry-address", 1, MAX_PENDING_TASKS, new NamedDaemonThreadFactory("artemis-client-address"));
+                    threadName, 1, MAX_PENDING_TASKS, new NamedDaemonThreadFactory("artemis-client-" + threadName));
         }
         scheduleNext(0);
     }

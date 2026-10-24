@@ -10,10 +10,9 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import org.mydotey.ai.artemis.client.ArtemisClient;
 import org.mydotey.ai.artemis.client.InstanceId;
+import org.mydotey.ai.artemis.client.RegistryClient;
 import org.mydotey.ai.artemis.client.ServiceInstance;
 import org.mydotey.scf.Property;
 import org.mydotey.scf.facade.StringProperties;
@@ -33,9 +32,9 @@ import org.slf4j.LoggerFactory;
  * provider.setCircuitListener(refresher::refreshNow) 闭环。
  * close 顺序固定：停心跳 → 停寻址 → 停上报队列并等待在途任务（有界）→ 全量注销 → 关传输。
  */
-public final class DefaultArtemisClient implements ArtemisClient {
+public final class DefaultRegistryClient implements RegistryClient {
 
-    private static final Logger LOG = LoggerFactory.getLogger(DefaultArtemisClient.class);
+    private static final Logger LOG = LoggerFactory.getLogger(DefaultRegistryClient.class);
 
     static final String KEY_RETRY_TIMES = "artemis.client.operation.retryTimes";
     static final String KEY_RETRY_INTERVAL_MS = "artemis.client.operation.retryIntervalMs";
@@ -44,8 +43,6 @@ public final class DefaultArtemisClient implements ArtemisClient {
     private static final long DEFAULT_RETRY_INTERVAL_MS = 500;
     private static final long CLOSE_AWAIT_MS = 5_000;
     private static final int MAX_PENDING_TASKS = 1_000;
-
-    private static final AtomicLong CLIENT_IDS = new AtomicLong();
 
     private enum State {
         NEW,
@@ -70,14 +67,14 @@ public final class DefaultArtemisClient implements ArtemisClient {
     private final Property<String, Long> retryIntervalMs;
     private final AtomicReference<State> state = new AtomicReference<>(State.NEW);
 
-    public DefaultArtemisClient(StringProperties properties, MeterRegistry meterRegistry) {
+    public DefaultRegistryClient(StringProperties properties, MeterRegistry meterRegistry) {
         this(properties, meterRegistry, new HttpNodeListFetcher(properties));
     }
 
     /** 测试注入寻址传输端口（fake fetcher 驱动端到端 SDK 行为）。 */
-    DefaultArtemisClient(StringProperties properties, MeterRegistry meterRegistry, NodeListFetcher fetcher) {
+    DefaultRegistryClient(StringProperties properties, MeterRegistry meterRegistry, NodeListFetcher fetcher) {
         this.registry = meterRegistry;
-        this.clientId = "client-" + CLIENT_IDS.incrementAndGet();
+        this.clientId = ClientProperties.clientId(properties);
         this.retryTimes =
                 properties.getIntProperty(KEY_RETRY_TIMES, new RangeValueConfig<>(DEFAULT_RETRY_TIMES, 0, 10));
         this.retryIntervalMs = properties.getLongProperty(

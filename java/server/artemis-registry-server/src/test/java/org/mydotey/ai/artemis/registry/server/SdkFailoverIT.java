@@ -9,8 +9,8 @@ import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.mydotey.ai.artemis.client.ArtemisClient;
 import org.mydotey.ai.artemis.client.ArtemisClients;
+import org.mydotey.ai.artemis.client.RegistryClient;
 import org.mydotey.ai.artemis.client.ServiceId;
 import org.mydotey.ai.artemis.client.ServiceInstance;
 import org.mydotey.ai.artemis.registry.TestAwait;
@@ -38,7 +38,7 @@ class SdkFailoverIT {
     Path tempDir;
 
     private final List<ConfigurableApplicationContext> contexts = new ArrayList<>();
-    private ArtemisClient client;
+    private RegistryClient client;
 
     @Test
     void should_failoverAndKeepLeaseAlive_when_connectedNodeKilled() {
@@ -127,7 +127,7 @@ class SdkFailoverIT {
         System.setProperty("artemis.client.registry.connection.ttlMs", ttlMs);
         System.setProperty("artemis.client.auth.username", "artemis");
         System.setProperty("artemis.client.auth.password", "artemis");
-        client = ArtemisClients.newClient();
+        client = ArtemisClients.newRegistryClient();
         client.start();
     }
 

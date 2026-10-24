@@ -4,8 +4,8 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Metrics;
 import java.util.Collections;
 import java.util.Map;
-import org.mydotey.ai.artemis.client.ArtemisClient;
 import org.mydotey.ai.artemis.client.ArtemisClients;
+import org.mydotey.ai.artemis.client.RegistryClient;
 import org.mydotey.scf.ConfigurationManager;
 import org.mydotey.scf.ConfigurationSource;
 import org.mydotey.scf.facade.ConfigurationManagers;
@@ -29,10 +29,10 @@ import org.springframework.core.env.Environment;
  *
  * <p>不按 {@code registry.addresses} 是否存在做条件：starter 被显式引入即表达注册意图，必配项缺失在
  * 启动期 fail-fast（client 现有语义），避免「静默不注册」。{@code artemis.client.enabled=false} 显式关闭；
- * 宿主定义自己的 {@link ArtemisClient} 时自动装配让位。
+ * 宿主定义自己的 {@link RegistryClient} 时自动装配让位。
  */
 @Configuration(proxyBeanMethods = false)
-@ConditionalOnClass(ArtemisClient.class)
+@ConditionalOnClass(RegistryClient.class)
 @ConditionalOnProperty(prefix = "artemis.client", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class ArtemisClientAutoConfiguration {
 
@@ -41,7 +41,7 @@ public class ArtemisClientAutoConfiguration {
     /**
      * 不设 {@code @ConditionalOnMissingBean}：Spring {@link Environment} source 是该 starter 的配置
      * 入口，复用宿主无关的 SCF bean 会静默丢失 application.properties/YAML 中的 {@code artemis.client.*}。
-     * 宿主定制配置源 / 客户端实现的出口是自定义 {@link ArtemisClient} bean（自动装配整体让位）。
+     * 宿主定制配置源 / 客户端实现的出口是自定义 {@link RegistryClient} bean（自动装配整体让位）。
      */
     @Bean
     public StringProperties artemisClientStringProperties(Environment environment) {
@@ -53,15 +53,15 @@ public class ArtemisClientAutoConfiguration {
 
     @Bean(initMethod = "start", destroyMethod = "close")
     @ConditionalOnMissingBean
-    public ArtemisClient artemisClient(StringProperties properties, ObjectProvider<MeterRegistry> meterRegistries) {
+    public RegistryClient artemisClient(StringProperties properties, ObjectProvider<MeterRegistry> meterRegistries) {
         // Boot/actuator 提供 MeterRegistry 时注入；缺省回落 globalRegistry（client 库模式，空转无害）
-        return ArtemisClients.newClient(properties, meterRegistries.getIfUnique(() -> Metrics.globalRegistry));
+        return ArtemisClients.newRegistryClient(properties, meterRegistries.getIfUnique(() -> Metrics.globalRegistry));
     }
 
     /** context close 第一时机自动注销（先于宿主停流与 bean 销毁）；close 幂等，destroy 阶段二次调用无害。 */
     @Bean
     public ApplicationListener<ContextClosedEvent> artemisClientShutdownListener(
-            ObjectProvider<ArtemisClient> artemisClients) {
-        return event -> artemisClients.ifAvailable(ArtemisClient::close);
+            ObjectProvider<RegistryClient> artemisClients) {
+        return event -> artemisClients.ifAvailable(RegistryClient::close);
     }
 }
