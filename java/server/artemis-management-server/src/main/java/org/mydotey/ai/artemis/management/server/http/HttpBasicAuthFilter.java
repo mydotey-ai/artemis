@@ -6,21 +6,28 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.Set;
+import lombok.extern.slf4j.Slf4j;
 import org.mydotey.ai.artemis.common.auth.BasicAuth;
+import org.mydotey.ai.artemis.management.application.AccountAuthService;
+import org.mydotey.ai.artemis.management.domain.AccountAccessException;
 import org.mydotey.ai.artemis.management.server.auth.ManagementAuthConfig;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * management 外部 HTTP 认证过滤器（ADR-009）：Basic 凭证，与 registry 使用同一编码/比较实现。
+ * management 外部 HTTP 认证过滤器（ADR-009/ADR-021）：Basic 凭证经裁决端口验证——
+ * DB 态验账户表（PBKDF2），内存态比对配置凭证；认证后端不可用 fail-closed（503）。
  */
+@Slf4j
 public final class HttpBasicAuthFilter extends OncePerRequestFilter {
 
     private static final Set<String> WHITELIST = Set.of("/error");
 
-    private final ManagementAuthConfig auth;
+    private final ManagementAuthConfig authConfig;
+    private final AccountAuthService authService;
 
-    public HttpBasicAuthFilter(ManagementAuthConfig auth) {
-        this.auth = auth;
+    public HttpBasicAuthFilter(ManagementAuthConfig authConfig, AccountAuthService authService) {
+        this.authConfig = authConfig;
+        this.authService = authService;
     }
 
     @Override
@@ -31,14 +38,22 @@ public final class HttpBasicAuthFilter extends OncePerRequestFilter {
         if (path == null || path.isEmpty()) {
             path = request.getRequestURI();
         }
-        if (!auth.enabled() || WHITELIST.contains(path)) {
+        if (!authConfig.enabled() || WHITELIST.contains(path)) {
             filterChain.doFilter(request, response);
             return;
         }
-        // 凭证动态：每请求现取，支持运行期轮换；凭证不完整时拒绝
-        String expected = BasicAuth.headerValueOrNull(auth.username(), auth.password());
-        if (expected != null && BasicAuth.matches(request.getHeader(BasicAuth.HEADER), expected)) {
-            filterChain.doFilter(request, response);
+        try {
+            BasicAuth.Credential credential = BasicAuth.decode(request.getHeader(BasicAuth.HEADER));
+            if (credential != null && authService.verify(credential.username(), credential.password())) {
+                filterChain.doFilter(request, response);
+                return;
+            }
+        } catch (AccountAccessException e) {
+            // fail-closed：认证后端不可用拒绝请求，凭证不进日志
+            log.warn("management authentication backend unavailable: {}", e.getMessage());
+            response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+            response.setContentType("application/json");
+            response.getWriter().write("{\"error\":\"UNAVAILABLE\"}");
             return;
         }
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);

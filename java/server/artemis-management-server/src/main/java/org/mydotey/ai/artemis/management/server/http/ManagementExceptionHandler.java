@@ -1,6 +1,7 @@
 package org.mydotey.ai.artemis.management.server.http;
 
 import lombok.extern.slf4j.Slf4j;
+import org.mydotey.ai.artemis.management.domain.AccountAccessException;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -51,6 +52,19 @@ public final class ManagementExceptionHandler {
                 : HttpStatus.BAD_GATEWAY;
         log.warn("registry query failed: code={}, message={}", e.code(), e.getMessage());
         return response(status, e.code(), e.getMessage());
+    }
+
+    /** 账户存储不可用：fail-closed 语义向 API 面延伸（ADR-021）。 */
+    @ExceptionHandler(AccountAccessException.class)
+    public ResponseEntity<ErrorResponse> accountAccess(AccountAccessException e) {
+        log.warn("account access failed: code={}, message={}", e.code(), e.getMessage());
+        return response(HttpStatus.SERVICE_UNAVAILABLE, e.code(), e.getMessage());
+    }
+
+    /** 内存态改密（ADR-021 双轨）：凭证事实源是配置。 */
+    @ExceptionHandler(MemoryModePasswordChangeException.class)
+    public ResponseEntity<ErrorResponse> memoryModePasswordChange(MemoryModePasswordChangeException e) {
+        return response(HttpStatus.CONFLICT, "NOT_SUPPORTED_IN_MEMORY_MODE", e.getMessage());
     }
 
     @ExceptionHandler(Exception.class)

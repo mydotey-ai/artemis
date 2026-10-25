@@ -1,28 +1,40 @@
 package org.mydotey.ai.artemis.management.server;
 
 import java.time.Clock;
+import lombok.extern.slf4j.Slf4j;
+import org.mydotey.ai.artemis.management.application.AccountAuthService;
+import org.mydotey.ai.artemis.management.application.DbAccountAuthService;
 import org.mydotey.ai.artemis.management.application.ManagementService;
 import org.mydotey.ai.artemis.management.application.ManagementServiceImpl;
+import org.mydotey.ai.artemis.management.application.PersistenceInfo;
+import org.mydotey.ai.artemis.management.domain.AccountStore;
 import org.mydotey.ai.artemis.management.domain.EjectionStore;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryPort;
 import org.mydotey.ai.artemis.management.infrastructure.EjectionRuleDispatcher;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryEjectionStore;
+import org.mydotey.ai.artemis.management.server.auth.ConfigAccountAuthService;
 import org.mydotey.ai.artemis.management.server.auth.ManagementAuthConfig;
 import org.mydotey.ai.artemis.management.server.config.ManagementConfigurationSources;
 import org.mydotey.ai.artemis.management.server.grpc.RegistryClientConfig;
 import org.mydotey.ai.artemis.management.server.grpc.RegistryQueryGrpcClient;
 import org.mydotey.ai.artemis.management.server.http.HttpBasicAuthFilter;
+import org.mydotey.ai.artemis.management.server.repository.AccountMapper;
+import org.mydotey.ai.artemis.management.server.repository.AccountStoreImpl;
 import org.mydotey.scf.ConfigurationManager;
 import org.mydotey.scf.facade.StringProperties;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 
 /**
- * 装配层（IoC）：SCF 配置、摘除存储与规则分发、registry 查询客户端、应用服务与 HTTP 认证。
+ * 装配层（IoC）：SCF 配置、摘除存储与规则分发、registry 查询客户端、应用服务与认证裁决。
+ * 认证双轨（ADR-021）：DB 态验账户表（seed 一次性物化配置凭证），内存态比对配置凭证。
  * 规则流 gRPC 装配条件启用（{@code ManagementGrpcConfiguration}）。
  */
+@Slf4j
 @Configuration(proxyBeanMethods = false)
 public class ManagementConfiguration {
 
@@ -59,6 +71,39 @@ public class ManagementConfiguration {
         return new ManagementAuthConfig(properties);
     }
 
+    /**
+     * 账户存储（DB 态）：条件与 DataSource 同键（phase-1 双轨判据），保证内存态零注册——
+     * MyBatis-Plus autoconfig 亦因无 DataSource bean 不激活，@Mapper 零实例化。
+     */
+    @Bean
+    @ConditionalOnProperty("spring.datasource.url")
+    AccountStore accountStore(AccountMapper accountMapper) {
+        return new AccountStoreImpl(accountMapper);
+    }
+
+    /**
+     * 认证裁决二选一（ADR-021）：DB 态 seed 在 migration 后执行——本 bean 显式依赖
+     * {@code persistenceInfo}（其构造触发 Flyway），保证建表先于 seed。
+     */
+    @Bean
+    AccountAuthService accountAuthService(
+            ObjectProvider<AccountStore> accountStoreProvider,
+            ManagementAuthConfig authConfig,
+            PersistenceInfo persistenceInfo,
+            Clock clock) {
+        AccountStore store = accountStoreProvider.getIfAvailable();
+        if (store == null) {
+            return new ConfigAccountAuthService(authConfig);
+        }
+        DbAccountAuthService service = new DbAccountAuthService(store, clock);
+        service.seedIfAbsent(authConfig.username(), authConfig.password());
+        if (authConfig.usingDefaultPassword() && service.passwordInUse(ManagementAuthConfig.DEFAULT_PASSWORD)) {
+            log.warn("management account still uses the default password, "
+                    + "change it via PUT /admin/v1/account/password");
+        }
+        return service;
+    }
+
     @Bean
     RegistryClientConfig registryClientConfig(StringProperties properties) {
         return new RegistryClientConfig(properties);
@@ -79,9 +124,10 @@ public class ManagementConfiguration {
     }
 
     @Bean
-    FilterRegistrationBean<HttpBasicAuthFilter> httpBasicAuthFilter(ManagementAuthConfig authConfig) {
+    FilterRegistrationBean<HttpBasicAuthFilter> httpBasicAuthFilter(
+            ManagementAuthConfig authConfig, AccountAuthService accountAuthService) {
         FilterRegistrationBean<HttpBasicAuthFilter> registration =
-                new FilterRegistrationBean<>(new HttpBasicAuthFilter(authConfig));
+                new FilterRegistrationBean<>(new HttpBasicAuthFilter(authConfig, accountAuthService));
         registration.addUrlPatterns("/*");
         registration.setName("httpBasicAuthFilter");
         return registration;

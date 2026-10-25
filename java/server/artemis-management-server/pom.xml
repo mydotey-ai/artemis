@@ -102,6 +102,12 @@
       <groupId>org.flywaydb</groupId>
       <artifactId>flyway-database-postgresql</artifactId>
     </dependency>
+    <!-- ORM（v0.4 phase-2，#13 决断）：MyBatis-Plus boot4 starter；内存态因无 DataSource bean
+         autoconfig 不激活、@Mapper 零实例化（装配边界见 ManagementConfiguration） -->
+    <dependency>
+      <groupId>com.baomidou</groupId>
+      <artifactId>mybatis-plus-spring-boot4-starter</artifactId>
+    </dependency>
     <!-- 双方言驱动均打包（runtime），按 url 自动选择 -->
     <dependency>
       <groupId>com.mysql</groupId>

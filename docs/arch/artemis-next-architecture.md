@@ -1,6 +1,6 @@
 # 新一代 Artemis 架构设计
 
-版本: 1.39    更新时间: 2026-10-24
+版本: 1.40    更新时间: 2026-10-25
 
 > 本文是新一代 Artemis（重设计产品）的架构设计基线：总体架构、核心机制、技术栈策略与关键决策记录。产品定位与版本切分见 [产品规划与路线图](../product/artemis-next-roadmap.md)；设计输入来自 [原产品能力基线](../legacy/legacy-product-analysis.md)（§5 可继承资产 / §6 局限清单）与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -187,14 +187,14 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 ### 5.3 console 与账户
 
 - console：management 内嵌静态 SPA + REST，不引入独立前端部署单元；分页 + 模糊搜索（10 万实例可用性前提）、服务/实例详情、订阅关系视图（调用方视角）、操作审计流、自我保护态展示。
-- 账户：认证 v0.1 起默认开启（各服务本地单账户）；账户体系（DB 持久化、统一认证）随 management v0.4 交付并接管各服务本地账户；RBAC（角色 × 资源 × 动作）v1.0；全部治理操作进审计表。
+- 账户：认证 v0.1 起默认开启（各服务本地单账户）；账户体系（DB 持久化、统一认证）随 management v0.4 交付——接管形态为**管理访问面收敛**（[ADR-021](../decisions/adr-021-management-account-takeover.md)：Admin API 与 console 以单管理员 DB 账户为唯一认证源，DB 态首启将配置凭证一次性 seed 物化、此后配置凭证失效；各服务本地单账户保留为服务自身凭证——SDK 数据面与排障面，与管理凭证分域；各服务管理面委托机制后置 v1.0 RBAC）；RBAC（角色 × 资源 × 动作）v1.0；全部治理操作进审计表。
 - management 可不部署：registry + discovery 独立可用（双轨分离资产延续），单机 eval 零 DB 依赖。
 
 ## 6. 安全与可观测
 
 | 项 | 决策 |
 |---|---|
-| 认证 | v0.1 起默认开启（各服务本地单账户；v0.4 起由 management 统一账户接管），吸取 Nacos 3.0 才默认鉴权的教训；显式配置方可关闭（eval 场景） |
+| 认证 | v0.1 起默认开启（各服务本地单账户），吸取 Nacos 3.0 才默认鉴权的教训；显式配置方可关闭（eval 场景）；v0.4 management 单管理员 DB 账户接管管理访问面（[ADR-021](../decisions/adr-021-management-account-takeover.md)，各服务本地账户保留为服务凭证） |
 | TLS | v1.0 支持（内外通道均可启），内网部署可配明文 |
 | RBAC | v1.0 |
 | metrics | Micrometer + Prometheus 格式，v0.1 第一天起按版本递补：心跳/租约/节点级保护态 v0.1；复制 v0.2（`batches.sent/failed/rejected/dropped`、`batches.received`、`applied.changes`）+ bootstrap（`attempts/failures/synced.instances`）+ 节点探测（`cluster.probe.rounds/failures`、`cluster.peers.up`）+ 保护态 2.0（节点级 gauge 保留；`service.protection{namespace,service}` 仅保护中注册、`service.protection.count`、`service.protection.transitions{to}`）；推送 v0.3 |
@@ -228,6 +228,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 | D18 | registry → discovery 投影分发契约：三值事件、at-most-once + 断流、订阅建立确认、保护态不进契约 | [adr-018](../decisions/adr-018-projection-distribution-contract.md) |
 | D19 | 订阅推送推拉结合：实时增量流 + 全量拉兜底 + hash 对账（取代 D7 订阅通道快照形态；快照单元保留） | [adr-019](../decisions/adr-019-hybrid-push-pull-subscription.md) |
 | D20 | discovery 静态节点目录与客户端前置寻址（仍不组集群、无存活探测） | [adr-020](../decisions/adr-020-discovery-static-node-directory.md) |
+| D21 | 单管理员账户接管形态：管理访问面收敛 management DB 账户、各服务本地账户保留分域、委托后置 RBAC v1.0 | [adr-021](../decisions/adr-021-management-account-takeover.md) |
 
 ## 8. 与原产品的对照（资产继承与局限修复）
 
@@ -265,6 +266,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.40 | 2026-10-25 | v0.4 phase-2 设计定案：§5.3/§6「接管各服务本地账户」精化为管理访问面收敛（ADR-021：DB 唯一源 + seed 物化 + 各服务账户保留分域）；§7 增 D21 |
 | 1.39 | 2026-10-24 | v0.3 phase-8 设计定案：§2.1 修订 discovery 容灾为静态节点目录 + 与 registry 相同的前置寻址管线；§2.2 补 `GET /cluster/nodes`；§7 增 D20（ADR-020） |
 | 1.38 | 2026-10-24 | v0.3 phase-7 交付：§2.2 补 discovery HTTP 只读管理面端口落点（复用外部账户、不做 readiness 门控；D-A1/D-A4） |
 | 1.37 | 2026-10-24 | v0.3 phase-6 设计定案：§2.2 补 v0.3 端口落点（management 内部 gRPC 规则流端口，条件启用、独立认证默认关闭；D-E11） |

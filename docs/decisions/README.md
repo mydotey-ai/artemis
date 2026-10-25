@@ -24,3 +24,4 @@
 | [adr-018-projection-distribution-contract.md](adr-018-projection-distribution-contract.md) | Accepted | D18：registry → discovery 投影分发契约——三值事件、at-most-once、订阅建立确认、保护态不进契约 |
 | [adr-019-hybrid-push-pull-subscription.md](adr-019-hybrid-push-pull-subscription.md) | Accepted | D19：订阅推送推拉结合——实时增量流 + 全量拉兜底 + hash 对账（取代 D7 订阅通道快照形态） |
 | [adr-020-discovery-static-node-directory.md](adr-020-discovery-static-node-directory.md) | Accepted | D20：discovery 静态节点目录与客户端前置寻址（仍不组集群） |
+| [adr-021-management-account-takeover.md](adr-021-management-account-takeover.md) | Accepted | D21：单管理员账户接管形态——管理访问面收敛 management DB 账户，各服务本地账户保留分域，委托后置 RBAC v1.0 |

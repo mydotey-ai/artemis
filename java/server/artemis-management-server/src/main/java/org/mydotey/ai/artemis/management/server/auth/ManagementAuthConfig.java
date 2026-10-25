@@ -16,7 +16,9 @@ public final class ManagementAuthConfig {
     static final String KEY_PASSWORD = "artemis.management.auth.password";
 
     private static final String DEFAULT_USERNAME = "artemis";
-    private static final String DEFAULT_PASSWORD = "artemis";
+
+    /** 默认账户（ADR-009）；DB 态 seed 默认值与启动告警基准（ADR-021）。 */
+    public static final String DEFAULT_PASSWORD = "artemis";
 
     private final Property<String, Boolean> enabled;
     private final Property<String, String> username;
@@ -29,11 +31,16 @@ public final class ManagementAuthConfig {
         this.password = properties.getStringProperty(KEY_PASSWORD, DEFAULT_PASSWORD);
         if (!enabled()) {
             log.warn("management authentication is disabled by configuration ({}=false)", KEY_ENABLED);
-        } else if (DEFAULT_PASSWORD.equals(password())) {
+        } else if (usingDefaultPassword()) {
             log.warn(
                     "management authentication is enabled with the default password, change {} for production",
                     KEY_PASSWORD);
         }
+    }
+
+    /** 是否仍使用默认密码（ADR-009 启动告警语义；DB 态装配复用于账户表默认密码检测）。 */
+    public boolean usingDefaultPassword() {
+        return DEFAULT_PASSWORD.equals(password());
     }
 
     public boolean enabled() {

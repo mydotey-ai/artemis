@@ -3,6 +3,7 @@ package org.mydotey.ai.artemis.management.server.http;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
+import org.mydotey.ai.artemis.management.domain.AccountAccessException;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryException;
 
 class ManagementExceptionHandlerTest {
@@ -33,5 +34,20 @@ class ManagementExceptionHandlerTest {
                         .getStatusCode()
                         .value())
                 .isEqualTo(500);
+    }
+
+    @Test
+    void should_map_account_failures_when_advice_handles() {
+        // 账户存储不可用：fail-closed 向 API 面延伸（ADR-021）
+        assertThat(handler.accountAccess(new AccountAccessException(
+                                AccountAccessException.ACCOUNT_STORE_UNAVAILABLE, "down", null))
+                        .getStatusCode()
+                        .value())
+                .isEqualTo(503);
+        // 内存态改密：双轨不适用（ADR-021）
+        assertThat(handler.memoryModePasswordChange(new MemoryModePasswordChangeException())
+                        .getStatusCode()
+                        .value())
+                .isEqualTo(409);
     }
 }

@@ -1,6 +1,6 @@
 # Java 技术选型
 
-版本: 1.26    更新时间: 2026-10-25
+版本: 1.27    更新时间: 2026-10-25
 
 > 本文是新一代 Artemis Java 实现的技术选型基线：语言与运行时、工程结构、全量技术组件清单与依赖冲突策略。设计依据为[架构设计](../arch/artemis-next-architecture.md)（§3 技术栈策略、§7 关键决策 D8），开发规范见[Java 开发规范](coding-guidelines-java.md)。Rust 实现（v1.x 混合集群）直接消费仓库顶层 `proto/` 契约目录（见[proto 契约规范](proto-contract.md)），不受本文 Java 组件约束。
 
@@ -103,7 +103,7 @@ Java 各消费模块从仓库顶层 `proto/`（组织与治理见[proto 契约�
 | 32 | 模型转换 | MapStruct | 1.6.x（`mapstruct` + `mapstruct-processor`） | 各 core（[ADR-015](../decisions/adr-015-layered-model-inside-core.md) 层间 mapper） | 编译期生成 mapper 实现，**零运行时依赖**（mapstruct 仅注解，processor 为 annotation processor）；与 Lombok 协同需 `lombok-mapstruct-binding`（processor path 顺序）；Java 25 支持在实施期验证（见 §4.6） |
 | 34 | 可观测（SDK） | Micrometer（client 库模式） | `io.micrometer:micrometer-core` 1.17.x（client 线自钉，Java 8 基线兼容） | artemis-client（v0.1 phase-7 起） | SDK 可观测标准化端口（Counter/Timer/Gauge 全套 + 标签维度），替代自建 metrics 接口；`newClient(properties, meterRegistry)` 注入、缺省挂 `Metrics.globalRegistry`（官方库模式，宿主 `Metrics.addRegistry` 接管、不加则空转）；指标集见 phase-7 设计文档；starter（phase-8）自动注入 Boot `MeterRegistry`，经宿主 actulator 供 Prometheus 抓取 |
 | 33 | 通信 | gRPC（Spring Boot 官方装配） | `org.springframework.boot:spring-boot-starter-grpc-server`（SB 4.1 官方，版本随 SB BOM；底层 spring-grpc-core 1.1.x） | 各 server 模块 | 官方 gRPC 自动装配（`@GrpcService` + `spring.grpc.server.*` 配置），**不自写 Server/生命周期**；集成测试支持 `org.springframework.boot:spring-boot-grpc-test`（随机端口/进程内）；grpc-java 版本线：SB BOM 管理 1.83.1，本 reactor 窄版本线先声明锁 1.84.2（`requireUpperBoundDeps` 兜底），phase-2 实测兼容（见 §4.7） |
-| 13 | 数据（期 3） | ORM | MyBatis-Plus 3.5.x + SB starter | 仅 management | 版本锁 SB 4.1 适配线，期 3 实施时锁定 |
+| 13 | 数据（期 3） | ORM | MyBatis-Plus 3.5.17（`mybatis-plus-spring-boot4-starter`，SB 4.0.1 基线 + mybatis-spring 4.0.0） | 仅 management（server 模块，core 零感知） | v0.4 phase-2 决断：以首个业务表（账户）实测验证 SB 4.1 兼容，不兼容回退 JdbcTemplate（零新依赖） |
 | 14 | 数据（期 3） | Schema migration | Flyway（SB 管版本） | 仅 management | MySQL/PG 双方言脚本 |
 | 15 | 数据（期 3） | 连接池 | HikariCP（SB 自带） | 仅 management | — |
 | 16 | 数据（期 3） | 数据库 | MySQL 8.x / PostgreSQL 16+ | 运维侧二选一 | 双方言为产品承诺 |
@@ -184,12 +184,12 @@ shaded 版将 netty 重打包进 `io.grpc.netty.shaded.*` 命名空间，与宿�
 | 压测工具（10 万实例容量验证） | v1.0 |
 | 容器镜像仓库（GHCR vs Docker Hub） | v1.0 |
 | GC 最终线（G1 vs ZGC） | v1.0 压测后 |
-| MyBatis-Plus 对 SB 4.1 适配版本确认（无适配则评估原生 MyBatis + 通用 mapper） | v0.4 phase-2（首个业务表，phase-1 设计定案：基座期无表不引入 ORM） |
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.27 | 2026-10-25 | v0.4 phase-2 设计定案：#13 ORM 决断落定（MyBatis-Plus 3.5.17 boot4-starter，实测验证 + JdbcTemplate 回退预案），§6 待定项移除 |
 | 1.26 | 2026-10-25 | v0.4 phase-1 交付：#21 Testcontainers 补 2.0 版本线与模块/包名变化、无 Docker 跳过形态 |
 | 1.25 | 2026-10-24 | v0.4 phase-1 设计定案：§6 待定项 #13 决断时机细化至 phase-2（首个业务表）；#21 Testcontainers 首次启用（DB 双方言 IT） |
 | 1.22 | 2026-10-20 | v0.2 phase-1：§4.7 补双监听装配纪律（factory 不作 bean、全量 BindableService 发现需 service filter）、测试端口解析；`@LocalGrpcServerPort` 在双 server 下不适用 |

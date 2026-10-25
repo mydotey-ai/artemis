@@ -41,4 +41,31 @@ public final class BasicAuth {
         return MessageDigest.isEqual(
                 actualToken.getBytes(StandardCharsets.US_ASCII), expectedToken.getBytes(StandardCharsets.US_ASCII));
     }
+
+    /** Basic 凭证解码结果。 */
+    public record Credential(String username, String password) {}
+
+    /** Basic header 解码；非 Basic 前缀 / 坏 base64 / 缺冒号 → null（调用方拒绝）。 */
+    public static Credential decode(String headerValue) {
+        if (headerValue == null) {
+            return null;
+        }
+        String trimmed = headerValue.trim();
+        if (!trimmed.regionMatches(true, 0, PREFIX, 0, PREFIX.length())) {
+            return null;
+        }
+        byte[] decoded;
+        try {
+            decoded = Base64.getDecoder()
+                    .decode(trimmed.substring(PREFIX.length()).trim());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+        String raw = new String(decoded, StandardCharsets.UTF_8);
+        int colon = raw.indexOf(':');
+        if (colon < 0) {
+            return null;
+        }
+        return new Credential(raw.substring(0, colon), raw.substring(colon + 1));
+    }
 }

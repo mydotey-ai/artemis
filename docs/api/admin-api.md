@@ -1,8 +1,8 @@
 # management-service Admin 与状态 API
 
-版本: 1.6    更新时间: 2026-10-25
+版本: 1.7    更新时间: 2026-10-25
 
-> 本文定义 management-service 对外 HTTP API（v0.1 内存态管理面）：实例管理 Admin API 与 registry 状态排障面。有效视图 = registry 只读事实 + management 摘除记录（ADR-016）；registry 不感知摘除。内部 gRPC 查询契约见 [registry-query-api.md](registry-query-api.md)。
+> 本文定义 management-service 对外 HTTP API（管理面：实例管理 Admin API、账户 API 与 registry 状态排障面）。有效视图 = registry 只读事实 + management 摘除记录（ADR-016）；registry 不感知摘除。内部 gRPC 查询契约见 [registry-query-api.md](registry-query-api.md)。
 
 ## 1. 部署与认证
 
@@ -10,9 +10,11 @@
 |---|---|
 | 外部 HTTP 端口 | **8081**（`server.port`） |
 | 管理端口 | **9092**（`management.server.port`，默认仅绑 `127.0.0.1`；actuator health/info/prometheus） |
-| 认证 | 默认开启 HTTP Basic 单账户（默认 `artemis`/`artemis`，生产必须修改） |
+| 认证（内存态） | 默认开启 HTTP Basic 单账户（默认 `artemis`/`artemis`，生产必须修改）；凭证取自配置，支持运行期轮换 |
+| 认证（DB 态，v0.4） | **账户表唯一源**（ADR-021）：PBKDF2 哈希验证；DB 态首启将配置凭证一次性 seed 物化进表，此后配置凭证失效、表非空永不覆盖 |
 | 关闭认证 | `artemis.management.auth.enabled=false`（仅 eval） |
 | 上游 | registry 只读查询 gRPC（registry 内部 peer 端口；端点**无默认值**，未配置时调用返回 REGISTRY_UNAVAILABLE；内部认证默认关闭，配置了 username 才附加 Basic 认证） |
+| 账户后端不可用 | 认证裁决 fail-closed：401 拒绝（账户 API 503，见 §7 错误语义） |
 
 配置项（SCF，静态）：
 
@@ -121,11 +123,28 @@ Base path：`/admin/v1`
 
 - 成功 204 No Content；幂等（未摘除同样 204）。
 
-## 5. 状态 API（registry 排障面）
+## 5. 账户 API（v0.4，ADR-021）
+
+单管理员账户管理。仅 DB 态支持——内存态凭证事实源是配置（改配置即改密，动态生效），端点返回 409。
+
+### 5.1 改密 `PUT /admin/v1/account/password`
+
+请求体（受当前认证源保护——DB 态旧密码）：
+
+```json
+{"oldPassword": "artemis", "newPassword": "new-s3cret-9"}
+```
+
+- 成功 200 `{"username": "artemis"}`；**旧凭证即时失效**（新凭证即用）。
+- `newPassword` 最少 8 字符（seed 的默认密码 7 字符属豁免——默认凭证本就要求立即改）；`oldPassword` 不匹配拒绝，均 400。
+- 内存态 409 `{"error": "NOT_SUPPORTED_IN_MEMORY_MODE", ...}`。
+- 改密操作的审计记录随 v0.4 phase-3 审计表落地。
+
+## 6. 状态 API（registry 排障面）
 
 数据直接来自 registry 只读查询，不缓存、不聚合；敏感配置已在 registry 侧脱敏。
 
-### 5.1 租约 `GET /admin/v1/status/leases?namespace={ns}&service={svc}`
+### 6.1 租约 `GET /admin/v1/status/leases?namespace={ns}&service={svc}`
 
 ```json
 {
@@ -145,7 +164,7 @@ Base path：`/admin/v1`
 - `remainingTtlMs` 可为负（已到期待清理）。
 - 单次最多 10000 条；超限 `truncated=true`，应按 namespace/service 分别查询。
 
-### 5.2 配置 `GET /admin/v1/status/config`
+### 6.2 配置 `GET /admin/v1/status/config`
 
 ```json
 {
@@ -164,7 +183,7 @@ Base path：`/admin/v1`
 
 - 返回 **registry** 的配置项；敏感 key（password/passwd/pwd/secret/token/credential/apikey/accesskey/privatekey）的 `value` 与 `defaultValue` 固定 `******`。
 
-### 5.3 自我保护 `GET /admin/v1/status/protection?namespace={ns}&service={svc}&includeNormal={bool}`
+### 6.3 自我保护 `GET /admin/v1/status/protection?namespace={ns}&service={svc}&includeNormal={bool}`
 
 数据来自 registry `GetSelfProtectionStatus`（ADR-017），不缓存、不聚合。
 
@@ -193,7 +212,7 @@ Base path：`/admin/v1`
 - 单次最多 10000 条；超限 `truncated=true`。`node` 为节点级窗口统计，用于区分节点级故障与单服务异常。
 - `/admin/v1/status/leases` 的 `protection` 字段保持节点级语义不变。
 
-### 5.4 持久化状态 `GET /admin/v1/status/persistence`
+### 6.4 持久化状态 `GET /admin/v1/status/persistence`
 
 management 自身持久化运行形态（v0.4 phase-1 起，不透传 registry）。
 
@@ -210,7 +229,7 @@ management 自身持久化运行形态（v0.4 phase-1 起，不透传 registry�
 - `schemaVersion`：最新已应用 Flyway migration 版本（字符串原样，如 `"1"`）；`spring.flyway.enabled=false` 或 history 不可读时为 `null`。
 - 配置了 DB 时业务仍为内存实现（v0.4 过渡期语义，持久化逐表接管中）。
 
-## 6. 错误语义
+## 7. 错误语义
 
 错误体：
 
@@ -220,20 +239,22 @@ management 自身持久化运行形态（v0.4 phase-1 起，不透传 registry�
 
 | HTTP | error | 场景 |
 |---|---|---|
-| 400 | `INVALID_ARGUMENT` | 路径/查询参数空白、`reason` 超长、body 不可解析、参数类型错误 |
+| 400 | `INVALID_ARGUMENT` | 路径/查询参数空白、`reason` 超长、body 不可解析、参数类型错误、改密参数非法（old 不匹配 / newPassword < 8 字符） |
 | 401 | `UNAUTHORIZED` | Basic 缺失或错误 |
 | 404 | `NOT_FOUND` | 未知路径 |
 | 405 | `METHOD_NOT_ALLOWED` | 方法不支持 |
+| 409 | `NOT_SUPPORTED_IN_MEMORY_MODE` | 内存态调用改密端点（凭证事实源是配置，v0.4 ADR-021） |
 | 502 | `REGISTRY_ERROR` | registry 返回 `ACK_FAIL` 或其它 gRPC 错误（含响应超过 16 MiB 入站上限） |
 | 503 | `REGISTRY_UNAVAILABLE` | registry `UNAVAILABLE` / `DEADLINE_EXCEEDED` |
+| 503 | `ACCOUNT_STORE_UNAVAILABLE` | 账户表访问失败（DB 态 fail-closed，v0.4 ADR-021） |
 | 500 | `INTERNAL` | 未预期异常（堆栈只进日志） |
 
 management 启动不依赖 registry 可用；registry 故障时管理面仍可启动，查询类 API 返回 503。
 
-## 7. 已知限制（v0.1）
+## 8. 已知限制（v0.1）
 
 - 摘除记录内存态、重启丢失；仅 instance 级，无四级级联、审计、审批（v0.4/v1.x）。
-- RBAC 随 v1.0；v0.1 外部 HTTP 单账户凭证。
+- RBAC 随 v1.0；内存态外部 HTTP 单账户凭证（DB 态为单管理员账户表，v0.4）。
 - registry 地址单值、无重试/熔断（v0.2 集群后引入地址列表与容灾）。
 - registry 查询无分页；客户端入站上限 16 MiB，超限返回 502。
 
@@ -241,6 +262,7 @@ management 启动不依赖 registry 可用；registry 故障时管理面仍可�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.7 | 2026-10-25 | v0.4 phase-2：新增账户 API（§5 改密端点，DB 态闭环）；§1 认证双态语义（DB 态账户表唯一源 + seed 物化，ADR-021）；错误表补 409/账户 503；状态 API 重编号为 §6 |
 | 1.6 | 2026-10-25 | v0.4 phase-1：新增 `GET /admin/v1/status/persistence`（DB 双轨运行形态与 schema 版本） |
 | 1.5 | 2026-10-24 | v0.3 phase-6：摘除/恢复语义补规则流下发说明（discovery 侧过滤生效） |
 | 1.4 | 2026-10-21 | v0.2 phase-4：新增 `GET /admin/v1/status/protection`（按服务保护态与节点级统计） |

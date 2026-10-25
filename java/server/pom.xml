@@ -43,6 +43,7 @@
     <checkstyle-tool.version>14.3.0</checkstyle-tool.version>
     <mapstruct.version>1.6.3</mapstruct.version>
     <lombok-mapstruct-binding.version>0.2.0</lombok-mapstruct-binding.version>
+    <mybatis-plus.version>3.5.17</mybatis-plus.version>
   </properties>
 
   <dependencyManagement>
@@ -137,6 +138,11 @@
         <groupId>org.mapstruct</groupId>
         <artifactId>mapstruct-processor</artifactId>
         <version>${mapstruct.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.baomidou</groupId>
+        <artifactId>mybatis-plus-spring-boot4-starter</artifactId>
+        <version>${mybatis-plus.version}</version>
       </dependency>
       <dependency>
         <groupId>org.projectlombok</groupId>

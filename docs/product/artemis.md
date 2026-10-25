@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.25    更新时间: 2026-10-25
+版本: 1.26    更新时间: 2026-10-25
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -254,10 +254,19 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **运行时语义（过渡期）**：DB 态下业务（摘除等）仍为内存实现，持久化随 phase-2（账户）起逐表接管；registry/discovery 主类显式排除数据源自动装配（组合部署装配边界，同 JVM 组合形态不受 DB 依赖混入影响）。
 - **工程形态**：双方言 IT（Testcontainers 2.0 真实容器起停 + migration 断言，无 Docker 环境自动跳过）+ 内存态装配单测；ORM（MyBatis-Plus，技术选型 #13）决断推迟首个业务表 phase（phase-2）。
 
+**v0.4 phase-2（账户体系与统一认证接管）已交付**：
+
+- **单管理员 DB 账户**：首个业务表 `artemis_account`（V2，双方言——PG `timestamptz` / MySQL `datetime(6)`）；密码 PBKDF2-HMAC-SHA256 哈希存储（JDK 内置，600k iterations、随机 salt、常量时间比较，哈希串自描述格式），明文不落库不落日志。ORM 采用 MyBatis-Plus 3.5.17（boot4 starter，技术选型 #13 决断，SB 4.1 实测兼容；core 保持零 MyBatis/Spring 依赖，端口 + 实现分层）。
+- **统一认证接管（ADR-021）**：接管 = **管理访问面收敛**——DB 态下 Admin API 认证唯一源为账户表，`artemis.management.auth.username/password` 配置凭证失效（首启一次性物化 seed 进表，已配置自定义凭证的部署升级无缝；表非空永不覆盖）；registry/discovery 本地单账户零改动（SDK 数据面与管理凭证分域，全面委托随 v1.0 RBAC）。内存态行为不变（配置凭证，支持运行期轮换）。
+- **改密 API**：`PUT /admin/v1/account/password`（DB 态闭环，默认密码消除出口；旧凭证即时失效；新密码 ≥ 8 字符）；内存态返回 409（凭证事实源是配置）。见 [admin-api.md](../api/admin-api.md)。
+- **语义细节**：成功凭证 60s 服务端缓存（正确路径每分钟一次哈希开销，错误路径每次全额计算）；认证后端不可用 fail-closed（401 拒绝 / API 503）；默认密码在用时启动 WARN（ADR-009 延续）。
+- **工程形态**：core 哈希器/裁决服务单测 + server 过滤器三态/端点单测；双方言 `AccountFlowIT`（seed 默认登录 → 改密接管生效 → 跨重启账户保留 + 配置凭证失效，Testcontainers 真实容器）。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.26 | 2026-10-25 | v0.4 phase-2 交付：单管理员 DB 账户 + 统一认证接管（ADR-021：管理访问面收敛、配置凭证 seed 物化）、改密 API |
 | 1.25 | 2026-10-25 | v0.4 phase-1 交付：management DB 可选装配（MySQL/PG 双方言 + Flyway + 双轨运行）、`GET /admin/v1/status/persistence`；交付状态首段 v0.3 收尾修正 |
 | 1.24 | 2026-10-24 | v0.3 phase-9 交付：starter 双用途条件装配（缺地址不 fail-fast、配置桥同名让位/按名绑定）、`artemis-dist` all-in-one 单包（同 JVM 双上下文、`artemis.dist.*`）；新建 api/all-in-one.md |
 | 1.23 | 2026-10-24 | v0.3 phase-8 交付：发现侧 Java 8 SDK（订阅/缓存/快照/兜底/地址容灾）、discovery 静态节点目录（ADR-020）、`RegistryClient` 更名与 `clientId`；新建 api/sdk-java-discovery.md、api/discovery-nodes-api.md |
