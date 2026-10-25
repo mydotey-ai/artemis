@@ -1,7 +1,9 @@
 package org.mydotey.ai.artemis.discovery.application;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.mydotey.ai.artemis.discovery.domain.ChangeType;
 import org.mydotey.ai.artemis.discovery.domain.ChecksumResponse;
@@ -232,6 +234,45 @@ public final class DiscoveryProtoMapper {
             case EJECTION_SCOPE_GROUP -> org.mydotey.ai.artemis.common.governance.EjectionScope.GROUP;
             default -> org.mydotey.ai.artemis.common.governance.EjectionScope.INSTANCE;
         };
+    }
+
+    // ---- 逻辑实例流（management.v1，toDomain 入站，phase-4）----
+
+    /** 快照事件判定（snapshot 已设，含空集；message presence 语义）。 */
+    public boolean isSnapshot(org.mydotey.ai.artemis.proto.management.v1.LogicalInstancesEvent event) {
+        return event.hasSnapshot();
+    }
+
+    /** 快照按 ServiceKey 分组为投影 bootstrap 形态（保持流内出现序）。 */
+    public List<ServiceInstances> toDomain(
+            org.mydotey.ai.artemis.proto.management.v1.LogicalInstancesSnapshot snapshot) {
+        Map<ServiceKey, List<Instance>> grouped = new LinkedHashMap<>();
+        for (org.mydotey.ai.artemis.proto.management.v1.LogicalInstance logical : snapshot.getInstancesList()) {
+            grouped.computeIfAbsent(toDomain(logical.getService()), key -> new ArrayList<>())
+                    .add(toDomain(logical.getInstance()));
+        }
+        List<ServiceInstances> services = new ArrayList<>(grouped.size());
+        for (Map.Entry<ServiceKey, List<Instance>> entry : grouped.entrySet()) {
+            services.add(new ServiceInstances(entry.getKey(), entry.getValue()));
+        }
+        return List.copyOf(services);
+    }
+
+    /**
+     * upsert → UPDATE 恒映射（投影 apply 与订阅翻译两路径均为覆盖语义：翻译分支天然区分
+     * 新入视图 NEW / 视图内 UPDATE / 退出 DELETE——恒正确；NEW 反而在 labels 退出场景缺
+     * DELETE，不可用）。
+     */
+    public ServiceChange toUpsertChange(org.mydotey.ai.artemis.proto.management.v1.LogicalInstance logical) {
+        return new ServiceChange(
+                toDomain(logical.getService()),
+                List.of(new InstanceChange(toDomain(logical.getInstance()), ChangeType.UPDATE)));
+    }
+
+    /** 删除 → DELETE（instance 至少携带 instanceId，匹配判定用投影旧值，契约语义）。 */
+    public ServiceChange toDeleteChange(org.mydotey.ai.artemis.proto.management.v1.LogicalInstanceKey key) {
+        Instance tombstone = new Instance(key.getInstanceId(), "", 0, InstanceStatus.UP, 0, Map.of());
+        return new ServiceChange(toDomain(key.getService()), List.of(new InstanceChange(tombstone, ChangeType.DELETE)));
     }
 
     // ---- 公共模型（common.v1，双向）----

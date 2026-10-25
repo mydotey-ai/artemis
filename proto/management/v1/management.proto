@@ -201,3 +201,41 @@ service EjectionRuleService {
   // （roadmap 期 1 设计内行为，v0.4 DB 接管闭环）。
   rpc WatchEjections(EjectionRulesRequest) returns (stream EjectionRulesEvent);
 }
+
+// ---- 逻辑实例订阅流（management → discovery，v0.4 phase-4，架构 §2.2 通道① 同端口）----
+// 逻辑实例 = 管理面维护的静态实例（第三方/异构服务，不经注册体系），进 discovery
+// 统一发现视图（discovery 以保留 cluster 进投影 union）。快照 + 增量、at-most-once、
+// 无版本/ack：数据语义快照自愈（对齐通道③投影流；规则版本化归规则流 phase-5）。
+
+message LogicalInstance {
+  artemis.common.v1.ServiceKey service = 1;
+  artemis.common.v1.Instance instance = 2;   // protocol/url 等扩展属性以 metadata 表达（D13 延伸）
+}
+
+message LogicalInstanceKey {
+  artemis.common.v1.ServiceKey service = 1;
+  string instance_id = 2;
+}
+
+message LogicalInstancesRequest {
+  string subscriber_id = 1;     // 订阅方标识（排障用）
+}
+
+message LogicalInstancesSnapshot {
+  repeated LogicalInstance instances = 1;   // 可为空集
+}
+
+// 流事件 envelope（message presence 区分空快照与增量，对齐 EjectionRulesEvent 先例；
+// upserted/deleted 互斥，单条消息恰一 action；upserted 为 upsert 语义——消费方以
+// UPDATE 承接（投影 apply 与订阅翻译均为覆盖语义，恒正确）。
+message LogicalInstancesEvent {
+  LogicalInstancesSnapshot snapshot = 1;
+  LogicalInstance upserted = 2;
+  LogicalInstanceKey deleted = 3;
+}
+
+service LogicalInstanceService {
+  // 订阅：首条快照（含空集）→ 其后增量按产生序；gRPC 单流天然有序。at-most-once：
+  // 慢消费者/推送失败由服务端断流注销，消费方断流重连重新收快照全量覆盖自愈。
+  rpc WatchLogicalInstances(LogicalInstancesRequest) returns (stream LogicalInstancesEvent);
+}

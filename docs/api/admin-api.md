@@ -1,6 +1,6 @@
 # management-service Admin 与状态 API
 
-版本: 1.8    更新时间: 2026-10-25
+版本: 1.9    更新时间: 2026-10-25
 
 > 本文定义 management-service 对外 HTTP API（管理面：实例管理 Admin API、账户 API 与 registry 状态排障面）。有效视图 = registry 只读事实 + management 摘除记录（ADR-016）；registry 不感知摘除。内部 gRPC 查询契约见 [registry-query-api.md](registry-query-api.md)。
 
@@ -154,6 +154,35 @@ Base path：`/admin/v1`
 
 摘除/恢复在摘除记录表完整留痕（4.5），审计表为统一查询入口的摘要行；改密等其余治理操作全量记录。
 
+### 4.7 逻辑实例 upsert `PUT /admin/v1/logical-instances`（v0.4 phase-4）
+
+请求体（全量覆盖语义；内容与当前一致 → no-op，不写库不推送不审计）：
+
+```json
+{
+  "namespace": "default",
+  "service": "third-party-service",
+  "instanceId": "db-proxy-1",
+  "host": "10.0.0.1",
+  "port": 3306,
+  "status": "UP",
+  "weight": 100,
+  "metadata": {"protocol": "mysql", "url": "jdbc://..."}
+}
+```
+
+- 响应 = 落库后视图（同构 JSON）。`status` 缺省 `UP`（只接受 UP/DOWN）；`weight` ≤ 0 或缺省归一 100；`metadata` 值不可为 null、序列化后 ≤ 16KB。
+- 校验上限：`namespace`/`service`/`host` ≤ 255，`instanceId` ≤ **255**（与 V4 唯一索引键长约束对齐，区别于摘除目标的 512——逻辑实例 id 为运维命名非 SDK 生成），`port` ∈ 1..65535。
+- 逻辑实例无心跳无租约（静态事实，不参与 registry 租约/TTL/自我保护）；经专属订阅流下发、discovery 以保留 cluster `logical` 进统一发现视图（[logical-instance-stream-api.md](logical-instance-stream-api.md)）；四级摘除对其同样生效。
+
+### 4.8 删除逻辑实例 `DELETE /admin/v1/logical-instances?namespace=&service=&instanceId=`
+
+幂等：不存在时 204 no-op。命中删除即经流推送增量（discovery 订阅方收 DELETE）。
+
+### 4.9 逻辑实例列表 `GET /admin/v1/logical-instances?namespace=&service=&limit=`
+
+过滤可选（空白 = 不过滤），按 `(namespace, service, instanceId)` 升序；`limit` 默认 100、上界 1000。
+
 ## 5. 账户 API（v0.4，ADR-021）
 
 单管理员账户管理。仅 DB 态支持——内存态凭证事实源是配置（改配置即改密，动态生效），端点返回 409。
@@ -270,7 +299,7 @@ management 自身持久化运行形态（v0.4 phase-1 起，不透传 registry�
 
 | HTTP | error | 场景 |
 |---|---|---|
-| 400 | `INVALID_ARGUMENT` | 参数空白、scope 非法或字段组合不符、字段超长（`reason` > 1024 / `namespace`·`service` > 255 / `instanceId`·`value` > 512）、body 不可解析、参数类型错误、改密参数非法（old 不匹配 / newPassword < 8 字符） |
+| 400 | `INVALID_ARGUMENT` | 参数空白、scope 非法或字段组合不符、字段超长（`reason` > 1024 / `namespace`·`service` > 255 / `instanceId`·`value` > 512；逻辑实例 `instanceId` > 255、`host` > 255、metadata 值为 null 或序列化 > 16KB）、body 不可解析、参数类型错误、改密参数非法（old 不匹配 / newPassword < 8 字符） |
 | 401 | `UNAUTHORIZED` | Basic 缺失或错误 |
 | 404 | `NOT_FOUND` | 未知路径 |
 | 405 | `METHOD_NOT_ALLOWED` | 方法不支持 |
@@ -279,13 +308,14 @@ management 自身持久化运行形态（v0.4 phase-1 起，不透传 registry�
 | 503 | `REGISTRY_UNAVAILABLE` | registry `UNAVAILABLE` / `DEADLINE_EXCEEDED` |
 | 503 | `ACCOUNT_STORE_UNAVAILABLE` | 账户表访问失败（DB 态 fail-closed，v0.4 ADR-021） |
 | 503 | `EJECTION_STORE_UNAVAILABLE` | 摘除/审计存储访问失败（DB 态，操作未落库可重试） |
+| 503 | `LOGICAL_INSTANCE_STORE_UNAVAILABLE` | 逻辑实例存储访问失败（DB 态，v0.4 phase-4） |
 | 500 | `INTERNAL` | 未预期异常（堆栈只进日志） |
 
 management 启动不依赖 registry 可用；registry 故障时管理面仍可启动，查询类 API 返回 503。
 
 ## 8. 已知限制
 
-- 摘除四级与审计已交付（v0.4 phase-3）；内存态（未配置 DB）仍重启丢失（期 1 设计内行为，配置 DB 即持久化）；审批流随 v1.x 按社区需求排期。
+- 摘除四级与审计已交付（v0.4 phase-3）；逻辑实例已交付（v0.4 phase-4，management 侧服务视图合并逻辑实例归 phase-6 console）；内存态（未配置 DB）仍重启丢失（期 1 设计内行为，配置 DB 即持久化——重启后经流快照重下发恢复）；审批流随 v1.x 按社区需求排期。
 - RBAC 随 v1.0；内存态外部 HTTP 单账户凭证（DB 态为单管理员账户表，v0.4）。
 - registry 地址单值、无重试/熔断（v0.2 集群后引入地址列表与容灾）。
 - registry 查询无分页；客户端入站上限 16 MiB，超限返回 502。
@@ -294,6 +324,7 @@ management 启动不依赖 registry 可用；registry 故障时管理面仍可�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.9 | 2026-10-25 | v0.4 phase-4：新增逻辑实例 API（§4.7–4.9 upsert/delete/list，幂等语义与 255 校验上限）；错误表补 `LOGICAL_INSTANCE_STORE_UNAVAILABLE` |
 | 1.8 | 2026-10-25 | v0.4 phase-3：统一四级 ejection API（替换 v0.1 实例级端点）、记录/审计查询、双轨持久化与操作记录即状态语义、503 `EJECTION_STORE_UNAVAILABLE` |
 | 1.7 | 2026-10-25 | v0.4 phase-2：新增账户 API（§5 改密端点，DB 态闭环）；§1 认证双态语义（DB 态账户表唯一源 + seed 物化，ADR-021）；错误表补 409/账户 503；状态 API 重编号为 §6 |
 | 1.6 | 2026-10-25 | v0.4 phase-1：新增 `GET /admin/v1/status/persistence`（DB 双轨运行形态与 schema 版本） |

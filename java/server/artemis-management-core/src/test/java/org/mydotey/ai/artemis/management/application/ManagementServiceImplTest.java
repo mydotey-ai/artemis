@@ -20,6 +20,7 @@ import org.mydotey.ai.artemis.management.domain.Instance;
 import org.mydotey.ai.artemis.management.domain.InstanceStatus;
 import org.mydotey.ai.artemis.management.domain.LeaseDetail;
 import org.mydotey.ai.artemis.management.domain.LeaseStatus;
+import org.mydotey.ai.artemis.management.domain.LogicalInstance;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryPort;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStats;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
@@ -29,6 +30,8 @@ import org.mydotey.ai.artemis.management.domain.ServiceSummary;
 import org.mydotey.ai.artemis.management.infrastructure.EjectionRuleDispatcher;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryAuditLogStore;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryEjectionStore;
+import org.mydotey.ai.artemis.management.infrastructure.InMemoryLogicalInstanceStore;
+import org.mydotey.ai.artemis.management.infrastructure.LogicalInstanceDispatcher;
 
 class ManagementServiceImplTest {
 
@@ -40,8 +43,16 @@ class ManagementServiceImplTest {
     private final InMemoryEjectionStore ejections = new InMemoryEjectionStore();
     private final InMemoryAuditLogStore auditLogs = new InMemoryAuditLogStore();
     private final EjectionRuleDispatcher dispatcher = new EjectionRuleDispatcher(ejections);
-    private final ManagementServiceImpl service =
-            new ManagementServiceImpl(registry, ejections, auditLogs, dispatcher, Clock.fixed(NOW, ZoneOffset.UTC));
+    private final InMemoryLogicalInstanceStore logicalInstances = new InMemoryLogicalInstanceStore();
+    private final LogicalInstanceDispatcher logicalDispatcher = new LogicalInstanceDispatcher(logicalInstances);
+    private final ManagementServiceImpl service = new ManagementServiceImpl(
+            registry,
+            ejections,
+            auditLogs,
+            dispatcher,
+            logicalInstances,
+            logicalDispatcher,
+            Clock.fixed(NOW, ZoneOffset.UTC));
 
     // ---- 视图组合 ----
 
@@ -305,11 +316,97 @@ class ManagementServiceImplTest {
                 return List.of();
             }
         };
-        ManagementServiceImpl serviceWithFailingAudit =
-                new ManagementServiceImpl(registry, ejections, failing, dispatcher, Clock.fixed(NOW, ZoneOffset.UTC));
+        ManagementServiceImpl serviceWithFailingAudit = new ManagementServiceImpl(
+                registry,
+                ejections,
+                failing,
+                dispatcher,
+                logicalInstances,
+                logicalDispatcher,
+                Clock.fixed(NOW, ZoneOffset.UTC));
 
         assertThat(serviceWithFailingAudit.eject(target("i1"), "r", OPERATOR)).isNotNull();
         assertThat(service.listEjections(true, null, 10)).hasSize(1); // 摘除不受影响
+    }
+
+    // ---- 逻辑实例（v0.4 phase-4）----
+
+    @Test
+    void should_normalize_status_and_weight_when_upsert_logical_instance() {
+        LogicalInstance stored = service.upsertLogicalInstance(
+                new LogicalInstance(SERVICE, new Instance("i1", "10.0.0.1", 8080, null, 0, Map.of())), OPERATOR);
+        LogicalInstance down = service.upsertLogicalInstance(
+                new LogicalInstance(SERVICE, new Instance("i2", "10.0.0.2", 8080, InstanceStatus.DOWN, 200, Map.of())),
+                OPERATOR);
+
+        assertThat(stored.instance().status()).isEqualTo(InstanceStatus.UP); // UNSPECIFIED 语义等同 UP
+        assertThat(stored.instance().weight()).isEqualTo(100); // ≤ 0 归一
+        assertThat(down.instance().status()).isEqualTo(InstanceStatus.DOWN);
+        assertThat(down.instance().weight()).isEqualTo(200);
+        assertThat(logicalInstances.find(SERVICE, "i1")).isEqualTo(stored);
+    }
+
+    @Test
+    void should_noop_and_skip_audit_and_push_when_upsert_identical_content() {
+        LogicalInstance stored = service.upsertLogicalInstance(logical("i1"), OPERATOR);
+        LogicalRecordingSubscriber subscriber = new LogicalRecordingSubscriber();
+        logicalDispatcher.subscribe(subscriber); // 登记快照含 i1
+        subscriber.events.clear();
+
+        LogicalInstance result = service.upsertLogicalInstance(logical("i1"), OPERATOR);
+
+        assertThat(result).isEqualTo(stored);
+        assertThat(subscriber.events).isEmpty(); // 无增量推送
+        assertThat(service.auditLogs("LOGICAL_INSTANCE_UPSERT", 10)).hasSize(1); // 仅首次审计
+    }
+
+    @Test
+    void should_noop_when_delete_missing_logical_instance() {
+        service.deleteLogicalInstance(SERVICE, "missing", OPERATOR);
+
+        assertThat(service.auditLogs("LOGICAL_INSTANCE_DELETE", 10)).isEmpty();
+        assertThat(service.listLogicalInstances(null, null, 10)).isEmpty();
+    }
+
+    @Test
+    void should_append_audit_summary_on_logical_instance_change() {
+        service.upsertLogicalInstance(logical("i1"), OPERATOR);
+        service.deleteLogicalInstance(SERVICE, "i1", OPERATOR);
+
+        assertThat(service.auditLogs(null, 10))
+                .extracting(AuditLog::operation, AuditLog::target)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple("LOGICAL_INSTANCE_DELETE", "ns/svc/i1"),
+                        org.assertj.core.groups.Tuple.tuple("LOGICAL_INSTANCE_UPSERT", "ns/svc/i1"));
+    }
+
+    @Test
+    void should_push_increment_only_when_content_changes() {
+        LogicalRecordingSubscriber subscriber = new LogicalRecordingSubscriber();
+        logicalDispatcher.subscribe(subscriber);
+        assertThat(subscriber.snapshot).isEmpty(); // 空快照（登记即推）
+
+        service.upsertLogicalInstance(logical("i1"), OPERATOR);
+        service.upsertLogicalInstance(logical("i1"), OPERATOR); // identical no-op
+        service.deleteLogicalInstance(SERVICE, "i1", OPERATOR);
+        service.deleteLogicalInstance(SERVICE, "i1", OPERATOR); // 缺失 no-op
+
+        assertThat(subscriber.events).containsExactly("upserted:i1", "deleted:i1");
+    }
+
+    @Test
+    void should_filter_and_limit_when_list_logical_instances() {
+        service.upsertLogicalInstance(logical("i1"), OPERATOR);
+        service.upsertLogicalInstance(
+                new LogicalInstance(
+                        new ServiceKey("other", "svc"), logical("i9").instance()),
+                OPERATOR);
+
+        assertThat(service.listLogicalInstances("ns", null, 10))
+                .singleElement()
+                .extracting(instance -> instance.instance().instanceId())
+                .isEqualTo("i1");
+        assertThat(service.listLogicalInstances(null, null, 1)).hasSize(1); // limit 生效
     }
 
     // ---- 透传 ----
@@ -356,6 +453,36 @@ class ManagementServiceImplTest {
 
     private static Instance instance(String instanceId, Map<String, String> metadata) {
         return new Instance(instanceId, "10.0.0.1", 8080, InstanceStatus.UP, 100, metadata);
+    }
+
+    /** 已归一形态（与 normalize 输出等值，供 identical no-op 判定）。 */
+    private static LogicalInstance logical(String instanceId) {
+        return new LogicalInstance(SERVICE, instance(instanceId));
+    }
+
+    private static final class LogicalRecordingSubscriber
+            implements org.mydotey.ai.artemis.management.domain.LogicalInstanceSubscriber {
+
+        final List<LogicalInstance> snapshot = new ArrayList<>();
+        final List<String> events = new ArrayList<>();
+
+        @Override
+        public void onSnapshot(List<LogicalInstance> instances) {
+            snapshot.addAll(instances);
+        }
+
+        @Override
+        public void onUpserted(LogicalInstance instance) {
+            events.add("upserted:" + instance.instance().instanceId());
+        }
+
+        @Override
+        public void onDeleted(ServiceKey service, String instanceId) {
+            events.add("deleted:" + instanceId);
+        }
+
+        @Override
+        public void close() {}
     }
 
     private static final class RecordingSubscriber

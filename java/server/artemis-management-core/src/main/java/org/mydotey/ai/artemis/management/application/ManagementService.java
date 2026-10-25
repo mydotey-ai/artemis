@@ -6,6 +6,7 @@ import org.mydotey.ai.artemis.management.domain.AuditLog;
 import org.mydotey.ai.artemis.management.domain.ConfigProperty;
 import org.mydotey.ai.artemis.management.domain.EjectionTarget;
 import org.mydotey.ai.artemis.management.domain.LeaseStatus;
+import org.mydotey.ai.artemis.management.domain.LogicalInstance;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
 
@@ -30,6 +31,15 @@ public interface ManagementService {
 
     /** 审计查询（时间倒序 + operation 过滤 + limit）。 */
     List<AuditLog> auditLogs(String operation, int limit);
+
+    /** 逻辑实例 upsert（全量覆盖，registry 入口同规则归一）；内容相同 → no-op，返回当前视图。 */
+    LogicalInstance upsertLogicalInstance(LogicalInstance instance, String operator);
+
+    /** 删除逻辑实例；缺失幂等 no-op。 */
+    void deleteLogicalInstance(ServiceKey service, String instanceId, String operator);
+
+    /** 逻辑实例列表（(namespace, service) 过滤可选，键升序，limit 截断）。 */
+    List<LogicalInstance> listLogicalInstances(String namespace, String service, int limit);
 
     LeaseStatus leaseStatus(String namespace, String service);
 

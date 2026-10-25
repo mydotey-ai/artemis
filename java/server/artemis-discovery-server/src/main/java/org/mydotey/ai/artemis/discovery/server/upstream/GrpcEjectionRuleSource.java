@@ -14,7 +14,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import lombok.extern.slf4j.Slf4j;
 import org.mydotey.ai.artemis.common.auth.BasicAuth;
-import org.mydotey.ai.artemis.common.config.ScfProperties;
 import org.mydotey.ai.artemis.discovery.application.DiscoveryProtoMapper;
 import org.mydotey.ai.artemis.discovery.domain.EjectionRuleListener;
 import org.mydotey.ai.artemis.discovery.domain.EjectionRuleSource;
@@ -22,7 +21,6 @@ import org.mydotey.ai.artemis.discovery.domain.EjectionRuleWatch;
 import org.mydotey.ai.artemis.proto.management.v1.EjectionRuleServiceGrpc;
 import org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent;
 import org.mydotey.ai.artemis.proto.management.v1.EjectionRulesRequest;
-import org.mydotey.scf.facade.StringProperties;
 
 /**
  * management 摘除规则流 gRPC 实现（领域端口 {@link EjectionRuleSource}）。
@@ -34,29 +32,16 @@ import org.mydotey.scf.facade.StringProperties;
 @Slf4j
 public final class GrpcEjectionRuleSource implements EjectionRuleSource, AutoCloseable {
 
-    static final String KEY_MAX_INBOUND_MESSAGE_BYTES = "artemis.discovery.management.maxInboundMessageBytes";
-
-    private static final int DEFAULT_MAX_INBOUND_MESSAGE_BYTES = 16 * 1024 * 1024;
-
     private final ManagementConfig config;
     private final ManagementAuthConfig auth;
-    private final int maxInboundMessageBytes;
     private final AtomicInteger nextEndpoint = new AtomicInteger();
     private final ConcurrentHashMap<UpstreamConfig.Endpoint, ManagedChannel> channels = new ConcurrentHashMap<>();
     private final DiscoveryProtoMapper mapper = DiscoveryProtoMapper.INSTANCE;
     private final String subscriberId = subscriberId(); // DNS 查找一次（重连轮次复用）
 
-    public GrpcEjectionRuleSource(StringProperties properties, ManagementConfig config, ManagementAuthConfig auth) {
+    public GrpcEjectionRuleSource(ManagementConfig config, ManagementAuthConfig auth) {
         this.config = config;
         this.auth = auth;
-        this.maxInboundMessageBytes = ScfProperties.staticInt(
-                        properties,
-                        KEY_MAX_INBOUND_MESSAGE_BYTES,
-                        DEFAULT_MAX_INBOUND_MESSAGE_BYTES,
-                        1024 * 1024,
-                        64 * 1024 * 1024,
-                        "max inbound message bytes for management rule channel (static)")
-                .getValue();
     }
 
     @Override
@@ -86,7 +71,7 @@ public final class GrpcEjectionRuleSource implements EjectionRuleSource, AutoClo
                 endpoint,
                 ignored -> ManagedChannelBuilder.forAddress(endpoint.host(), endpoint.port())
                         .usePlaintext()
-                        .maxInboundMessageSize(maxInboundMessageBytes)
+                        .maxInboundMessageSize(config.maxInboundMessageBytes())
                         // 规则流是被动长流：keepalive ping 检测半开连接（参数同投影上游）
                         .keepAliveTime(310, TimeUnit.SECONDS)
                         .keepAliveTimeout(20, TimeUnit.SECONDS)

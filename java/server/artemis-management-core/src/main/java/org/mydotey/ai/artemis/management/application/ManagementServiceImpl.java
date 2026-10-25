@@ -16,7 +16,11 @@ import org.mydotey.ai.artemis.management.domain.EjectionRulePublisher;
 import org.mydotey.ai.artemis.management.domain.EjectionStore;
 import org.mydotey.ai.artemis.management.domain.EjectionTarget;
 import org.mydotey.ai.artemis.management.domain.Instance;
+import org.mydotey.ai.artemis.management.domain.InstanceStatus;
 import org.mydotey.ai.artemis.management.domain.LeaseStatus;
+import org.mydotey.ai.artemis.management.domain.LogicalInstance;
+import org.mydotey.ai.artemis.management.domain.LogicalInstancePublisher;
+import org.mydotey.ai.artemis.management.domain.LogicalInstanceStore;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryPort;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
@@ -39,10 +43,19 @@ public final class ManagementServiceImpl implements ManagementService {
      * ponytail: 全局锁只服务管理操作级频率；按 target 锁分片当并发治理操作成规模时再做。 */
     private final Object ejectionLock = new Object();
 
+    /** 逻辑实例读-判-写互斥（并发 upsert/delete 与推送成对串行，防流上乱序，ejectionLock 先例）。 */
+    private final Object logicalInstanceLock = new Object();
+
+    private static final Comparator<LogicalInstance> LOGICAL_ORDER = Comparator.comparing(
+                    LogicalInstance::service, SERVICE_ORDER)
+            .thenComparing(instance -> instance.instance().instanceId());
+
     private final RegistryQueryPort registry;
     private final EjectionStore ejections;
     private final AuditLogStore auditLogs;
     private final EjectionRulePublisher publisher;
+    private final LogicalInstanceStore logicalInstances;
+    private final LogicalInstancePublisher logicalPublisher;
     private final Clock clock;
 
     public ManagementServiceImpl(
@@ -50,11 +63,15 @@ public final class ManagementServiceImpl implements ManagementService {
             EjectionStore ejections,
             AuditLogStore auditLogs,
             EjectionRulePublisher publisher,
+            LogicalInstanceStore logicalInstances,
+            LogicalInstancePublisher logicalPublisher,
             Clock clock) {
         this.registry = registry;
         this.ejections = ejections;
         this.auditLogs = auditLogs;
         this.publisher = publisher;
+        this.logicalInstances = logicalInstances;
+        this.logicalPublisher = logicalPublisher;
         this.clock = clock;
     }
 
@@ -102,7 +119,7 @@ public final class ManagementServiceImpl implements ManagementService {
                 publisher.onEjected(stored); // 叠加（本已 active）不推：消费方无需变化
             }
         }
-        audit(EjectionAction.EJECT.name(), target, operator, reason);
+        audit(EjectionAction.EJECT.name(), target.describe(), operator, reason);
         return EjectionView.of(stored);
     }
 
@@ -117,7 +134,7 @@ public final class ManagementServiceImpl implements ManagementService {
                 publisher.onRecovered(target); // 完全对消翻转入 inactive 才推（锁内，同 #1）
             }
         }
-        audit(EjectionAction.RECOVER.name(), target, operator, null);
+        audit(EjectionAction.RECOVER.name(), target.describe(), operator, null);
     }
 
     @Override
@@ -138,6 +155,55 @@ public final class ManagementServiceImpl implements ManagementService {
     }
 
     @Override
+    public LogicalInstance upsertLogicalInstance(LogicalInstance instance, String operator) {
+        LogicalInstance normalized = normalize(instance);
+        ServiceKey service = normalized.service();
+        String instanceId = normalized.instance().instanceId();
+        // 推送在 logicalInstanceLock 内：与「读-判-写」成对串行，否则并发操作会把
+        // onUpserted/onDeleted 乱序送达 discovery（同 ejectionLock 结论）
+        synchronized (logicalInstanceLock) {
+            LogicalInstance current = logicalInstances.find(service, instanceId);
+            if (normalized.equals(current)) {
+                return current; // 内容相同 no-op：不写库、不推送、不审计
+            }
+            logicalInstances.upsert(normalized);
+            logicalPublisher.onUpserted(normalized);
+        }
+        audit(
+                "LOGICAL_INSTANCE_UPSERT",
+                describe(service, instanceId),
+                operator,
+                normalized.instance().host() + ":" + normalized.instance().port());
+        return normalized;
+    }
+
+    @Override
+    public void deleteLogicalInstance(ServiceKey service, String instanceId, String operator) {
+        synchronized (logicalInstanceLock) {
+            if (logicalInstances.find(service, instanceId) == null) {
+                return; // 缺失幂等 no-op（不删除不审计不推送）
+            }
+            logicalInstances.delete(service, instanceId);
+            logicalPublisher.onDeleted(service, instanceId);
+        }
+        audit("LOGICAL_INSTANCE_DELETE", describe(service, instanceId), operator, null);
+    }
+
+    @Override
+    public List<LogicalInstance> listLogicalInstances(String namespace, String service, int limit) {
+        return logicalInstances.findAll().stream()
+                .filter(instance -> namespace == null
+                        || namespace.isBlank()
+                        || instance.service().namespace().equals(namespace))
+                .filter(instance -> service == null
+                        || service.isBlank()
+                        || instance.service().service().equals(service))
+                .sorted(LOGICAL_ORDER)
+                .limit(Math.max(1, limit))
+                .toList();
+    }
+
+    @Override
     public LeaseStatus leaseStatus(String namespace, String service) {
         return registry.leaseStatus(namespace, service);
     }
@@ -152,14 +218,27 @@ public final class ManagementServiceImpl implements ManagementService {
         return registry.configStatus();
     }
 
-    /** 审计摘要行：尽力而为（失败不阻塞治理操作，仅记录；状态源唯一在摘除记录表）。 */
-    private void audit(String operation, EjectionTarget target, String operator, String detail) {
+    /** 审计摘要行：尽力而为（失败不阻塞治理操作，仅记录；状态源唯一在业务存储）。 */
+    private void audit(String operation, String target, String operator, String detail) {
         try {
-            auditLogs.append(
-                    new AuditLog(operation, target.describe(), operator, "SUCCESS", detail, clock.instant(), 0));
+            auditLogs.append(new AuditLog(operation, target, operator, "SUCCESS", detail, clock.instant(), 0));
         } catch (RuntimeException e) {
             // ponytail: 摘要尽力而为；合规要求强一致审计时改事务模板包裹两表写入
-            log.error("audit log append failed: operation={}, target={}", operation, target.describe(), e);
+            log.error("audit log append failed: operation={}, target={}", operation, target, e);
         }
+    }
+
+    /** registry 入口同规则归一：UNSPECIFIED 语义等同 UP；weight ≤ 0 归一为 100。 */
+    private static LogicalInstance normalize(LogicalInstance instance) {
+        Instance current = instance.instance();
+        InstanceStatus status = current.status() == InstanceStatus.DOWN ? InstanceStatus.DOWN : InstanceStatus.UP;
+        int weight = current.weight() <= 0 ? 100 : current.weight();
+        return new LogicalInstance(
+                instance.service(),
+                new Instance(current.instanceId(), current.host(), current.port(), status, weight, current.metadata()));
+    }
+
+    private static String describe(ServiceKey service, String instanceId) {
+        return service.namespace() + "/" + service.service() + "/" + instanceId;
     }
 }

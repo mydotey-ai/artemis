@@ -19,7 +19,7 @@ class AccountControllerTest {
     private final InMemoryAuditLogStore auditLogs = new InMemoryAuditLogStore();
     private final Clock clock = Clock.fixed(Instant.parse("2026-10-25T10:00:00Z"), ZoneOffset.UTC);
     private final AccountController controller = new AccountController(
-            authService, new PersistenceInfo(PersistenceInfo.Mode.DATABASE, "PostgreSQL", "3"), auditLogs, clock);
+            authService, new PersistenceInfo(PersistenceInfo.Mode.DATABASE, "PostgreSQL", "4"), auditLogs, clock);
 
     @Test
     void should_change_password_when_old_valid() {

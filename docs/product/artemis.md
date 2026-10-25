@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.27    更新时间: 2026-10-25
+版本: 1.28    更新时间: 2026-10-25
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -16,6 +16,7 @@
 - **实例状态**：客户端自报（服务端不做主动探测）；实例数据由客户端上报，服务端只存事实。
 - **投影分发（registry → discovery）**：registry 向 discovery 推送实例事实（全量快照 + 新增/变更/移除三值变更流）；discovery 侧投影是只读副本，discovery 不组集群。
 - **多集群聚合**：单 discovery 节点可同时订阅多个 registry 集群，各源投影本地独立维护、查询/订阅时刻合并（默认 union，可按来源 cluster 过滤）；聚合只发生在本地，无跨源污染（ADR-002）。
+- **逻辑实例（静态实例）**：第三方/异构服务（不经注册体系）由管理面维护为静态实例，经 management 持久化与专属订阅流下发，discovery 以保留来源 cluster `logical` 进入统一发现视图——与真实实例 union 出现在查询/订阅/对账中；无心跳无租约（status 为管理面静态事实），四级摘除对其同样生效。
 
 数据模型与操作语义以仓库顶层 `proto/` 契约（单一来源：[proto 契约规范](../dev/proto-contract.md)）为准；本版契约的设计细节见 [phase-1 设计文档](../milestones/v0.1/phases/phase-1-scaffold.md)。
 
@@ -272,10 +273,19 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **规则流契约**：`EjectionRule`/`EjectionRecovered` wire 兼容扩展（scope + target_value，缺省 INSTANCE 承载 v0.3 既有事件）；快照 = 有效规则集。见 [ejection-rule-stream-api.md](../api/ejection-rule-stream-api.md)。
 - **工程形态**：对消/命中判定纯函数（内存/DB 两态共享语义）单测；双方言 `EjectionPersistenceIT`（四级落库 + 审计 + 跨重启快照恢复）；三服务端到端 selector 过滤（zone 级摘除跨服务命中）。
 
+**v0.4 phase-4（逻辑实例）已交付**：
+
+- **模型与 API**：逻辑实例 = `(namespace, service, instanceId)` 唯一标识的静态实例（host/port/status/weight/metadata；protocol/url 等扩展属性走 metadata，D13 哲学延伸）；`PUT /admin/v1/logical-instances`（upsert，内容相同幂等 no-op）、`DELETE`（幂等）、`GET`（namespace/service 过滤 + limit）。归一同注册入口（status 缺省 UP、weight ≤ 0 → 100）。变更写审计摘要行（`LOGICAL_INSTANCE_UPSERT/DELETE`）。
+- **持久化（V4，双方言）**：`artemis_logical_instance`（唯一键三元组；instanceId 上限 255——MySQL 组合唯一索引键长 3072 字节限；metadata TEXT 存 JSON）；内存态/DB 态双轨。DB 态 management 重启后逻辑实例经流快照重下发恢复。
+- **下发通道**：management.v1 新增 `LogicalInstanceService.WatchLogicalInstances`（与摘除规则流同内部 gRPC 端口；快照 + 增量、at-most-once、无版本/ack——数据语义快照自愈，规则版本化归 phase-5 规则流）。见 [logical-instance-stream-api.md](../api/logical-instance-stream-api.md)。
+- **discovery 统一发现视图**：逻辑实例以保留 cluster `logical` 进入投影（复用既有投影同步/查询/订阅/对账全套）——与真实实例 union；摘除对逻辑实例同样生效（instance 级按键、selector 级按 metadata）；management 不可用时沿用最后已知逻辑实例（fail-open），不门控 discovery readiness；上游 cluster id 撞保留名启动失败。
+- **工程形态**：dispatcher/store/应用用例/映射单测；`LogicalInstanceStreamIT`（流契约）+ `DiscoveryLogicalInstanceIT`（三服务端到端：union/推送/摘除过滤/fail-open/0..1）+ 双方言 `LogicalInstancePersistenceIT`（跨重启重下发，无 Docker 环境跳过）。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.28 | 2026-10-25 | v0.4 phase-4 交付：逻辑实例（静态实例）——模型/CRUD/V4 双方言持久化 + 专属下发流 + discovery 保留 cluster `logical` 统一发现视图（union/摘除生效/fail-open） |
 | 1.27 | 2026-10-25 | v0.4 phase-3 交付：四级摘除（metadata selector 实时匹配）+ 操作记录即状态（叠加/反向对消）+ V3 双方言持久化与审计 + 统一 ejection API + 跨重启重下发恢复 |
 | 1.26 | 2026-10-25 | v0.4 phase-2 交付：单管理员 DB 账户 + 统一认证接管（ADR-021：管理访问面收敛、配置凭证 seed 物化）、改密 API |
 | 1.25 | 2026-10-25 | v0.4 phase-1 交付：management DB 可选装配（MySQL/PG 双方言 + Flyway + 双轨运行）、`GET /admin/v1/status/persistence`；交付状态首段 v0.3 收尾修正 |

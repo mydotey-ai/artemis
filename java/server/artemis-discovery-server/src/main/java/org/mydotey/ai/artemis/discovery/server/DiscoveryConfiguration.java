@@ -26,6 +26,7 @@ import org.mydotey.ai.artemis.discovery.server.grpc.RemoteAddressInterceptor;
 import org.mydotey.ai.artemis.discovery.server.health.DiscoveryReadinessHealthIndicator;
 import org.mydotey.ai.artemis.discovery.server.http.HttpBasicAuthFilter;
 import org.mydotey.ai.artemis.discovery.server.upstream.GrpcEjectionRuleSource;
+import org.mydotey.ai.artemis.discovery.server.upstream.GrpcLogicalInstanceSource;
 import org.mydotey.ai.artemis.discovery.server.upstream.ManagementAuthConfig;
 import org.mydotey.ai.artemis.discovery.server.upstream.ManagementConfig;
 import org.mydotey.ai.artemis.discovery.server.upstream.NodeDirectoryConfig;
@@ -109,7 +110,8 @@ public class DiscoveryConfiguration {
     }
 
     /** 多上游同步编排（phase-5）：per cluster (source, synchronizer)，共享投影分表与扇出表锁；
-     * 订阅扇出内联同步线程（D-S4/D-S7）；状态转移上报新鲜度表（D-F5）。 */
+     * 订阅扇出内联同步线程（D-S4/D-S7）；状态转移上报新鲜度表（D-F5）。
+     * 逻辑实例源（phase-4）：配置了 management 时并入编排（保留 cluster，不门控 readiness）。 */
     @Bean(initMethod = "start", destroyMethod = "close")
     UpstreamSynchronizers upstreamSynchronizers(
             StringProperties properties,
@@ -118,7 +120,9 @@ public class DiscoveryConfiguration {
             ProjectionRegistry registry,
             SubscriptionManager subscriptionManager,
             DiscoveryReadinessGate readinessGate,
-            UpstreamStatuses upstreamStatuses) {
+            UpstreamStatuses upstreamStatuses,
+            ManagementConfig managementConfig,
+            GrpcLogicalInstanceSource logicalInstanceSource) {
         return new UpstreamSynchronizers(
                 properties,
                 upstreamConfig,
@@ -126,14 +130,22 @@ public class DiscoveryConfiguration {
                 registry,
                 subscriptionManager,
                 readinessGate,
-                upstreamStatuses);
+                upstreamStatuses,
+                managementConfig.enabled() ? logicalInstanceSource : null);
     }
 
     /** 规则流 gRPC 源（channel 池随 context 关闭释放；未启用时惰性零连接）。 */
     @Bean(destroyMethod = "close")
     GrpcEjectionRuleSource grpcEjectionRuleSource(
-            StringProperties properties, ManagementConfig managementConfig, ManagementAuthConfig managementAuthConfig) {
-        return new GrpcEjectionRuleSource(properties, managementConfig, managementAuthConfig);
+            ManagementConfig managementConfig, ManagementAuthConfig managementAuthConfig) {
+        return new GrpcEjectionRuleSource(managementConfig, managementAuthConfig);
+    }
+
+    /** 逻辑实例流 gRPC 源（投影源适配；未启用时惰性零连接，channel 池随 context 关闭释放）。 */
+    @Bean(destroyMethod = "close")
+    GrpcLogicalInstanceSource grpcLogicalInstanceSource(
+            ManagementConfig managementConfig, ManagementAuthConfig managementAuthConfig) {
+        return new GrpcLogicalInstanceSource(managementConfig, managementAuthConfig);
     }
 
     /** 规则源状态持有者（phase-7 D-A5）：同步引擎上报、管理面查询。 */

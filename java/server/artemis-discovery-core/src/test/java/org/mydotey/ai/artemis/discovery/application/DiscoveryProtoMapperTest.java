@@ -13,6 +13,7 @@ import org.mydotey.ai.artemis.discovery.domain.DiscoverySelector;
 import org.mydotey.ai.artemis.discovery.domain.EjectionRule;
 import org.mydotey.ai.artemis.discovery.domain.EjectionTarget;
 import org.mydotey.ai.artemis.discovery.domain.Instance;
+import org.mydotey.ai.artemis.discovery.domain.InstanceChange;
 import org.mydotey.ai.artemis.discovery.domain.InstanceStatus;
 import org.mydotey.ai.artemis.discovery.domain.QueryResponse;
 import org.mydotey.ai.artemis.discovery.domain.ServiceChange;
@@ -261,5 +262,79 @@ class DiscoveryProtoMapperTest {
         assertThat(mapper.isSnapshot(delta)).isFalse();
         assertThat(mapper.toDomain(delta.getEjected()))
                 .isEqualTo(EjectionRule.instance(new ServiceKey("default", "order-service"), "i2", ""));
+    }
+
+    @Test
+    void should_group_snapshot_by_service_and_map_events_to_changes() {
+        // 快照：两实例同 service 分组、另一 service 独立；保持流内出现序
+        org.mydotey.ai.artemis.proto.management.v1.LogicalInstancesSnapshot snapshot =
+                org.mydotey.ai.artemis.proto.management.v1.LogicalInstancesSnapshot.newBuilder()
+                        .addInstances(logical("default", "order-service", "l1"))
+                        .addInstances(logical("other", "pay-service", "l9"))
+                        .addInstances(logical("default", "order-service", "l2"))
+                        .build();
+        assertThat(mapper.toDomain(snapshot))
+                .containsExactly(
+                        new ServiceInstances(
+                                new ServiceKey("default", "order-service"), List.of(instance("l1"), instance("l2"))),
+                        new ServiceInstances(new ServiceKey("other", "pay-service"), List.of(instance("l9"))));
+
+        // 空快照（snapshot 已设、instances 空）
+        org.mydotey.ai.artemis.proto.management.v1.LogicalInstancesEvent empty =
+                org.mydotey.ai.artemis.proto.management.v1.LogicalInstancesEvent.newBuilder()
+                        .setSnapshot(org.mydotey.ai.artemis.proto.management.v1.LogicalInstancesSnapshot.newBuilder())
+                        .build();
+        assertThat(mapper.isSnapshot(empty)).isTrue();
+        assertThat(mapper.toDomain(empty.getSnapshot())).isEmpty();
+
+        // upserted → UPDATE 恒映射（覆盖语义，翻译分支区分视图进出）
+        org.mydotey.ai.artemis.proto.management.v1.LogicalInstancesEvent upsert =
+                org.mydotey.ai.artemis.proto.management.v1.LogicalInstancesEvent.newBuilder()
+                        .setUpserted(logical("default", "order-service", "l1"))
+                        .build();
+        assertThat(mapper.isSnapshot(upsert)).isFalse();
+        assertThat(mapper.toUpsertChange(upsert.getUpserted()))
+                .isEqualTo(new ServiceChange(
+                        new ServiceKey("default", "order-service"),
+                        List.of(new InstanceChange(instance("l1"), ChangeType.UPDATE))));
+
+        // deleted → DELETE（仅 instanceId，其余字段无意义）
+        org.mydotey.ai.artemis.proto.management.v1.LogicalInstancesEvent deleted =
+                org.mydotey.ai.artemis.proto.management.v1.LogicalInstancesEvent.newBuilder()
+                        .setDeleted(org.mydotey.ai.artemis.proto.management.v1.LogicalInstanceKey.newBuilder()
+                                .setService(serviceKey("default", "order-service"))
+                                .setInstanceId("l1")
+                                .build())
+                        .build();
+        ServiceChange deleteChange = mapper.toDeleteChange(deleted.getDeleted());
+        assertThat(deleteChange.key()).isEqualTo(new ServiceKey("default", "order-service"));
+        assertThat(deleteChange.changes()).singleElement().satisfies(change -> {
+            assertThat(change.type()).isEqualTo(ChangeType.DELETE);
+            assertThat(change.instance().instanceId()).isEqualTo("l1");
+        });
+    }
+
+    private static org.mydotey.ai.artemis.proto.management.v1.LogicalInstance logical(
+            String namespace, String service, String instanceId) {
+        return org.mydotey.ai.artemis.proto.management.v1.LogicalInstance.newBuilder()
+                .setService(serviceKey(namespace, service))
+                .setInstance(org.mydotey.ai.artemis.proto.common.v1.Instance.newBuilder()
+                        .setInstanceId(instanceId)
+                        .setHost("10.0.0.1")
+                        .setPort(8080)
+                        .setWeight(100)
+                        .build())
+                .build();
+    }
+
+    private static org.mydotey.ai.artemis.proto.common.v1.ServiceKey serviceKey(String namespace, String service) {
+        return org.mydotey.ai.artemis.proto.common.v1.ServiceKey.newBuilder()
+                .setNamespace(namespace)
+                .setService(service)
+                .build();
+    }
+
+    private static Instance instance(String instanceId) {
+        return new Instance(instanceId, "10.0.0.1", 8080, InstanceStatus.UNSPECIFIED, 100, Map.of());
     }
 }

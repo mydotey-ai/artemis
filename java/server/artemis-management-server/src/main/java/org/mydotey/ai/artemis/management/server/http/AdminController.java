@@ -1,7 +1,9 @@
 package org.mydotey.ai.artemis.management.server.http;
 
+import com.google.gson.Gson;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import org.mydotey.ai.artemis.common.governance.EjectionScope;
 import org.mydotey.ai.artemis.management.application.EjectionView;
 import org.mydotey.ai.artemis.management.application.ManagementService;
@@ -9,11 +11,16 @@ import org.mydotey.ai.artemis.management.application.ServiceDetail;
 import org.mydotey.ai.artemis.management.application.ServiceView;
 import org.mydotey.ai.artemis.management.domain.AuditLog;
 import org.mydotey.ai.artemis.management.domain.EjectionTarget;
+import org.mydotey.ai.artemis.management.domain.Instance;
+import org.mydotey.ai.artemis.management.domain.InstanceStatus;
+import org.mydotey.ai.artemis.management.domain.LogicalInstance;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -31,13 +38,18 @@ import org.springframework.web.bind.annotation.RestController;
 public final class AdminController {
 
     private static final int MAX_REASON_LENGTH = 1024;
-    // 与 V3 表列宽对齐（DB 态超长值会溢出列宽 503，契约层先拒绝保证双态行为一致）
+    // 与 V3/V4 表列宽对齐（DB 态超长值会溢出列宽 503，契约层先拒绝保证双态行为一致）
     private static final int MAX_NAMESPACE_LENGTH = 255;
     private static final int MAX_SERVICE_LENGTH = 255;
     private static final int MAX_INSTANCE_ID_LENGTH = 512;
+    // 逻辑实例 instanceId 为运维命名（非 SDK 生成），255 与 V4 唯一索引键长约束对齐（MySQL 3072 字节限）
+    private static final int MAX_LOGICAL_INSTANCE_ID_LENGTH = 255;
     private static final int MAX_VALUE_LENGTH = 512;
+    private static final int MAX_HOST_LENGTH = 255;
+    private static final int MAX_METADATA_JSON_LENGTH = 16 * 1024;
     private static final int DEFAULT_LIST_LIMIT = 100;
     private static final int MAX_LIST_LIMIT = 1000;
+    private static final Gson METADATA_JSON = new Gson();
 
     private final ManagementService managementService;
 
@@ -101,6 +113,103 @@ public final class AdminController {
             @RequestParam(name = "limit", defaultValue = "" + DEFAULT_LIST_LIMIT) int limit) {
         int bounded = Math.min(Math.max(1, limit), MAX_LIST_LIMIT);
         return new ListAuditLogsResponse(managementService.auditLogs(operation, bounded));
+    }
+
+    // ---- 逻辑实例（静态实例，v0.4 phase-4）----
+
+    @PutMapping("/logical-instances")
+    public LogicalInstanceResponse upsertLogicalInstance(
+            @RequestBody(required = false) LogicalInstanceRequest request,
+            @RequestAttribute(value = HttpBasicAuthFilter.AUTH_USER_ATTRIBUTE, required = false) String operator) {
+        return toResponse(managementService.upsertLogicalInstance(toLogicalInstance(request), operator(operator)));
+    }
+
+    @DeleteMapping("/logical-instances")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteLogicalInstance(
+            @RequestParam("namespace") String namespace,
+            @RequestParam("service") String service,
+            @RequestParam("instanceId") String instanceId,
+            @RequestAttribute(value = HttpBasicAuthFilter.AUTH_USER_ATTRIBUTE, required = false) String operator) {
+        requireNonBlank(instanceId, "instanceId");
+        requireLength(namespace, "namespace", MAX_NAMESPACE_LENGTH);
+        requireLength(service, "service", MAX_SERVICE_LENGTH);
+        requireLength(instanceId, "instanceId", MAX_LOGICAL_INSTANCE_ID_LENGTH);
+        managementService.deleteLogicalInstance(key(namespace, service), instanceId, operator(operator));
+    }
+
+    @GetMapping("/logical-instances")
+    public ListLogicalInstancesResponse listLogicalInstances(
+            @RequestParam(name = "namespace", required = false) String namespace,
+            @RequestParam(name = "service", required = false) String service,
+            @RequestParam(name = "limit", defaultValue = "" + DEFAULT_LIST_LIMIT) int limit) {
+        int bounded = Math.min(Math.max(1, limit), MAX_LIST_LIMIT);
+        return new ListLogicalInstancesResponse(
+                managementService.listLogicalInstances(blankToNull(namespace), blankToNull(service), bounded).stream()
+                        .map(AdminController::toResponse)
+                        .toList());
+    }
+
+    private static LogicalInstance toLogicalInstance(LogicalInstanceRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("request body required");
+        }
+        requireNonBlank(request.namespace(), "namespace");
+        requireNonBlank(request.service(), "service");
+        requireNonBlank(request.instanceId(), "instanceId");
+        requireNonBlank(request.host(), "host");
+        requireLength(request.namespace(), "namespace", MAX_NAMESPACE_LENGTH);
+        requireLength(request.service(), "service", MAX_SERVICE_LENGTH);
+        requireLength(request.instanceId(), "instanceId", MAX_LOGICAL_INSTANCE_ID_LENGTH);
+        requireLength(request.host(), "host", MAX_HOST_LENGTH);
+        int port = request.port() == null ? 0 : request.port(); // 缺省/显式 0 均拒（必填）
+        if (port < 1 || port > 65535) {
+            throw new IllegalArgumentException("port must be within 1..65535");
+        }
+        int weight = request.weight() == null ? 0 : request.weight(); // 缺省 = 未设置（归一 100）
+        if (weight < 0) {
+            throw new IllegalArgumentException("weight must be >= 0");
+        }
+        Map<String, String> metadata = request.metadata() == null ? Map.of() : request.metadata();
+        if (metadata.values().stream().anyMatch(value -> value == null)) {
+            throw new IllegalArgumentException("metadata values must not be null");
+        }
+        if (METADATA_JSON.toJson(metadata).length() > MAX_METADATA_JSON_LENGTH) {
+            throw new IllegalArgumentException(
+                    "metadata must serialize to at most " + MAX_METADATA_JSON_LENGTH + " characters");
+        }
+        return new LogicalInstance(
+                key(request.namespace(), request.service()),
+                new Instance(
+                        request.instanceId(), request.host(), port, parseStatus(request.status()), weight, metadata));
+    }
+
+    /** status 缺省 UP；仅接受 UP/DOWN（UNSPECIFIED 归一在应用层，入口只认显式二值）。 */
+    private static InstanceStatus parseStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return InstanceStatus.UP;
+        }
+        return switch (status.trim().toUpperCase(Locale.ROOT)) {
+            case "UP" -> InstanceStatus.UP;
+            case "DOWN" -> InstanceStatus.DOWN;
+            default -> throw new IllegalArgumentException("status must be UP or DOWN");
+        };
+    }
+
+    private static LogicalInstanceResponse toResponse(LogicalInstance instance) {
+        return new LogicalInstanceResponse(
+                instance.service().namespace(),
+                instance.service().service(),
+                instance.instance().instanceId(),
+                instance.instance().host(),
+                instance.instance().port(),
+                instance.instance().status().name(),
+                instance.instance().weight(),
+                instance.instance().metadata());
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
     }
 
     // ---- 目标解析与校验 ----
@@ -168,4 +277,27 @@ public final class AdminController {
     public record ListEjectionsResponse(List<EjectionView> records) {}
 
     public record ListAuditLogsResponse(List<AuditLog> logs) {}
+
+    /** 逻辑实例 upsert 请求体（status 缺省 UP；weight ≤ 0 应用层归一为 100）。 */
+    public record LogicalInstanceRequest(
+            String namespace,
+            String service,
+            String instanceId,
+            String host,
+            Integer port,
+            String status,
+            Integer weight,
+            Map<String, String> metadata) {}
+
+    public record LogicalInstanceResponse(
+            String namespace,
+            String service,
+            String instanceId,
+            String host,
+            int port,
+            String status,
+            int weight,
+            Map<String, String> metadata) {}
+
+    public record ListLogicalInstancesResponse(List<LogicalInstanceResponse> instances) {}
 }

@@ -9,6 +9,7 @@ import org.mydotey.ai.artemis.management.domain.Instance;
 import org.mydotey.ai.artemis.management.domain.InstanceStatus;
 import org.mydotey.ai.artemis.management.domain.LeaseDetail;
 import org.mydotey.ai.artemis.management.domain.LeaseStatus;
+import org.mydotey.ai.artemis.management.domain.LogicalInstance;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStats;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
@@ -97,6 +98,62 @@ public final class ManagementProtoMapper {
             case ZONE -> org.mydotey.ai.artemis.proto.management.v1.EjectionScope.EJECTION_SCOPE_ZONE;
             case GROUP -> org.mydotey.ai.artemis.proto.management.v1.EjectionScope.EJECTION_SCOPE_GROUP;
             default -> org.mydotey.ai.artemis.proto.management.v1.EjectionScope.EJECTION_SCOPE_INSTANCE;
+        };
+    }
+
+    // ---- 逻辑实例流（management.v1，toProto 出站事件，phase-4）----
+
+    public org.mydotey.ai.artemis.proto.management.v1.LogicalInstancesEvent toLogicalSnapshotEvent(
+            List<LogicalInstance> instances) {
+        var snapshot = org.mydotey.ai.artemis.proto.management.v1.LogicalInstancesSnapshot.newBuilder();
+        for (LogicalInstance instance : instances) {
+            snapshot.addInstances(toProto(instance));
+        }
+        return org.mydotey.ai.artemis.proto.management.v1.LogicalInstancesEvent.newBuilder()
+                .setSnapshot(snapshot)
+                .build();
+    }
+
+    public org.mydotey.ai.artemis.proto.management.v1.LogicalInstancesEvent toLogicalUpsertedEvent(
+            LogicalInstance instance) {
+        return org.mydotey.ai.artemis.proto.management.v1.LogicalInstancesEvent.newBuilder()
+                .setUpserted(toProto(instance))
+                .build();
+    }
+
+    public org.mydotey.ai.artemis.proto.management.v1.LogicalInstancesEvent toLogicalDeletedEvent(
+            ServiceKey service, String instanceId) {
+        return org.mydotey.ai.artemis.proto.management.v1.LogicalInstancesEvent.newBuilder()
+                .setDeleted(org.mydotey.ai.artemis.proto.management.v1.LogicalInstanceKey.newBuilder()
+                        .setService(toProto(service))
+                        .setInstanceId(instanceId)
+                        .build())
+                .build();
+    }
+
+    private org.mydotey.ai.artemis.proto.management.v1.LogicalInstance toProto(LogicalInstance instance) {
+        return org.mydotey.ai.artemis.proto.management.v1.LogicalInstance.newBuilder()
+                .setService(toProto(instance.service()))
+                .setInstance(toProto(instance.instance()))
+                .build();
+    }
+
+    private org.mydotey.ai.artemis.proto.common.v1.Instance toProto(Instance instance) {
+        return org.mydotey.ai.artemis.proto.common.v1.Instance.newBuilder()
+                .setInstanceId(instance.instanceId())
+                .setHost(instance.host())
+                .setPort(instance.port())
+                .setStatus(toProto(instance.status()))
+                .setWeight(instance.weight())
+                .putAllMetadata(instance.metadata())
+                .build();
+    }
+
+    private static org.mydotey.ai.artemis.proto.common.v1.InstanceStatus toProto(InstanceStatus status) {
+        return switch (status) {
+            case DOWN -> org.mydotey.ai.artemis.proto.common.v1.InstanceStatus.INSTANCE_STATUS_DOWN;
+            case UNKNOWN -> org.mydotey.ai.artemis.proto.common.v1.InstanceStatus.INSTANCE_STATUS_UNKNOWN;
+            default -> org.mydotey.ai.artemis.proto.common.v1.InstanceStatus.INSTANCE_STATUS_UP;
         };
     }
 

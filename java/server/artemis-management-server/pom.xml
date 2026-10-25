@@ -108,6 +108,12 @@
       <groupId>com.baomidou</groupId>
       <artifactId>mybatis-plus-spring-boot4-starter</artifactId>
     </dependency>
+    <!-- gson 为直接依赖（逻辑实例 metadata JSON 序列化，phase-4 起；版本随 parent grpc 线，
+         discovery-server phase-5 同例） -->
+    <dependency>
+      <groupId>com.google.code.gson</groupId>
+      <artifactId>gson</artifactId>
+    </dependency>
     <!-- 双方言驱动均打包（runtime），按 url 自动选择 -->
     <dependency>
       <groupId>com.mysql</groupId>

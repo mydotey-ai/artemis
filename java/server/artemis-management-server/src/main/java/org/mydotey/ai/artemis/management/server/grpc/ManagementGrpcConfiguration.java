@@ -2,6 +2,7 @@ package org.mydotey.ai.artemis.management.server.grpc;
 
 import org.mydotey.ai.artemis.common.auth.BasicAuth;
 import org.mydotey.ai.artemis.management.domain.EjectionRuleSubscriptions;
+import org.mydotey.ai.artemis.management.domain.LogicalInstanceSubscriptions;
 import org.mydotey.scf.facade.StringProperties;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -30,5 +31,10 @@ public class ManagementGrpcConfiguration {
     @Bean
     EjectionRuleGrpcService ejectionRuleGrpcService(EjectionRuleSubscriptions subscriptions) {
         return new EjectionRuleGrpcService(subscriptions);
+    }
+
+    @Bean
+    LogicalInstanceGrpcService logicalInstanceGrpcService(LogicalInstanceSubscriptions subscriptions) {
+        return new LogicalInstanceGrpcService(subscriptions);
     }
 }

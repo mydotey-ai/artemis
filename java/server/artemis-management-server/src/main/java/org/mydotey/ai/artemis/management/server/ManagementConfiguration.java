@@ -10,10 +10,13 @@ import org.mydotey.ai.artemis.management.application.PersistenceInfo;
 import org.mydotey.ai.artemis.management.domain.AccountStore;
 import org.mydotey.ai.artemis.management.domain.AuditLogStore;
 import org.mydotey.ai.artemis.management.domain.EjectionStore;
+import org.mydotey.ai.artemis.management.domain.LogicalInstanceStore;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryPort;
 import org.mydotey.ai.artemis.management.infrastructure.EjectionRuleDispatcher;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryAuditLogStore;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryEjectionStore;
+import org.mydotey.ai.artemis.management.infrastructure.InMemoryLogicalInstanceStore;
+import org.mydotey.ai.artemis.management.infrastructure.LogicalInstanceDispatcher;
 import org.mydotey.ai.artemis.management.server.auth.ConfigAccountAuthService;
 import org.mydotey.ai.artemis.management.server.auth.ManagementAuthConfig;
 import org.mydotey.ai.artemis.management.server.config.ManagementConfigurationSources;
@@ -26,6 +29,8 @@ import org.mydotey.ai.artemis.management.server.repository.AuditLogMapper;
 import org.mydotey.ai.artemis.management.server.repository.AuditLogStoreImpl;
 import org.mydotey.ai.artemis.management.server.repository.EjectionRecordMapper;
 import org.mydotey.ai.artemis.management.server.repository.EjectionStoreImpl;
+import org.mydotey.ai.artemis.management.server.repository.LogicalInstanceMapper;
+import org.mydotey.ai.artemis.management.server.repository.LogicalInstanceStoreImpl;
 import org.mydotey.scf.ConfigurationManager;
 import org.mydotey.scf.facade.StringProperties;
 import org.springframework.beans.factory.ObjectProvider;
@@ -71,6 +76,13 @@ public class ManagementConfiguration {
         return mapper == null ? new InMemoryEjectionStore() : new EjectionStoreImpl(mapper);
     }
 
+    /** 逻辑实例存储双轨（同判据；时间戳写入在 DB 实现，内存态无时间戳语义）。 */
+    @Bean
+    LogicalInstanceStore logicalInstanceStore(ObjectProvider<LogicalInstanceMapper> mapperProvider, Clock clock) {
+        LogicalInstanceMapper mapper = mapperProvider.getIfAvailable();
+        return mapper == null ? new InMemoryLogicalInstanceStore() : new LogicalInstanceStoreImpl(mapper, clock);
+    }
+
     /** 审计存储双轨（同判据；内存态重启丢失为既有语义）。 */
     @Bean
     AuditLogStore auditLogStore(ObjectProvider<AuditLogMapper> mapperProvider) {
@@ -82,6 +94,12 @@ public class ManagementConfiguration {
     @Bean(destroyMethod = "close")
     EjectionRuleDispatcher ejectionRuleDispatcher(EjectionStore ejectionStore) {
         return new EjectionRuleDispatcher(ejectionStore);
+    }
+
+    /** 逻辑实例流分发无条件装配（无 gRPC 端口时零订阅者，通知为空操作）。 */
+    @Bean(destroyMethod = "close")
+    LogicalInstanceDispatcher logicalInstanceDispatcher(LogicalInstanceStore logicalInstanceStore) {
+        return new LogicalInstanceDispatcher(logicalInstanceStore);
     }
 
     @Bean
@@ -138,9 +156,17 @@ public class ManagementConfiguration {
             EjectionStore ejectionStore,
             AuditLogStore auditLogStore,
             EjectionRuleDispatcher ejectionRuleDispatcher,
+            LogicalInstanceStore logicalInstanceStore,
+            LogicalInstanceDispatcher logicalInstanceDispatcher,
             Clock clock) {
         return new ManagementServiceImpl(
-                registryQueryPort, ejectionStore, auditLogStore, ejectionRuleDispatcher, clock);
+                registryQueryPort,
+                ejectionStore,
+                auditLogStore,
+                ejectionRuleDispatcher,
+                logicalInstanceStore,
+                logicalInstanceDispatcher,
+                clock);
     }
 
     @Bean
