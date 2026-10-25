@@ -138,9 +138,7 @@ public final class GrpcEjectionRuleSource implements EjectionRuleSource, AutoClo
                     } else if (event.hasEjected()) {
                         listener.onEjected(mapper.toDomain(event.getEjected()));
                     } else if (event.hasRecovered()) {
-                        listener.onRecovered(
-                                mapper.toDomain(event.getRecovered().getService()),
-                                event.getRecovered().getInstanceId());
+                        listener.onRecovered(mapper.toDomain(event.getRecovered()));
                     }
                     // 三字段皆未设：无效事件丢弃（断流重连快照自愈）
                 }

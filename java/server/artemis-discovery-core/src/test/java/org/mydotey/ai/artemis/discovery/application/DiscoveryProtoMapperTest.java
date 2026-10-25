@@ -11,6 +11,7 @@ import org.mydotey.ai.artemis.discovery.domain.ClusterChecksums;
 import org.mydotey.ai.artemis.discovery.domain.ClusterServiceInstances;
 import org.mydotey.ai.artemis.discovery.domain.DiscoverySelector;
 import org.mydotey.ai.artemis.discovery.domain.EjectionRule;
+import org.mydotey.ai.artemis.discovery.domain.EjectionTarget;
 import org.mydotey.ai.artemis.discovery.domain.Instance;
 import org.mydotey.ai.artemis.discovery.domain.InstanceStatus;
 import org.mydotey.ai.artemis.discovery.domain.QueryResponse;
@@ -212,7 +213,32 @@ class DiscoveryProtoMapperTest {
         assertThat(mapper.isSnapshot(snapshot)).isTrue();
         List<EjectionRule> rules = mapper.toDomain(snapshot.getSnapshot());
         assertThat(rules)
-                .containsExactly(new EjectionRule(new ServiceKey("default", "order-service"), "i1", "maintenance"));
+                .containsExactly(
+                        EjectionRule.instance(new ServiceKey("default", "order-service"), "i1", "maintenance"));
+
+        // selector 级规则（v0.4 phase-3，scope + target_value）
+        org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent selectorDelta =
+                org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent.newBuilder()
+                        .setEjected(org.mydotey.ai.artemis.proto.management.v1.EjectionRule.newBuilder()
+                                .setScope(org.mydotey.ai.artemis.proto.management.v1.EjectionScope.EJECTION_SCOPE_ZONE)
+                                .setTargetValue("dc-2")
+                                .setReason("zone down")
+                                .build())
+                        .build();
+        assertThat(mapper.toDomain(selectorDelta.getEjected()))
+                .isEqualTo(EjectionRule.selector(
+                        org.mydotey.ai.artemis.common.governance.EjectionScope.ZONE, "dc-2", "zone down"));
+        org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent selectorRecovered =
+                org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent.newBuilder()
+                        .setRecovered(org.mydotey.ai.artemis.proto.management.v1.EjectionRecovered.newBuilder()
+                                .setScope(
+                                        org.mydotey.ai.artemis.proto.management.v1.EjectionScope.EJECTION_SCOPE_SERVER)
+                                .setTargetValue("10.1.1.1")
+                                .build())
+                        .build();
+        assertThat(mapper.toDomain(selectorRecovered.getRecovered()))
+                .isEqualTo(new EjectionTarget(
+                        org.mydotey.ai.artemis.common.governance.EjectionScope.SERVER, null, null, "10.1.1.1"));
 
         // 空快照（snapshot 已设、rules 空）
         org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent empty =
@@ -234,6 +260,6 @@ class DiscoveryProtoMapperTest {
                         .build();
         assertThat(mapper.isSnapshot(delta)).isFalse();
         assertThat(mapper.toDomain(delta.getEjected()))
-                .isEqualTo(new EjectionRule(new ServiceKey("default", "order-service"), "i2", ""));
+                .isEqualTo(EjectionRule.instance(new ServiceKey("default", "order-service"), "i2", ""));
     }
 }

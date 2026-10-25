@@ -3,15 +3,23 @@ package org.mydotey.ai.artemis.management.server.http;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.mydotey.ai.artemis.management.application.AccountAuthService;
 import org.mydotey.ai.artemis.management.application.PersistenceInfo;
+import org.mydotey.ai.artemis.management.domain.AuditLog;
+import org.mydotey.ai.artemis.management.infrastructure.InMemoryAuditLogStore;
 
 class AccountControllerTest {
 
     private final StubAuthService authService = new StubAuthService();
-    private final AccountController controller =
-            new AccountController(authService, new PersistenceInfo(PersistenceInfo.Mode.DATABASE, "PostgreSQL", "2"));
+    private final InMemoryAuditLogStore auditLogs = new InMemoryAuditLogStore();
+    private final Clock clock = Clock.fixed(Instant.parse("2026-10-25T10:00:00Z"), ZoneOffset.UTC);
+    private final AccountController controller = new AccountController(
+            authService, new PersistenceInfo(PersistenceInfo.Mode.DATABASE, "PostgreSQL", "3"), auditLogs, clock);
 
     @Test
     void should_change_password_when_old_valid() {
@@ -24,12 +32,25 @@ class AccountControllerTest {
 
     @Test
     void should_return_409_when_memory_mode_change_password() {
-        AccountController memoryMode = new AccountController(authService, PersistenceInfo.memory());
+        AccountController memoryMode = new AccountController(authService, PersistenceInfo.memory(), auditLogs, clock);
 
         assertThatThrownBy(() ->
                         memoryMode.changePassword(new AccountController.ChangePasswordRequest("old", "new-s3cret-9")))
                 .isInstanceOf(MemoryModePasswordChangeException.class);
         assertThat(authService.changeCalls).isZero();
+    }
+
+    @Test
+    void should_audit_successful_password_change() {
+        controller.changePassword(new AccountController.ChangePasswordRequest("old-s3cret-1", "new-s3cret-9"));
+
+        List<AuditLog> logs = auditLogs.find("CHANGE_PASSWORD", 10);
+        assertThat(logs).singleElement().satisfies(log -> {
+            assertThat(log.operation()).isEqualTo("CHANGE_PASSWORD");
+            assertThat(log.target()).isEqualTo("account:artemis");
+            assertThat(log.operator()).isEqualTo("artemis");
+            assertThat(log.result()).isEqualTo("SUCCESS");
+        });
     }
 
     @Test

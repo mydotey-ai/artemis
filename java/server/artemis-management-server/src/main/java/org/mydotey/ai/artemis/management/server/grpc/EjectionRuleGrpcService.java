@@ -9,7 +9,7 @@ import org.mydotey.ai.artemis.management.application.ManagementProtoMapper;
 import org.mydotey.ai.artemis.management.domain.EjectionRecord;
 import org.mydotey.ai.artemis.management.domain.EjectionRuleSubscriber;
 import org.mydotey.ai.artemis.management.domain.EjectionRuleSubscriptions;
-import org.mydotey.ai.artemis.management.domain.InstanceKey;
+import org.mydotey.ai.artemis.management.domain.EjectionTarget;
 import org.mydotey.ai.artemis.proto.management.v1.EjectionRuleServiceGrpc;
 import org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent;
 import org.mydotey.ai.artemis.proto.management.v1.EjectionRulesRequest;
@@ -74,10 +74,10 @@ public final class EjectionRuleGrpcService extends EjectionRuleServiceGrpc.Eject
         }
 
         @Override
-        public synchronized void onRecovered(InstanceKey instance) {
+        public synchronized void onRecovered(EjectionTarget target) {
             requireReady();
             if (!closed.get()) {
-                observer.onNext(mapper.toRecoveredEvent(instance));
+                observer.onNext(mapper.toRecoveredEvent(target));
             }
         }
 

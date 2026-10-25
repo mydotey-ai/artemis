@@ -1,6 +1,6 @@
 # management-service Admin 与状态 API
 
-版本: 1.7    更新时间: 2026-10-25
+版本: 1.8    更新时间: 2026-10-25
 
 > 本文定义 management-service 对外 HTTP API（管理面：实例管理 Admin API、账户 API 与 registry 状态排障面）。有效视图 = registry 只读事实 + management 摘除记录（ADR-016）；registry 不感知摘除。内部 gRPC 查询契约见 [registry-query-api.md](registry-query-api.md)。
 
@@ -30,12 +30,14 @@
 
 ## 2. 有效视图语义
 
-- **摘除记录归 management**，键为 `(namespace, service, instanceId)`；内存态，**重启丢失**（v0.4 DB 接管）。
+- **摘除记录归 management**：四级目标（v0.4 phase-3）——INSTANCE 级键 `(namespace, service, instanceId)`；SERVER / ZONE / GROUP 级为 selector（按实例 metadata 键 `server` / `zone` / `group` 值匹配，全局生效不绑服务；实例不带键不参与该级摘除）。
+- **双轨持久化**：未配置 DB 时内存态（重启丢失，期 1 语义）；配置 DB 后记录持久化（`artemis_ejection_record`），management 重启后摘除经规则流快照重下发恢复。
+- **操作记录即状态**：下线 = 追加 EJECT 记录（可叠加，各带原因与操作者）；恢复 = 追加 RECOVER 反向记录（FIFO 对消，不删历史）；生效判定 = 每目标 EJECT 与 RECOVER 计数差 > 0。允许摘除当前未注册实例（之后重注册的同一目标仍处于摘除态）。
 - 摘除/恢复**不修改 registry** 的注册数据、租约与心跳；registry 查询仍返回完整事实。
-- 详情默认只返回**有效实例**（已过滤摘除）；`includeEjected=true` 返回全量并逐条标注。
-- 摘除幂等：重复摘除保留首条记录（原因与时间不变）；允许摘除当前未注册实例（之后重注册的同一 `instanceId` 仍处于摘除态）。
-- **规则下发**（v0.3 phase-6）：摘除/恢复经 management 内部 gRPC 端口的**摘除规则流**推送订阅中的 discovery 节点（at-most-once，断流重连快照自愈）——discovery 对查询/推送/对账一致应用过滤。规则流契约见 [ejection-rule-stream-api.md](ejection-rule-stream-api.md)。
-- 恢复幂等：删除记录后立即回到有效视图（下一次查询生效）。
+- 详情默认只返回**有效实例**（已过滤摘除）；`includeEjected=true` 返回全量并逐条标注（命中标注优先序 INSTANCE > SERVER > ZONE > GROUP）。
+- 服务列表 `ejectedCount` 为 INSTANCE 级有效目标计数（selector 级不折算——列表无实例明细，精确视图走详情）。
+- **规则下发**（v0.3 phase-6 起，v0.4 四级）：摘除规则经 management 内部 gRPC 端口的**摘除规则流**推送订阅中的 discovery 节点（at-most-once，断流重连快照自愈）——discovery 按实例 metadata 实时匹配四级规则，对查询/推送/对账一致应用过滤。规则流契约见 [ejection-rule-stream-api.md](ejection-rule-stream-api.md)。
+- 恢复幂等：无可对消记录时 no-op（204，不追加记录）；完全对消后回到有效视图（下一次查询生效）。
 
 ## 3. 通用约定
 
@@ -97,31 +99,60 @@ Base path：`/admin/v1`
 - `includeEjected=true` 时 `instances` 含被摘除实例，`ejected=true` 且携带 `reason`/`ejectedAt`。
 - 未注册 service → 200，计数全 0、`instances=[]`（查询语义，非 404）。
 
-### 4.3 摘除 `POST /admin/v1/services/{namespace}/{service}/instances/{instanceId}/eject`
+### 4.3 摘除 `POST /admin/v1/ejections`（v0.4 phase-3，统一四级端点）
 
-请求体可选：
+四级一套请求体；`scope` 缺省 `INSTANCE`。INSTANCE 级填 `namespace`/`service`/`instanceId`，selector 级填 `value`：
 
 ```json
-{"reason": "maintenance"}
+{"scope": "INSTANCE", "namespace": "default", "service": "order-service", "instanceId": "i1", "reason": "maintenance"}
+{"scope": "ZONE", "value": "dc-2", "reason": "zone down"}
 ```
 
-`reason` 最长 1024 字符。响应 200：
+校验：`reason` ≤ 1024、`namespace`/`service` ≤ 255、`instanceId`/`value` ≤ 512 字符；scope 非法或字段组合不符返回 400。不要求实例当前已注册。响应 200：
 
 ```json
 {
-  "namespace": "default",
-  "service": "order-service",
-  "instanceId": "i1",
-  "reason": "maintenance",
-  "ejectedAt": "2026-10-19T10:00:00Z"
+  "scope": "ZONE",
+  "namespace": null,
+  "service": null,
+  "instanceId": null,
+  "value": "dc-2",
+  "action": "EJECT",
+  "reason": "zone down",
+  "operator": "artemis",
+  "timestamp": "2026-10-25T10:00:00Z",
+  "sequence": 42
 }
 ```
 
-幂等：已摘除时返回首条记录；不要求实例当前已注册。
+叠加：同目标重复摘除追加新记录（各带原因与操作者），目标保持摘除态。
 
-### 4.4 恢复 `POST /admin/v1/services/{namespace}/{service}/instances/{instanceId}/recover`
+### 4.4 恢复 `POST /admin/v1/ejections/recover`
 
-- 成功 204 No Content；幂等（未摘除同样 204）。
+请求体同 4.3（`reason` 忽略）。追加 RECOVER 反向记录（FIFO 对消最早未对消 EJECT）：
+
+- 成功 204 No Content；幂等（无可对消记录同样 204，不追加）。
+- 部分对消（叠加多条 EJECT 逐条恢复）目标仍摘除态；完全对消后回到有效视图。
+
+### 4.5 摘除记录查询 `GET /admin/v1/ejections`
+
+查询参数：`activeOnly`（默认 false，true 只返回生效目标代表集）、`scope`（可选过滤）、`limit`（默认 100，上界 1000）。响应：
+
+```json
+{"records": [{"scope": "...", "action": "...", "reason": "...", "operator": "...", "timestamp": "...", "sequence": 1}]}
+```
+
+时间倒序（最新在前）；全量列表含 EJECT/RECOVER 全部操作时间线，active 集每目标一条代表记录。
+
+### 4.6 审计查询 `GET /admin/v1/audit-logs`
+
+查询参数：`operation`（可选：`EJECT` / `RECOVER` / `CHANGE_PASSWORD` 等）、`limit`（默认 100，上界 1000）。时间倒序：
+
+```json
+{"logs": [{"operation": "EJECT", "target": "zone:dc-2", "operator": "artemis", "result": "SUCCESS", "detail": "zone down", "timestamp": "...", "sequence": 43}]}
+```
+
+摘除/恢复在摘除记录表完整留痕（4.5），审计表为统一查询入口的摘要行；改密等其余治理操作全量记录。
 
 ## 5. 账户 API（v0.4，ADR-021）
 
@@ -239,7 +270,7 @@ management 自身持久化运行形态（v0.4 phase-1 起，不透传 registry�
 
 | HTTP | error | 场景 |
 |---|---|---|
-| 400 | `INVALID_ARGUMENT` | 路径/查询参数空白、`reason` 超长、body 不可解析、参数类型错误、改密参数非法（old 不匹配 / newPassword < 8 字符） |
+| 400 | `INVALID_ARGUMENT` | 参数空白、scope 非法或字段组合不符、字段超长（`reason` > 1024 / `namespace`·`service` > 255 / `instanceId`·`value` > 512）、body 不可解析、参数类型错误、改密参数非法（old 不匹配 / newPassword < 8 字符） |
 | 401 | `UNAUTHORIZED` | Basic 缺失或错误 |
 | 404 | `NOT_FOUND` | 未知路径 |
 | 405 | `METHOD_NOT_ALLOWED` | 方法不支持 |
@@ -247,13 +278,14 @@ management 自身持久化运行形态（v0.4 phase-1 起，不透传 registry�
 | 502 | `REGISTRY_ERROR` | registry 返回 `ACK_FAIL` 或其它 gRPC 错误（含响应超过 16 MiB 入站上限） |
 | 503 | `REGISTRY_UNAVAILABLE` | registry `UNAVAILABLE` / `DEADLINE_EXCEEDED` |
 | 503 | `ACCOUNT_STORE_UNAVAILABLE` | 账户表访问失败（DB 态 fail-closed，v0.4 ADR-021） |
+| 503 | `EJECTION_STORE_UNAVAILABLE` | 摘除/审计存储访问失败（DB 态，操作未落库可重试） |
 | 500 | `INTERNAL` | 未预期异常（堆栈只进日志） |
 
 management 启动不依赖 registry 可用；registry 故障时管理面仍可启动，查询类 API 返回 503。
 
-## 8. 已知限制（v0.1）
+## 8. 已知限制
 
-- 摘除记录内存态、重启丢失；仅 instance 级，无四级级联、审计、审批（v0.4/v1.x）。
+- 摘除四级与审计已交付（v0.4 phase-3）；内存态（未配置 DB）仍重启丢失（期 1 设计内行为，配置 DB 即持久化）；审批流随 v1.x 按社区需求排期。
 - RBAC 随 v1.0；内存态外部 HTTP 单账户凭证（DB 态为单管理员账户表，v0.4）。
 - registry 地址单值、无重试/熔断（v0.2 集群后引入地址列表与容灾）。
 - registry 查询无分页；客户端入站上限 16 MiB，超限返回 502。
@@ -262,6 +294,7 @@ management 启动不依赖 registry 可用；registry 故障时管理面仍可�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.8 | 2026-10-25 | v0.4 phase-3：统一四级 ejection API（替换 v0.1 实例级端点）、记录/审计查询、双轨持久化与操作记录即状态语义、503 `EJECTION_STORE_UNAVAILABLE` |
 | 1.7 | 2026-10-25 | v0.4 phase-2：新增账户 API（§5 改密端点，DB 态闭环）；§1 认证双态语义（DB 态账户表唯一源 + seed 物化，ADR-021）；错误表补 409/账户 503；状态 API 重编号为 §6 |
 | 1.6 | 2026-10-25 | v0.4 phase-1：新增 `GET /admin/v1/status/persistence`（DB 双轨运行形态与 schema 版本） |
 | 1.5 | 2026-10-24 | v0.3 phase-6：摘除/恢复语义补规则流下发说明（discovery 侧过滤生效） |

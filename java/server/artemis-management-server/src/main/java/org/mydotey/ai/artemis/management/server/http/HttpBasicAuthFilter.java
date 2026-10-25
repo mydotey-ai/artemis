@@ -20,6 +20,9 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @Slf4j
 public final class HttpBasicAuthFilter extends OncePerRequestFilter {
 
+    /** 认证通过后写入 request attribute 的用户名（治理操作 operator 来源，Controller 经 @RequestAttribute 取）。 */
+    public static final String AUTH_USER_ATTRIBUTE = "artemis.auth.user";
+
     private static final Set<String> WHITELIST = Set.of("/error");
 
     private final ManagementAuthConfig authConfig;
@@ -45,6 +48,7 @@ public final class HttpBasicAuthFilter extends OncePerRequestFilter {
         try {
             BasicAuth.Credential credential = BasicAuth.decode(request.getHeader(BasicAuth.HEADER));
             if (credential != null && authService.verify(credential.username(), credential.password())) {
+                request.setAttribute(AUTH_USER_ATTRIBUTE, credential.username());
                 filterChain.doFilter(request, response);
                 return;
             }

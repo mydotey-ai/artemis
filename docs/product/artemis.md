@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.26    更新时间: 2026-10-25
+版本: 1.27    更新时间: 2026-10-25
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -262,10 +262,21 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **语义细节**：成功凭证 60s 服务端缓存（正确路径每分钟一次哈希开销，错误路径每次全额计算）；认证后端不可用 fail-closed（401 拒绝 / API 503）；默认密码在用时启动 WARN（ADR-009 延续）。
 - **工程形态**：core 哈希器/裁决服务单测 + server 过滤器三态/端点单测；双方言 `AccountFlowIT`（seed 默认登录 → 改密接管生效 → 跨重启账户保留 + 配置凭证失效，Testcontainers 真实容器）。
 
+**v0.4 phase-3（四级摘除持久化与审计）已交付**：
+
+- **四级摘除**：摘除目标四级——INSTANCE（`(namespace, service, instanceId)` 定位）与 SERVER / ZONE / GROUP（以实例 metadata 键 `server` / `zone` / `group` 取值匹配，全局生效不绑服务，ADR-013 延伸）；实例不带对应键则不参与该级摘除。规则经既有摘除规则流下发 selector，discovery 按实例 metadata **实时匹配**——新注册实例天然命中。
+- **操作记录即状态**：下线 = 追加 EJECT 记录（可叠加，各带原因与操作者）；恢复 = 追加 RECOVER 反向记录（FIFO 对消，不删历史——原产品「恢复即删」的改进）；生效判定 = 每目标 EJECT 与 RECOVER 计数差 > 0。规则流增量仅在目标生效态翻转时推送（叠加/部分对消不推）。
+- **持久化（V3，双方言）**：`artemis_ejection_record`（操作时间线，自增主键 = 序）+ `artemis_audit_log`（治理操作审计）。DB 态下 management 重启后摘除经规则流快照重下发恢复（roadmap v0.4 验收要点闭环）；内存态行为不变（重启丢失，期 1 语义）。
+- **统一 ejection API**：`POST /admin/v1/ejections`（四级一套请求体）/ `POST /admin/v1/ejections/recover` / `GET /admin/v1/ejections`（时间倒序 + limit）/ `GET /admin/v1/audit-logs`（operation 过滤 + limit）——替换 v0.1 实例级端点。见 [admin-api.md](../api/admin-api.md)。
+- **审计**：全部治理操作可审计——摘除/恢复以记录表自身为完整留痕 + 审计表摘要行（尽力而为，摘除状态源唯一在记录表）；改密等其余治理操作全量进审计表。操作者取认证用户名。
+- **规则流契约**：`EjectionRule`/`EjectionRecovered` wire 兼容扩展（scope + target_value，缺省 INSTANCE 承载 v0.3 既有事件）；快照 = 有效规则集。见 [ejection-rule-stream-api.md](../api/ejection-rule-stream-api.md)。
+- **工程形态**：对消/命中判定纯函数（内存/DB 两态共享语义）单测；双方言 `EjectionPersistenceIT`（四级落库 + 审计 + 跨重启快照恢复）；三服务端到端 selector 过滤（zone 级摘除跨服务命中）。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.27 | 2026-10-25 | v0.4 phase-3 交付：四级摘除（metadata selector 实时匹配）+ 操作记录即状态（叠加/反向对消）+ V3 双方言持久化与审计 + 统一 ejection API + 跨重启重下发恢复 |
 | 1.26 | 2026-10-25 | v0.4 phase-2 交付：单管理员 DB 账户 + 统一认证接管（ADR-021：管理访问面收敛、配置凭证 seed 物化）、改密 API |
 | 1.25 | 2026-10-25 | v0.4 phase-1 交付：management DB 可选装配（MySQL/PG 双方言 + Flyway + 双轨运行）、`GET /admin/v1/status/persistence`；交付状态首段 v0.3 收尾修正 |
 | 1.24 | 2026-10-24 | v0.3 phase-9 交付：starter 双用途条件装配（缺地址不 fail-fast、配置桥同名让位/按名绑定）、`artemis-dist` all-in-one 单包（同 JVM 双上下文、`artemis.dist.*`）；新建 api/all-in-one.md |

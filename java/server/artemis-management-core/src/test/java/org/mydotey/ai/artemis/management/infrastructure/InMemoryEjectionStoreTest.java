@@ -3,10 +3,11 @@ package org.mydotey.ai.artemis.management.infrastructure;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Instant;
-import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.mydotey.ai.artemis.common.governance.EjectionScope;
+import org.mydotey.ai.artemis.management.domain.EjectionAction;
 import org.mydotey.ai.artemis.management.domain.EjectionRecord;
-import org.mydotey.ai.artemis.management.domain.InstanceKey;
+import org.mydotey.ai.artemis.management.domain.EjectionTarget;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
 
 class InMemoryEjectionStoreTest {
@@ -17,59 +18,35 @@ class InMemoryEjectionStoreTest {
     private final InMemoryEjectionStore store = new InMemoryEjectionStore();
 
     @Test
-    void should_eject_and_recover_store_record_when_operations() {
-        InstanceKey instance = new InstanceKey(SERVICE, "i1");
+    void should_append_and_return_with_sequence() {
+        EjectionRecord stored = store.append(eject(EjectionTarget.instance(SERVICE, "i1"), "r1"));
 
-        store.eject(new EjectionRecord(instance, "maintenance", NOW));
-
-        assertThat(store.findByService(SERVICE)).containsExactly(new EjectionRecord(instance, "maintenance", NOW));
-        assertThat(store.recover(instance)).isTrue();
-        assertThat(store.findByService(SERVICE)).isEmpty();
+        assertThat(stored.sequence()).isEqualTo(1);
+        assertThat(store.append(eject(EjectionTarget.instance(SERVICE, "i2"), "r2"))
+                        .sequence())
+                .isEqualTo(2);
     }
 
     @Test
-    void should_keep_first_record_when_ejecting_twice() {
-        InstanceKey instance = new InstanceKey(SERVICE, "i1");
-        EjectionRecord first = new EjectionRecord(instance, "first", NOW);
-
-        store.eject(first);
-        EjectionRecord second = store.eject(new EjectionRecord(instance, "second", NOW.plusSeconds(60)));
-
-        assertThat(second).isEqualTo(first);
-        assertThat(store.findByService(SERVICE)).containsExactly(first);
-    }
-
-    @Test
-    void should_return_false_when_recovering_not_ejected() {
-        assertThat(store.recover(new InstanceKey(SERVICE, "missing"))).isFalse();
-    }
-
-    @Test
-    void should_list_records_by_service_when_multiple_instances() {
-        store.eject(new EjectionRecord(new InstanceKey(SERVICE, "i2"), "r2", NOW));
-        store.eject(new EjectionRecord(new InstanceKey(SERVICE, "i1"), "r1", NOW));
-        store.eject(new EjectionRecord(new InstanceKey(new ServiceKey("ns", "other"), "i9"), "r9", NOW));
-
-        List<EjectionRecord> records = store.findByService(SERVICE);
-
-        assertThat(records).extracting(record -> record.instance().instanceId()).containsExactly("i1", "i2");
-        assertThat(store.countByService()).containsEntry(SERVICE, 2L).containsEntry(new ServiceKey("ns", "other"), 1L);
-    }
-
-    @Test
-    void should_find_all_sorted_by_service_then_instance() {
-        store.eject(new EjectionRecord(new InstanceKey(SERVICE, "i2"), "r2", NOW));
-        store.eject(new EjectionRecord(new InstanceKey(new ServiceKey("a", "first"), "z1"), "r", NOW));
-        store.eject(new EjectionRecord(new InstanceKey(SERVICE, "i1"), "r1", NOW));
+    void should_find_all_in_append_order_across_scopes() {
+        store.append(eject(EjectionTarget.instance(SERVICE, "i1"), "r1"));
+        store.append(eject(EjectionTarget.selector(EjectionScope.ZONE, "dc-2"), "r2"));
+        store.append(new EjectionRecord(
+                EjectionTarget.instance(SERVICE, "i1"), EjectionAction.RECOVER, null, "admin", NOW.plusSeconds(60), 0));
 
         assertThat(store.findAll())
                 .extracting(
-                        record -> record.instance().service().namespace(),
-                        record -> record.instance().service().service(),
-                        record -> record.instance().instanceId())
+                        record -> record.action(),
+                        record -> record.target().instanceId(),
+                        record -> record.target().value())
                 .containsExactly(
-                        org.assertj.core.groups.Tuple.tuple("a", "first", "z1"),
-                        org.assertj.core.groups.Tuple.tuple("ns", "svc", "i1"),
-                        org.assertj.core.groups.Tuple.tuple("ns", "svc", "i2"));
+                        org.assertj.core.groups.Tuple.tuple(EjectionAction.EJECT, "i1", null),
+                        org.assertj.core.groups.Tuple.tuple(EjectionAction.EJECT, null, "dc-2"),
+                        org.assertj.core.groups.Tuple.tuple(EjectionAction.RECOVER, "i1", null));
+        assertThat(store.findAll().get(2).sequence()).isEqualTo(3);
+    }
+
+    private static EjectionRecord eject(EjectionTarget target, String reason) {
+        return new EjectionRecord(target, EjectionAction.EJECT, reason, "admin", NOW, 0);
     }
 }

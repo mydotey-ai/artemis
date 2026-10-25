@@ -128,6 +128,21 @@ class DiscoveryEjectionFilterIT {
     }
 
     @Test
+    void should_filter_by_zone_selector_across_instances() throws Exception {
+        startAll();
+        register("i1", Map.of("zone", "dc-2"));
+        register("i2", Map.of("zone", "dc-1"));
+        awaitUntil("both visible", () -> queryInstances().size() == 2);
+
+        // zone 级摘除（selector 实时匹配）：命中 metadata 的 i1 被过滤，i2 不受影响
+        ejectSelector("ZONE", "dc-2", "zone down");
+        awaitUntil("zone filtered", () -> queryInstances().equals(List.of("i2")));
+
+        recoverSelector("ZONE", "dc-2");
+        awaitUntil("zone restored", () -> queryInstances().size() == 2);
+    }
+
+    @Test
     void should_not_filter_when_management_not_configured() throws Exception {
         startRegistry();
         startDiscovery(false); // 未配置 management：空链直通（D-E4）
@@ -243,10 +258,14 @@ class DiscoveryEjectionFilterIT {
     // ---- 驱动 ----
 
     private void register(String instanceId) {
+        register(instanceId, Map.of());
+    }
+
+    private void register(String instanceId, Map<String, String> metadata) {
         assertThat(registry.register(RegisterRequest.newBuilder()
                                 .addServices(org.mydotey.ai.artemis.proto.common.v1.ServiceInstances.newBuilder()
                                         .setKey(ORDER)
-                                        .addInstances(instance(instanceId)))
+                                        .addInstances(instance(instanceId, metadata)))
                                 .build())
                         .getStatus()
                         .getAck())
@@ -254,22 +273,37 @@ class DiscoveryEjectionFilterIT {
     }
 
     private void eject(String instanceId, String reason) throws Exception {
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create("http://localhost:" + managementHttpPort + "/admin/v1/services/" + NAMESPACE + "/"
-                        + SERVICE + "/instances/" + instanceId + "/eject"))
-                .header("Authorization", AUTH)
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString("{\"reason\":\"" + reason + "\"}"))
-                .build();
-        HTTP.send(request, HttpResponse.BodyHandlers.ofString());
+        postManagement(
+                "/admin/v1/ejections",
+                "{\"scope\":\"INSTANCE\",\"namespace\":\"" + NAMESPACE
+                        + "\",\"service\":\"" + SERVICE + "\",\"instanceId\":\"" + instanceId + "\",\"reason\":\""
+                        + reason
+                        + "\"}");
+    }
+
+    private void ejectSelector(String scope, String value, String reason) throws Exception {
+        postManagement(
+                "/admin/v1/ejections",
+                "{\"scope\":\"" + scope + "\",\"value\":\"" + value + "\",\"reason\":\"" + reason + "\"}");
     }
 
     private void recover(String instanceId) throws Exception {
+        postManagement(
+                "/admin/v1/ejections/recover",
+                "{\"scope\":\"INSTANCE\",\"namespace\":\"" + NAMESPACE + "\",\"service\":\"" + SERVICE
+                        + "\",\"instanceId\":\"" + instanceId + "\"}");
+    }
+
+    private void recoverSelector(String scope, String value) throws Exception {
+        postManagement("/admin/v1/ejections/recover", "{\"scope\":\"" + scope + "\",\"value\":\"" + value + "\"}");
+    }
+
+    private void postManagement(String path, String body) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create("http://localhost:" + managementHttpPort + "/admin/v1/services/" + NAMESPACE + "/"
-                        + SERVICE + "/instances/" + instanceId + "/recover"))
+                .uri(URI.create("http://localhost:" + managementHttpPort + path))
                 .header("Authorization", AUTH)
-                .POST(HttpRequest.BodyPublishers.noBody())
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build();
         HTTP.send(request, HttpResponse.BodyHandlers.ofString());
     }
@@ -297,12 +331,13 @@ class DiscoveryEjectionFilterIT {
         return events;
     }
 
-    private static Instance instance(String instanceId) {
-        return Instance.newBuilder()
+    private static Instance instance(String instanceId, Map<String, String> metadata) {
+        Instance.Builder builder = Instance.newBuilder()
                 .setInstanceId(instanceId)
                 .setHost("10.0.0.1")
-                .setPort(8080)
-                .build();
+                .setPort(8080);
+        metadata.forEach(builder::putMetadata);
+        return builder.build();
     }
 
     private static Status.Code statusOf(java.util.function.Supplier<?> call) {

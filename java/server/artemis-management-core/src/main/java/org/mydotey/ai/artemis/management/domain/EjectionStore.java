@@ -1,25 +1,19 @@
 package org.mydotey.ai.artemis.management.domain;
 
 import java.util.List;
-import java.util.Map;
 
 /**
- * 摘除记录端口（内存态实现由 infrastructure 提供）。
+ * 摘除记录端口：只存取，生效计算归 {@link EjectionRecords} 纯函数（内存/DB 两态共享语义）。
  */
 public interface EjectionStore {
 
-    /** 幂等：已存在则保留首条记录并返回之。 */
-    EjectionRecord eject(EjectionRecord record);
+    /**
+     * 追加记录（EJECT/RECOVER）并分配 sequence，返回落库后的完整记录
+     * （内存态计数器分配；DB 态自增主键回填）。对消判定在应用层，
+     * 见 {@link EjectionRecords#isActive}。
+     */
+    EjectionRecord append(EjectionRecord record);
 
-    /** 幂等：未摘除返回 false。 */
-    boolean recover(InstanceKey instance);
-
-    /** 指定 service 的摘除记录，按 instanceId 升序。 */
-    List<EjectionRecord> findByService(ServiceKey service);
-
-    /** 按 service 聚合记录数（单次遍历，供服务列表）。 */
-    Map<ServiceKey, Long> countByService();
-
-    /** 全部摘除记录（规则流快照），按 (namespace, service, instanceId) 升序（确定性）。 */
+    /** 全部记录，按 sequence 升序（操作时间线；DB 态 = SELECT ORDER BY id）。 */
     List<EjectionRecord> findAll();
 }

@@ -2,6 +2,7 @@ package org.mydotey.ai.artemis.management.server.http;
 
 import lombok.extern.slf4j.Slf4j;
 import org.mydotey.ai.artemis.management.domain.AccountAccessException;
+import org.mydotey.ai.artemis.management.domain.EjectionAccessException;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -58,6 +59,13 @@ public final class ManagementExceptionHandler {
     @ExceptionHandler(AccountAccessException.class)
     public ResponseEntity<ErrorResponse> accountAccess(AccountAccessException e) {
         log.warn("account access failed: code={}, message={}", e.code(), e.getMessage());
+        return response(HttpStatus.SERVICE_UNAVAILABLE, e.code(), e.getMessage());
+    }
+
+    /** 摘除/审计存储不可用（DB 态）：503，操作未落库可重试。 */
+    @ExceptionHandler(EjectionAccessException.class)
+    public ResponseEntity<ErrorResponse> ejectionAccess(EjectionAccessException e) {
+        log.warn("ejection store access failed: code={}, message={}", e.code(), e.getMessage());
         return response(HttpStatus.SERVICE_UNAVAILABLE, e.code(), e.getMessage());
     }
 

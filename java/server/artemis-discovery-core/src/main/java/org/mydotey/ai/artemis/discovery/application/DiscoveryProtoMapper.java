@@ -9,6 +9,7 @@ import org.mydotey.ai.artemis.discovery.domain.ClusterChecksums;
 import org.mydotey.ai.artemis.discovery.domain.ClusterServiceInstances;
 import org.mydotey.ai.artemis.discovery.domain.DiscoverySelector;
 import org.mydotey.ai.artemis.discovery.domain.EjectionRule;
+import org.mydotey.ai.artemis.discovery.domain.EjectionTarget;
 import org.mydotey.ai.artemis.discovery.domain.Instance;
 import org.mydotey.ai.artemis.discovery.domain.InstanceChange;
 import org.mydotey.ai.artemis.discovery.domain.InstanceStatus;
@@ -208,7 +209,29 @@ public final class DiscoveryProtoMapper {
     }
 
     public EjectionRule toDomain(org.mydotey.ai.artemis.proto.management.v1.EjectionRule rule) {
-        return new EjectionRule(toDomain(rule.getService()), rule.getInstanceId(), rule.getReason());
+        org.mydotey.ai.artemis.common.governance.EjectionScope scope = toDomain(rule.getScope());
+        if (scope == org.mydotey.ai.artemis.common.governance.EjectionScope.INSTANCE) {
+            return EjectionRule.instance(toDomain(rule.getService()), rule.getInstanceId(), rule.getReason());
+        }
+        return EjectionRule.selector(scope, rule.getTargetValue(), rule.getReason());
+    }
+
+    public EjectionTarget toDomain(org.mydotey.ai.artemis.proto.management.v1.EjectionRecovered recovered) {
+        org.mydotey.ai.artemis.common.governance.EjectionScope scope = toDomain(recovered.getScope());
+        if (scope == org.mydotey.ai.artemis.common.governance.EjectionScope.INSTANCE) {
+            return new EjectionTarget(scope, toDomain(recovered.getService()), recovered.getInstanceId(), null);
+        }
+        return new EjectionTarget(scope, null, null, recovered.getTargetValue());
+    }
+
+    private static org.mydotey.ai.artemis.common.governance.EjectionScope toDomain(
+            org.mydotey.ai.artemis.proto.management.v1.EjectionScope scope) {
+        return switch (scope) {
+            case EJECTION_SCOPE_SERVER -> org.mydotey.ai.artemis.common.governance.EjectionScope.SERVER;
+            case EJECTION_SCOPE_ZONE -> org.mydotey.ai.artemis.common.governance.EjectionScope.ZONE;
+            case EJECTION_SCOPE_GROUP -> org.mydotey.ai.artemis.common.governance.EjectionScope.GROUP;
+            default -> org.mydotey.ai.artemis.common.governance.EjectionScope.INSTANCE;
+        };
     }
 
     // ---- 公共模型（common.v1，双向）----

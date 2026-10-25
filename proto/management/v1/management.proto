@@ -150,10 +150,22 @@ service RegistryQueryService {
 // ---- 摘除规则订阅流（management → discovery，v0.3 phase-6，架构 §2.2 通道①）----
 // 绑定 management 内部 gRPC 端口（条件启用）；版本 + ack 生效水位归 v0.4 完整规则链。
 
+// 四级摘除目标（v0.4 phase-3，wire 兼容：缺省 INSTANCE 承载 v0.3 既有事件）。
+// SERVER/ZONE/GROUP 级按实例 metadata 键匹配（server/zone/group，ADR-013 延伸），
+// 全局生效（不绑 service）；INSTANCE 级按 (namespace, service, instanceId) 定位。
+enum EjectionScope {
+  EJECTION_SCOPE_INSTANCE = 0;
+  EJECTION_SCOPE_SERVER = 1;
+  EJECTION_SCOPE_ZONE = 2;
+  EJECTION_SCOPE_GROUP = 3;
+}
+
 message EjectionRule {
-  artemis.common.v1.ServiceKey service = 1;
-  string instance_id = 2;
+  artemis.common.v1.ServiceKey service = 1;   // INSTANCE 级必填
+  string instance_id = 2;                     // INSTANCE 级必填
   string reason = 3;            // 排障用
+  EjectionScope scope = 4;      // 缺省 INSTANCE
+  string target_value = 5;      // SERVER/ZONE/GROUP 级：metadata 值
 }
 
 message EjectionRulesRequest {
@@ -167,11 +179,14 @@ message EjectionRulesSnapshot {
 message EjectionRecovered {
   artemis.common.v1.ServiceKey service = 1;
   string instance_id = 2;
+  EjectionScope scope = 3;      // 缺省 INSTANCE
+  string target_value = 4;      // SERVER/ZONE/GROUP 级
 }
 
 // 流事件 envelope（非 unary Response，不适用 status + data 规范，对齐 projection.v1 先例）：
 // 已设 snapshot = 全量快照（替换语义——消费方全量重建本地规则集，含空集）；未设 = 增量
 // （ejected/recovered 互斥，单条消息恰一 action）。message presence 区分空快照与增量。
+// v0.4 phase-3：快照/增量含四级；增量仅在目标生效态翻转时产生（叠加/对消无翻转不推）。
 message EjectionRulesEvent {
   EjectionRulesSnapshot snapshot = 1;
   EjectionRule ejected = 2;

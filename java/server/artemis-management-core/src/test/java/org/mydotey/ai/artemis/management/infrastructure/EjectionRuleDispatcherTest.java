@@ -6,9 +6,11 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.mydotey.ai.artemis.common.governance.EjectionScope;
+import org.mydotey.ai.artemis.management.domain.EjectionAction;
 import org.mydotey.ai.artemis.management.domain.EjectionRecord;
 import org.mydotey.ai.artemis.management.domain.EjectionRuleSubscriber;
-import org.mydotey.ai.artemis.management.domain.InstanceKey;
+import org.mydotey.ai.artemis.management.domain.EjectionTarget;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
 
 class EjectionRuleDispatcherTest {
@@ -21,14 +23,14 @@ class EjectionRuleDispatcherTest {
 
     @Test
     void should_push_snapshot_then_deltas_in_order() {
-        store.eject(new EjectionRecord(new InstanceKey(SERVICE, "i1"), "r1", NOW));
+        store.append(eject(EjectionTarget.instance(SERVICE, "i1"), "r1"));
         RecordingSubscriber subscriber = new RecordingSubscriber();
         dispatcher.subscribe(subscriber);
 
-        dispatcher.onEjected(new EjectionRecord(new InstanceKey(SERVICE, "i2"), "r2", NOW));
-        dispatcher.onRecovered(new InstanceKey(SERVICE, "i1"));
+        dispatcher.onEjected(eject(EjectionTarget.instance(SERVICE, "i2"), "r2"));
+        dispatcher.onRecovered(EjectionTarget.selector(EjectionScope.ZONE, "dc-2"));
 
-        assertThat(subscriber.events).containsExactly("snapshot:i1", "ejected:i2", "recovered:i1");
+        assertThat(subscriber.events).containsExactly("snapshot:i1", "ejected:i2", "recovered:zone:dc-2");
     }
 
     @Test
@@ -44,16 +46,27 @@ class EjectionRuleDispatcherTest {
         // 摘除与订阅并发：单锁全序——无论先后，快照与增量不重叠不丢失
         // （onEjected 前先落库，对齐 ManagementServiceImpl 的调用序）
         RecordingSubscriber subscriber = new RecordingSubscriber();
-        EjectionRecord first = new EjectionRecord(new InstanceKey(SERVICE, "i1"), "r1", NOW);
-        EjectionRecord second = new EjectionRecord(new InstanceKey(SERVICE, "i2"), "r2", NOW);
-        store.eject(first);
+        EjectionRecord first = store.append(eject(EjectionTarget.instance(SERVICE, "i1"), "r1"));
         dispatcher.onEjected(first);
-        store.eject(second);
+        EjectionRecord second = store.append(eject(EjectionTarget.instance(SERVICE, "i2"), "r2"));
         dispatcher.onEjected(second);
 
         dispatcher.subscribe(subscriber);
 
         assertThat(subscriber.events).containsExactly("snapshot:i1,i2");
+    }
+
+    @Test
+    void should_send_active_rules_only_in_snapshot() {
+        // 已对消目标不进快照（对消后 active 集不含）
+        store.append(eject(EjectionTarget.instance(SERVICE, "i1"), "r1"));
+        store.append(recover(EjectionTarget.instance(SERVICE, "i1")));
+        store.append(eject(EjectionTarget.selector(EjectionScope.SERVER, "10.1.1.1"), "host down"));
+
+        RecordingSubscriber subscriber = new RecordingSubscriber();
+        dispatcher.subscribe(subscriber);
+
+        assertThat(subscriber.events).containsExactly("snapshot:server:10.1.1.1");
     }
 
     @Test
@@ -64,7 +77,7 @@ class EjectionRuleDispatcherTest {
         dispatcher.subscribe(failing);
         dispatcher.subscribe(healthy);
 
-        dispatcher.onEjected(new EjectionRecord(new InstanceKey(SERVICE, "i9"), "r", NOW));
+        dispatcher.onEjected(eject(EjectionTarget.instance(SERVICE, "i9"), "r"));
 
         assertThat(healthy.events).containsExactly("snapshot:", "ejected:i9");
         assertThat(failing.events).containsExactly("snapshot:"); // 断流注销后不再收到
@@ -83,6 +96,14 @@ class EjectionRuleDispatcherTest {
         assertThat(second.closed).isTrue();
     }
 
+    private static EjectionRecord eject(EjectionTarget target, String reason) {
+        return new EjectionRecord(target, EjectionAction.EJECT, reason, "admin", NOW, 0);
+    }
+
+    private static EjectionRecord recover(EjectionTarget target) {
+        return new EjectionRecord(target, EjectionAction.RECOVER, null, "admin", NOW, 0);
+    }
+
     private static final class RecordingSubscriber implements EjectionRuleSubscriber {
 
         final List<String> events = new ArrayList<>();
@@ -93,7 +114,10 @@ class EjectionRuleDispatcherTest {
         public void onSnapshot(List<EjectionRecord> records) {
             events.add("snapshot:"
                     + records.stream()
-                            .map(record -> record.instance().instanceId())
+                            .map(record -> record.target().scope() == EjectionScope.INSTANCE
+                                    ? record.target().instanceId()
+                                    : record.target().scope().name().toLowerCase() + ":"
+                                            + record.target().value())
                             .reduce((a, b) -> a + "," + b)
                             .orElse(""));
         }
@@ -103,12 +127,15 @@ class EjectionRuleDispatcherTest {
             if (failOnEjected) {
                 throw new IllegalStateException("boom");
             }
-            events.add("ejected:" + record.instance().instanceId());
+            events.add("ejected:" + record.target().instanceId());
         }
 
         @Override
-        public void onRecovered(InstanceKey instance) {
-            events.add("recovered:" + instance.instanceId());
+        public void onRecovered(EjectionTarget target) {
+            events.add("recovered:"
+                    + (target.scope() == EjectionScope.INSTANCE
+                            ? target.instanceId()
+                            : target.scope().name().toLowerCase() + ":" + target.value()));
         }
 
         @Override

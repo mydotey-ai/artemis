@@ -2,7 +2,10 @@ package org.mydotey.ai.artemis.management.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.mydotey.ai.artemis.common.governance.EjectionScope;
+import org.mydotey.ai.artemis.management.domain.EjectionTarget;
 import org.mydotey.ai.artemis.management.domain.InstanceStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
 import org.mydotey.ai.artemis.proto.common.v1.Instance;
@@ -49,6 +52,54 @@ class ManagementProtoMapperTest {
 
         assertThat(proto.getNamespace()).isEqualTo("ns");
         assertThat(proto.getService()).isEqualTo("svc");
+    }
+
+    @Test
+    void should_map_ejection_events_across_scopes_when_converting_domain() {
+        var protoKey = org.mydotey.ai.artemis.proto.common.v1.ServiceKey.newBuilder()
+                .setNamespace("ns")
+                .setService("svc");
+
+        // instance 级（缺省 scope，wire 兼容）
+        var instanceRule = mapper.toEjectedEvent(
+                record(EjectionTarget.instance(new ServiceKey("ns", "svc"), "i1"), "maintenance"));
+        assertThat(instanceRule.getEjected().getScope())
+                .isEqualTo(org.mydotey.ai.artemis.proto.management.v1.EjectionScope.EJECTION_SCOPE_INSTANCE);
+        assertThat(instanceRule.getEjected().getService().getNamespace()).isEqualTo("ns");
+        assertThat(instanceRule.getEjected().getInstanceId()).isEqualTo("i1");
+        assertThat(instanceRule.getEjected().getTargetValue()).isEmpty();
+
+        // selector 级（scope + target_value）
+        var selectorRule =
+                mapper.toEjectedEvent(record(EjectionTarget.selector(EjectionScope.SERVER, "10.1.1.1"), "host down"));
+        assertThat(selectorRule.getEjected().getScope())
+                .isEqualTo(org.mydotey.ai.artemis.proto.management.v1.EjectionScope.EJECTION_SCOPE_SERVER);
+        assertThat(selectorRule.getEjected().getTargetValue()).isEqualTo("10.1.1.1");
+        assertThat(selectorRule.getEjected().hasService()).isFalse();
+
+        var recovered = mapper.toRecoveredEvent(EjectionTarget.selector(EjectionScope.ZONE, "dc-2"));
+        assertThat(recovered.getRecovered().getScope())
+                .isEqualTo(org.mydotey.ai.artemis.proto.management.v1.EjectionScope.EJECTION_SCOPE_ZONE);
+        assertThat(recovered.getRecovered().getTargetValue()).isEqualTo("dc-2");
+
+        // 快照含四级
+        var snapshot = mapper.toSnapshotEvent(List.of(
+                record(EjectionTarget.instance(new ServiceKey("ns", "svc"), "i1"), "r1"),
+                record(EjectionTarget.selector(EjectionScope.GROUP, "canary"), "g")));
+        assertThat(snapshot.getSnapshot().getRulesCount()).isEqualTo(2);
+        assertThat(snapshot.getSnapshot().getRules(1).getScope())
+                .isEqualTo(org.mydotey.ai.artemis.proto.management.v1.EjectionScope.EJECTION_SCOPE_GROUP);
+    }
+
+    private static org.mydotey.ai.artemis.management.domain.EjectionRecord record(
+            EjectionTarget target, String reason) {
+        return new org.mydotey.ai.artemis.management.domain.EjectionRecord(
+                target,
+                org.mydotey.ai.artemis.management.domain.EjectionAction.EJECT,
+                reason,
+                "admin",
+                java.time.Instant.EPOCH,
+                1);
     }
 
     @Test

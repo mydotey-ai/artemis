@@ -289,7 +289,7 @@ class ProjectionRegistryTest {
     void should_filter_query_and_checksums_with_chain() {
         registry.replaceAll(CLUSTER, List.of(service(ORDER, instance("i1"), instance("i2"))));
         EjectionFilter filter = new EjectionFilter();
-        filter.replace(EjectionRules.of(List.of(new EjectionRule(ORDER, "i1", "test"))));
+        filter.replace(EjectionRules.of(List.of(EjectionRule.instance(ORDER, "i1", "test"))));
         DiscoveryFilterChain chain = DiscoveryFilterChain.of(filter);
         DiscoverySelector all = new DiscoverySelector(java.util.Set.of(), Map.of());
 
@@ -318,7 +318,7 @@ class ProjectionRegistryTest {
 
         // 全部实例摘除：显式命中 → 空实例集条目（对齐 labels 语义）；全量查询无条目
         filter.replace(EjectionRules.of(
-                List.of(new EjectionRule(ORDER, "i1", "test"), new EjectionRule(ORDER, "i2", "test"))));
+                List.of(EjectionRule.instance(ORDER, "i1", "test"), EjectionRule.instance(ORDER, "i2", "test"))));
         List<ClusterServiceInstances> emptied =
                 registry.query(new DiscoverySelector(java.util.Set.of(ORDER), Map.of()), chain);
         assertThat(emptied).hasSize(1);
@@ -344,7 +344,7 @@ class ProjectionRegistryTest {
         assertThat(withChain).containsExactly(new ServiceChecksum(ORDER, unfiltered));
 
         // 摘除不命中任何投影实例 → 仍无效果 → 缓存
-        filter.replace(EjectionRules.of(List.of(new EjectionRule(USER, "u1", "test"))));
+        filter.replace(EjectionRules.of(List.of(EjectionRule.instance(USER, "u1", "test"))));
         List<ServiceChecksum> missChain = registry.checksums(all, chain).stream()
                 .flatMap(cluster -> cluster.services().stream())
                 .filter(service -> service.key().equals(ORDER))

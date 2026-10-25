@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
+import org.mydotey.ai.artemis.common.governance.EjectionScope;
 import org.mydotey.ai.artemis.discovery.TestProperties;
 import org.mydotey.ai.artemis.discovery.domain.ChangeType;
 import org.mydotey.ai.artemis.discovery.domain.DiscoveryFilterChain;
@@ -17,6 +18,7 @@ import org.mydotey.ai.artemis.discovery.domain.EjectionRule;
 import org.mydotey.ai.artemis.discovery.domain.EjectionRuleListener;
 import org.mydotey.ai.artemis.discovery.domain.EjectionRuleSource;
 import org.mydotey.ai.artemis.discovery.domain.EjectionRuleWatch;
+import org.mydotey.ai.artemis.discovery.domain.EjectionTarget;
 import org.mydotey.ai.artemis.discovery.domain.Instance;
 import org.mydotey.ai.artemis.discovery.domain.InstanceStatus;
 import org.mydotey.ai.artemis.discovery.domain.ManagementState;
@@ -32,6 +34,7 @@ class EjectionRuleSynchronizerTest {
 
     private static final String CLUSTER = "cluster-a";
     private static final ServiceKey ORDER = new ServiceKey("default", "order-service");
+    private static final ServiceKey PAY = new ServiceKey("default", "pay-service");
 
     private final ProjectionRegistry registry = new ProjectionRegistry();
     private final EjectionFilter filter = new EjectionFilter();
@@ -93,7 +96,7 @@ class EjectionRuleSynchronizerTest {
 
     @Test
     void should_apply_snapshot_and_fanout_view_changes() throws Exception {
-        registry.replaceAll(CLUSTER, List.of(service(instance("i1"), instance("i2"))));
+        registry.replaceAll(CLUSTER, List.of(service(ORDER, instance("i1"), instance("i2"))));
         RecordingTarget target = new RecordingTarget();
         manager.subscribe(new DiscoverySelector(Set.of(), Map.of()), target);
         target.events.clear();
@@ -101,7 +104,7 @@ class EjectionRuleSynchronizerTest {
         try (EjectionRuleSynchronizer synchronizer = startSynchronizer()) {
             source.awaitWatch(); // watch 建立后事件才不丢（线程启动竞态）
             source.pushSnapshot(List.of(rule("i1")));
-            await(() -> filter.rules().isEjected(ORDER, "i1"));
+            await(() -> filter.rules().isEjected(ORDER, "i1", Map.of()));
 
             // 视图变更直投：i1 退出视图 DELETE（投影实例完整数据）
             await(() -> target.events.size() == 1);
@@ -110,28 +113,79 @@ class EjectionRuleSynchronizerTest {
                     .containsExactly(org.assertj.core.groups.Tuple.tuple("i1", ChangeType.DELETE));
 
             // 增量：恢复 i1 → NEW；摘除 i2 → DELETE
-            source.pushRecovered(ORDER, "i1");
+            source.pushRecovered(EjectionTarget.of(rule("i1")));
             source.pushEjected(rule("i2"));
             await(() -> target.events.size() == 3);
             assertThat(target.events.get(1).changes()).hasSize(1);
             assertThat(target.events.get(2).changes()).hasSize(1);
-            assertThat(filter.rules().isEjected(ORDER, "i2")).isTrue();
-            assertThat(filter.rules().isEjected(ORDER, "i1")).isFalse();
+            assertThat(filter.rules().isEjected(ORDER, "i2", Map.of())).isTrue();
+            assertThat(filter.rules().isEjected(ORDER, "i1", Map.of())).isFalse();
+        }
+    }
+
+    @Test
+    void should_fanout_selector_scope_to_all_services() throws Exception {
+        // 两个服务各带 metadata，zone 摘除扇出跨服务
+        registry.replaceAll(
+                CLUSTER,
+                List.of(
+                        service(ORDER, instance("i1", Map.of("zone", "dc-2")), instance("i2", Map.of("zone", "dc-1"))),
+                        service(PAY, instance("p1", Map.of("zone", "dc-2")))));
+        RecordingTarget target = new RecordingTarget();
+        manager.subscribe(new DiscoverySelector(Set.of(), Map.of()), target);
+        target.events.clear();
+
+        try (EjectionRuleSynchronizer synchronizer = startSynchronizer()) {
+            source.awaitWatch();
+            source.pushEjected(EjectionRule.selector(EjectionScope.ZONE, "dc-2", "zone down"));
+
+            // selector 扇出全投影服务：ORDER/i1 与 PAY/p1 退出视图（dc-1 不命中）
+            await(() -> filter.rules().isEjected(ORDER, "i1", Map.of("zone", "dc-2")));
+            await(() -> target.events.size() == 2);
+            assertThat(target.events).extracting(ServiceChange::key).containsExactlyInAnyOrder(ORDER, PAY);
+            assertThat(target.events.stream()
+                            .flatMap(change -> change.changes().stream())
+                            .map(change -> change.instance().instanceId()))
+                    .containsExactlyInAnyOrder("i1", "p1");
+
+            // 恢复 selector：命中实例回归 NEW
+            source.pushRecovered(new EjectionTarget(EjectionScope.ZONE, null, null, "dc-2"));
+            await(() -> !filter.rules().isEjected(ORDER, "i1", Map.of("zone", "dc-2")));
+            await(() -> target.events.size() == 4);
+        }
+    }
+
+    @Test
+    void should_not_fanout_when_rules_unchanged() throws Exception {
+        registry.replaceAll(CLUSTER, List.of(service(ORDER, instance("i1"))));
+        RecordingTarget target = new RecordingTarget();
+        manager.subscribe(new DiscoverySelector(Set.of(), Map.of()), target);
+        target.events.clear();
+
+        try (EjectionRuleSynchronizer synchronizer = startSynchronizer()) {
+            source.awaitWatch();
+            source.pushSnapshot(List.of(rule("i1")));
+            await(() -> target.events.size() == 1); // 首次摘除 DELETE
+
+            // 幂等重复推送：无扇出
+            source.pushEjected(rule("i1"));
+            Thread.sleep(200);
+            assertThat(target.events).hasSize(1);
         }
     }
 
     @Test
     void should_keep_last_known_rules_when_stream_closed() throws Exception {
-        registry.replaceAll(CLUSTER, List.of(service(instance("i1"))));
+        registry.replaceAll(CLUSTER, List.of(service(ORDER, instance("i1"))));
         try (EjectionRuleSynchronizer ignored = startSynchronizer()) {
             source.awaitWatch();
             source.pushSnapshot(List.of(rule("i1")));
-            await(() -> filter.rules().isEjected(ORDER, "i1"));
+            await(() -> filter.rules().isEjected(ORDER, "i1", Map.of()));
 
             source.closeCurrent(); // 断流：缓存不清（D-E3）
             Thread.sleep(200);
 
-            assertThat(filter.rules().isEjected(ORDER, "i1")).isTrue();
+            assertThat(filter.rules().isEjected(ORDER, "i1", Map.of())).isTrue();
             // 查询出口继续过滤
             List<org.mydotey.ai.artemis.discovery.domain.ClusterServiceInstances> view =
                     registry.query(new DiscoverySelector(Set.of(), Map.of()), DiscoveryFilterChain.of(filter));
@@ -140,20 +194,24 @@ class EjectionRuleSynchronizerTest {
             // 重连恢复：重新全量快照（替换语义）收敛
             source.awaitWatch(); // 重连轮次建立新 watch
             source.pushSnapshot(List.of());
-            await(() -> !filter.rules().isEjected(ORDER, "i1"));
+            await(() -> !filter.rules().isEjected(ORDER, "i1", Map.of()));
         }
     }
 
     private static EjectionRule rule(String instanceId) {
-        return new EjectionRule(ORDER, instanceId, "test");
+        return EjectionRule.instance(ORDER, instanceId, "test");
     }
 
-    private static ServiceInstances service(Instance... instances) {
-        return new ServiceInstances(ORDER, List.of(instances));
+    private static ServiceInstances service(ServiceKey key, Instance... instances) {
+        return new ServiceInstances(key, List.of(instances));
     }
 
     private static Instance instance(String id) {
         return new Instance(id, "10.0.0.1", 8080, InstanceStatus.UP, 100, Map.of());
+    }
+
+    private static Instance instance(String id, Map<String, String> metadata) {
+        return new Instance(id, "10.0.0.1", 8080, InstanceStatus.UP, 100, metadata);
     }
 
     private static void await(java.util.function.BooleanSupplier condition) throws InterruptedException {
@@ -186,8 +244,8 @@ class EjectionRuleSynchronizerTest {
             sessions.forEach(session -> session.listener.onEjected(rule));
         }
 
-        synchronized void pushRecovered(ServiceKey service, String instanceId) {
-            sessions.forEach(session -> session.listener.onRecovered(service, instanceId));
+        synchronized void pushRecovered(EjectionTarget target) {
+            sessions.forEach(session -> session.listener.onRecovered(target));
         }
 
         /** 等 watch 建立（重连轮次 = 等新 session，取代旧计数）。 */

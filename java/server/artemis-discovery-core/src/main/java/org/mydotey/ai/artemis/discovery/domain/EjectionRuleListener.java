@@ -14,8 +14,8 @@ public interface EjectionRuleListener {
     /** 增量：摘除。 */
     void onEjected(EjectionRule rule);
 
-    /** 增量：恢复。 */
-    void onRecovered(ServiceKey service, String instanceId);
+    /** 增量：恢复（四级目标）。 */
+    void onRecovered(EjectionTarget target);
 
     /** 流终止（对端断流/错误/完成）；此后该订阅不再回调。 */
     void onClosed();

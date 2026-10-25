@@ -100,8 +100,8 @@ class ManagementAdminIT {
                 .addInstances(instanceKey("i1"))
                 .addInstances(instanceKey("i2"))
                 .build());
-        post("/admin/v1/services/" + NAMESPACE + "/" + SERVICE + "/instances/i1/recover", null);
-        post("/admin/v1/services/" + NAMESPACE + "/" + SERVICE + "/instances/i2/recover", null);
+        post("/admin/v1/ejections/recover", ejectBody("i1", null));
+        post("/admin/v1/ejections/recover", ejectBody("i2", null));
     }
 
     @AfterEach
@@ -144,7 +144,7 @@ class ManagementAdminIT {
     void should_return_effective_view_when_instance_ejected() throws Exception {
         register("i1", "i2");
 
-        assertThat(post(ejectPath("i1"), "{\"reason\":\"maintenance\"}").statusCode())
+        assertThat(post("/admin/v1/ejections", ejectBody("i1", "maintenance")).statusCode())
                 .isEqualTo(200);
 
         JsonNode detail = json(get(detailPath(), true));
@@ -158,7 +158,7 @@ class ManagementAdminIT {
     @Test
     void should_show_ejected_instance_when_include_ejected() throws Exception {
         register("i1", "i2");
-        post(ejectPath("i1"), "{\"reason\":\"maintenance\"}");
+        post("/admin/v1/ejections", ejectBody("i1", "maintenance"));
 
         JsonNode detail = json(get(detailPath() + "?includeEjected=true", true));
 
@@ -173,7 +173,7 @@ class ManagementAdminIT {
     @Test
     void should_keep_registry_facts_when_instance_ejected() throws Exception {
         register("i1", "i2");
-        post(ejectPath("i1"), "{\"reason\":\"maintenance\"}");
+        post("/admin/v1/ejections", ejectBody("i1", "maintenance"));
 
         var response = registryQuery.getServiceInstances(
                 GetServiceInstancesRequest.newBuilder().setKey(serviceKey()).build());
@@ -186,9 +186,10 @@ class ManagementAdminIT {
     @Test
     void should_restore_effective_view_when_recovered() throws Exception {
         register("i1", "i2");
-        post(ejectPath("i1"), "{\"reason\":\"maintenance\"}");
+        post("/admin/v1/ejections", ejectBody("i1", "maintenance"));
 
-        assertThat(post(recoverPath("i1"), null).statusCode()).isEqualTo(204);
+        assertThat(post("/admin/v1/ejections/recover", ejectBody("i1", null)).statusCode())
+                .isEqualTo(204);
 
         JsonNode detail = json(get(detailPath(), true));
         assertThat(detail.get("ejectedCount").asInt()).isZero();
@@ -196,27 +197,50 @@ class ManagementAdminIT {
     }
 
     @Test
-    void should_be_idempotent_when_ejecting_twice_over_http() throws Exception {
+    void should_stack_ejections_and_list_records_over_http() throws Exception {
         register("i1");
 
-        JsonNode first = json(post(ejectPath("i1"), "{\"reason\":\"first\"}"));
-        JsonNode second = json(post(ejectPath("i1"), "{\"reason\":\"second\"}"));
+        JsonNode first = json(post("/admin/v1/ejections", ejectBody("i1", "first")));
+        JsonNode second = json(post("/admin/v1/ejections", ejectBody("i1", "second")));
 
-        assertThat(second.get("reason").asText()).isEqualTo("first");
-        assertThat(second.get("ejectedAt").asText())
-                .isEqualTo(first.get("ejectedAt").asText());
+        // 叠加：两条记录各留痕（操作记录即状态），active 代表集一条（最早未对消）
+        assertThat(second.get("reason").asText()).isEqualTo("second");
+        assertThat(second.get("sequence").asLong())
+                .isGreaterThan(first.get("sequence").asLong());
+        JsonNode active = json(get("/admin/v1/ejections?activeOnly=true&scope=INSTANCE", true))
+                .get("records");
+        assertThat(active.size()).isEqualTo(1);
+        assertThat(active.get(0).get("instanceId").asText()).isEqualTo("i1");
+
+        // 部分对消：一次 recover 后仍 active；完全恢复后清空；多余 recover 幂等 204
+        assertThat(post("/admin/v1/ejections/recover", ejectBody("i1", null)).statusCode())
+                .isEqualTo(204);
+        assertThat(json(get("/admin/v1/ejections?activeOnly=true&scope=INSTANCE", true))
+                        .get("records")
+                        .size())
+                .isEqualTo(1);
+        assertThat(post("/admin/v1/ejections/recover", ejectBody("i1", null)).statusCode())
+                .isEqualTo(204);
+        assertThat(post("/admin/v1/ejections/recover", ejectBody("i1", null)).statusCode())
+                .isEqualTo(204);
+        assertThat(json(get("/admin/v1/ejections?activeOnly=true", true))
+                        .get("records")
+                        .size())
+                .isZero();
     }
 
     @Test
-    void should_return_400_when_path_params_blank() throws Exception {
-        assertThat(post("/admin/v1/services/%20/" + SERVICE + "/instances/i1/eject", null)
+    void should_return_400_when_ejection_request_invalid() throws Exception {
+        // scope 非法
+        assertThat(post("/admin/v1/ejections", "{\"scope\":\"HOST\",\"value\":\"10.1.1.1\"}")
                         .statusCode())
                 .isEqualTo(400);
-        assertThat(post("/admin/v1/services/" + NAMESPACE + "/" + SERVICE + "/instances/%20/eject", null)
+        // INSTANCE 级缺 service/instanceId
+        assertThat(post("/admin/v1/ejections", "{\"namespace\":\"" + NAMESPACE + "\"}")
                         .statusCode())
                 .isEqualTo(400);
-        assertThat(post("/admin/v1/services/" + NAMESPACE + "/%20/instances/i1/eject", null)
-                        .statusCode())
+        // selector 级缺 value
+        assertThat(post("/admin/v1/ejections", "{\"scope\":\"ZONE\"}").statusCode())
                 .isEqualTo(400);
     }
 
@@ -359,12 +383,19 @@ class ManagementAdminIT {
         return "/admin/v1/services/" + NAMESPACE + "/" + SERVICE;
     }
 
-    private static String ejectPath(String instanceId) {
-        return detailPath() + "/instances/" + instanceId + "/eject";
-    }
-
-    private static String recoverPath(String instanceId) {
-        return detailPath() + "/instances/" + instanceId + "/recover";
+    /** 统一摘除/恢复请求体（INSTANCE 级；reason 为 null 时省略）。 */
+    private static String ejectBody(String instanceId, String reason) {
+        StringBuilder body = new StringBuilder("{\"scope\":\"INSTANCE\",\"namespace\":\"")
+                .append(NAMESPACE)
+                .append("\",\"service\":\"")
+                .append(SERVICE)
+                .append("\",\"instanceId\":\"")
+                .append(instanceId)
+                .append("\"");
+        if (reason != null) {
+            body.append(",\"reason\":\"").append(reason).append("\"");
+        }
+        return body.append("}").toString();
     }
 
     private static ServiceKey serviceKey() {

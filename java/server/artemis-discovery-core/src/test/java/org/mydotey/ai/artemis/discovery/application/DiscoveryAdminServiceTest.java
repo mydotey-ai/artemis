@@ -74,7 +74,7 @@ class DiscoveryAdminServiceTest {
     @Test
     void should_hide_ejected_instance_from_admin_views() {
         registry.replaceAll(CLUSTER_A, List.of(service(ORDER, instance("i1"), instance("i2"))));
-        ejectionFilter.replace(EjectionRules.of(List.of(new EjectionRule(ORDER, "i1", "test"))));
+        ejectionFilter.replace(EjectionRules.of(List.of(EjectionRule.instance(ORDER, "i1", "test"))));
 
         assertThat(service.services(null, null))
                 .singleElement()
@@ -87,7 +87,7 @@ class DiscoveryAdminServiceTest {
 
         // 全部实例被过滤：详情不出空 cluster 条目
         ejectionFilter.replace(EjectionRules.of(
-                List.of(new EjectionRule(ORDER, "i1", "test"), new EjectionRule(ORDER, "i2", "test"))));
+                List.of(EjectionRule.instance(ORDER, "i1", "test"), EjectionRule.instance(ORDER, "i2", "test"))));
         assertThat(service.service(ORDER).clusters()).isEmpty();
     }
 

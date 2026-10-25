@@ -34,6 +34,6 @@ public record InstanceView(
                 instance.metadata(),
                 ejection != null,
                 ejection == null ? null : ejection.reason(),
-                ejection == null ? null : ejection.ejectedAt());
+                ejection == null ? null : ejection.timestamp());
     }
 }

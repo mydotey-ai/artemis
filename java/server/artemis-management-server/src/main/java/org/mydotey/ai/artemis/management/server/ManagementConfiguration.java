@@ -8,9 +8,11 @@ import org.mydotey.ai.artemis.management.application.ManagementService;
 import org.mydotey.ai.artemis.management.application.ManagementServiceImpl;
 import org.mydotey.ai.artemis.management.application.PersistenceInfo;
 import org.mydotey.ai.artemis.management.domain.AccountStore;
+import org.mydotey.ai.artemis.management.domain.AuditLogStore;
 import org.mydotey.ai.artemis.management.domain.EjectionStore;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryPort;
 import org.mydotey.ai.artemis.management.infrastructure.EjectionRuleDispatcher;
+import org.mydotey.ai.artemis.management.infrastructure.InMemoryAuditLogStore;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryEjectionStore;
 import org.mydotey.ai.artemis.management.server.auth.ConfigAccountAuthService;
 import org.mydotey.ai.artemis.management.server.auth.ManagementAuthConfig;
@@ -20,6 +22,10 @@ import org.mydotey.ai.artemis.management.server.grpc.RegistryQueryGrpcClient;
 import org.mydotey.ai.artemis.management.server.http.HttpBasicAuthFilter;
 import org.mydotey.ai.artemis.management.server.repository.AccountMapper;
 import org.mydotey.ai.artemis.management.server.repository.AccountStoreImpl;
+import org.mydotey.ai.artemis.management.server.repository.AuditLogMapper;
+import org.mydotey.ai.artemis.management.server.repository.AuditLogStoreImpl;
+import org.mydotey.ai.artemis.management.server.repository.EjectionRecordMapper;
+import org.mydotey.ai.artemis.management.server.repository.EjectionStoreImpl;
 import org.mydotey.scf.ConfigurationManager;
 import org.mydotey.scf.facade.StringProperties;
 import org.springframework.beans.factory.ObjectProvider;
@@ -55,9 +61,21 @@ public class ManagementConfiguration {
         return Clock.systemUTC();
     }
 
+    /**
+     * 摘除存储双轨（判据 = mapper 可得性，随 DataSource bean 存在性，phase-2 模式）：
+     * DB 态 MyBatis 实现（自增主键 = sequence，跨重启持久），内存态期 1 行为。
+     */
     @Bean
-    EjectionStore ejectionStore() {
-        return new InMemoryEjectionStore();
+    EjectionStore ejectionStore(ObjectProvider<EjectionRecordMapper> mapperProvider) {
+        EjectionRecordMapper mapper = mapperProvider.getIfAvailable();
+        return mapper == null ? new InMemoryEjectionStore() : new EjectionStoreImpl(mapper);
+    }
+
+    /** 审计存储双轨（同判据；内存态重启丢失为既有语义）。 */
+    @Bean
+    AuditLogStore auditLogStore(ObjectProvider<AuditLogMapper> mapperProvider) {
+        AuditLogMapper mapper = mapperProvider.getIfAvailable();
+        return mapper == null ? new InMemoryAuditLogStore() : new AuditLogStoreImpl(mapper);
     }
 
     /** 规则分发无条件装配（无 gRPC 端口时零订阅者，摘除/恢复通知为空操作）。 */
@@ -118,9 +136,11 @@ public class ManagementConfiguration {
     ManagementService managementService(
             RegistryQueryPort registryQueryPort,
             EjectionStore ejectionStore,
+            AuditLogStore auditLogStore,
             EjectionRuleDispatcher ejectionRuleDispatcher,
             Clock clock) {
-        return new ManagementServiceImpl(registryQueryPort, ejectionStore, ejectionRuleDispatcher, clock);
+        return new ManagementServiceImpl(
+                registryQueryPort, ejectionStore, auditLogStore, ejectionRuleDispatcher, clock);
     }
 
     @Bean

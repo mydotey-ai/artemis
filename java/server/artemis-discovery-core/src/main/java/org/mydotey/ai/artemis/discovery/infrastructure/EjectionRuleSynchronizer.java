@@ -16,6 +16,7 @@ import org.mydotey.ai.artemis.discovery.domain.EjectionRule;
 import org.mydotey.ai.artemis.discovery.domain.EjectionRuleListener;
 import org.mydotey.ai.artemis.discovery.domain.EjectionRuleSource;
 import org.mydotey.ai.artemis.discovery.domain.EjectionRules;
+import org.mydotey.ai.artemis.discovery.domain.EjectionTarget;
 import org.mydotey.ai.artemis.discovery.domain.Instance;
 import org.mydotey.ai.artemis.discovery.domain.InstanceChange;
 import org.mydotey.ai.artemis.discovery.domain.ManagementState;
@@ -167,7 +168,7 @@ public final class EjectionRuleSynchronizer implements AutoCloseable {
             applyAndFanout(oldRules, oldRules.with(ejected.rule()));
         } else if (event instanceof RecoveredEvent recovered) {
             EjectionRules oldRules = filter.rules();
-            applyAndFanout(oldRules, oldRules.without(recovered.service, recovered.instanceId));
+            applyAndFanout(oldRules, oldRules.without(recovered.target));
         }
     }
 
@@ -185,27 +186,33 @@ public final class EjectionRuleSynchronizer implements AutoCloseable {
     }
 
     /** 新旧规则集对称差 → 受影响服务逐 cluster 视图变更直投（D-E6，跨 cluster 生效 D-E5）；
-     * 调用方已持表锁。 */
+     * 调用方已持表锁。受影响服务 = instance 级规则服务键 ∪ selector 值集变化时的全部投影服务；
+     * 逐投影实例按四级判定（instance 级 + selector metadata 匹配）取新旧可见性差。
+     * ponytail: selector 扇出全投影扫描（低频运维操作）；规则 × 服务规模增长后按 metadata 反向索引。 */
     private void fanoutDiff(EjectionRules oldRules, EjectionRules newRules) {
         Set<ServiceKey> affected = new HashSet<>(oldRules.services());
         affected.addAll(newRules.services());
+        if (!oldRules.selectors().equals(newRules.selectors())) {
+            for (String cluster : registry.clusterIds()) {
+                for (ServiceInstances serviceInstances : registry.services(cluster)) {
+                    affected.add(serviceInstances.key());
+                }
+            }
+        }
         for (ServiceKey service : affected) {
-            Set<String> oldIds = oldRules.instances(service);
-            Set<String> newIds = newRules.instances(service);
             for (String cluster : registry.clusterIds()) {
                 ServiceInstances projection = registry.service(cluster, service);
                 if (projection == null) {
                     continue;
                 }
                 List<InstanceChange> changes = null;
-                for (String ejectedNow : newIds) {
-                    if (!oldIds.contains(ejectedNow)) {
-                        changes = addChange(changes, find(projection, ejectedNow), ChangeType.DELETE);
-                    }
-                }
-                for (String recoveredNow : oldIds) {
-                    if (!newIds.contains(recoveredNow)) {
-                        changes = addChange(changes, find(projection, recoveredNow), ChangeType.NEW);
+                for (Instance instance : projection.instances()) {
+                    boolean wasEjected = oldRules.isEjected(service, instance.instanceId(), instance.metadata());
+                    boolean nowEjected = newRules.isEjected(service, instance.instanceId(), instance.metadata());
+                    if (nowEjected && !wasEjected) {
+                        changes = addChange(changes, instance, ChangeType.DELETE);
+                    } else if (wasEjected && !nowEjected) {
+                        changes = addChange(changes, instance, ChangeType.NEW);
                     }
                 }
                 if (changes != null && !changes.isEmpty()) {
@@ -215,25 +222,12 @@ public final class EjectionRuleSynchronizer implements AutoCloseable {
         }
     }
 
-    /** 投影无此实例（instance == null）跳过该条——视图本无效果（D-E6）。 */
     private static List<InstanceChange> addChange(List<InstanceChange> changes, Instance instance, ChangeType type) {
-        if (instance == null) {
-            return changes;
-        }
         if (changes == null) {
             changes = new ArrayList<>();
         }
         changes.add(new InstanceChange(instance, type));
         return changes;
-    }
-
-    private static Instance find(ServiceInstances projection, String instanceId) {
-        for (Instance instance : projection.instances()) {
-            if (instance.instanceId().equals(instanceId)) {
-                return instance;
-            }
-        }
-        return null;
     }
 
     /** 全抖动指数退避（同 ProjectionSynchronizer 策略）：base 倍增封顶，sleep 取 [0, base) 均匀。 */
@@ -302,8 +296,8 @@ public final class EjectionRuleSynchronizer implements AutoCloseable {
         }
 
         @Override
-        public void onRecovered(ServiceKey service, String instanceId) {
-            if (!events.queue.offer(new RecoveredEvent(service, instanceId))) {
+        public void onRecovered(EjectionTarget target) {
+            if (!events.queue.offer(new RecoveredEvent(target))) {
                 events.signalReconnect();
             }
         }
@@ -318,5 +312,5 @@ public final class EjectionRuleSynchronizer implements AutoCloseable {
 
     private record EjectedEvent(EjectionRule rule) {}
 
-    private record RecoveredEvent(ServiceKey service, String instanceId) {}
+    private record RecoveredEvent(EjectionTarget target) {}
 }

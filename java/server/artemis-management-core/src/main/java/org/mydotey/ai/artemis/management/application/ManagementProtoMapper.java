@@ -1,10 +1,11 @@
 package org.mydotey.ai.artemis.management.application;
 
 import java.util.List;
+import org.mydotey.ai.artemis.common.governance.EjectionScope;
 import org.mydotey.ai.artemis.management.domain.ConfigProperty;
 import org.mydotey.ai.artemis.management.domain.EjectionRecord;
+import org.mydotey.ai.artemis.management.domain.EjectionTarget;
 import org.mydotey.ai.artemis.management.domain.Instance;
-import org.mydotey.ai.artemis.management.domain.InstanceKey;
 import org.mydotey.ai.artemis.management.domain.InstanceStatus;
 import org.mydotey.ai.artemis.management.domain.LeaseDetail;
 import org.mydotey.ai.artemis.management.domain.LeaseStatus;
@@ -45,15 +46,12 @@ public final class ManagementProtoMapper {
                 instance.getMetadataMap());
     }
 
-    // ---- 摘除规则流（management.v1，toProto 出站事件）----
+    // ---- 摘除规则流（management.v1，toProto 出站事件，四级）----
 
     public org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent toSnapshotEvent(List<EjectionRecord> records) {
         var snapshot = org.mydotey.ai.artemis.proto.management.v1.EjectionRulesSnapshot.newBuilder();
         for (EjectionRecord record : records) {
-            snapshot.addRulesBuilder()
-                    .setService(toProto(record.instance().service()))
-                    .setInstanceId(record.instance().instanceId())
-                    .setReason(record.reason() == null ? "" : record.reason());
+            snapshot.addRules(toRule(record));
         }
         return org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent.newBuilder()
                 .setSnapshot(snapshot)
@@ -62,21 +60,44 @@ public final class ManagementProtoMapper {
 
     public org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent toEjectedEvent(EjectionRecord record) {
         return org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent.newBuilder()
-                .setEjected(org.mydotey.ai.artemis.proto.management.v1.EjectionRule.newBuilder()
-                        .setService(toProto(record.instance().service()))
-                        .setInstanceId(record.instance().instanceId())
-                        .setReason(record.reason() == null ? "" : record.reason())
-                        .build())
+                .setEjected(toRule(record))
                 .build();
     }
 
-    public org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent toRecoveredEvent(InstanceKey instance) {
+    public org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent toRecoveredEvent(EjectionTarget target) {
+        var builder = org.mydotey.ai.artemis.proto.management.v1.EjectionRecovered.newBuilder()
+                .setScope(toProto(target.scope()));
+        if (target.scope() == EjectionScope.INSTANCE) {
+            builder.setService(toProto(target.service())).setInstanceId(target.instanceId());
+        } else {
+            builder.setTargetValue(target.value() == null ? "" : target.value());
+        }
         return org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent.newBuilder()
-                .setRecovered(org.mydotey.ai.artemis.proto.management.v1.EjectionRecovered.newBuilder()
-                        .setService(toProto(instance.service()))
-                        .setInstanceId(instance.instanceId())
-                        .build())
+                .setRecovered(builder)
                 .build();
+    }
+
+    private org.mydotey.ai.artemis.proto.management.v1.EjectionRule toRule(EjectionRecord record) {
+        var builder = org.mydotey.ai.artemis.proto.management.v1.EjectionRule.newBuilder()
+                .setReason(record.reason() == null ? "" : record.reason())
+                .setScope(toProto(record.target().scope()));
+        if (record.target().scope() == EjectionScope.INSTANCE) {
+            builder.setService(toProto(record.target().service()))
+                    .setInstanceId(record.target().instanceId());
+        } else {
+            builder.setTargetValue(
+                    record.target().value() == null ? "" : record.target().value());
+        }
+        return builder.build();
+    }
+
+    private static org.mydotey.ai.artemis.proto.management.v1.EjectionScope toProto(EjectionScope scope) {
+        return switch (scope) {
+            case SERVER -> org.mydotey.ai.artemis.proto.management.v1.EjectionScope.EJECTION_SCOPE_SERVER;
+            case ZONE -> org.mydotey.ai.artemis.proto.management.v1.EjectionScope.EJECTION_SCOPE_ZONE;
+            case GROUP -> org.mydotey.ai.artemis.proto.management.v1.EjectionScope.EJECTION_SCOPE_GROUP;
+            default -> org.mydotey.ai.artemis.proto.management.v1.EjectionScope.EJECTION_SCOPE_INSTANCE;
+        };
     }
 
     public ServiceSummary toDomain(org.mydotey.ai.artemis.proto.management.v1.ServiceSummary summary) {

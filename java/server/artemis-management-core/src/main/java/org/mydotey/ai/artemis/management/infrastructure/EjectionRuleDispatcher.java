@@ -4,17 +4,21 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import lombok.extern.slf4j.Slf4j;
 import org.mydotey.ai.artemis.management.domain.EjectionRecord;
+import org.mydotey.ai.artemis.management.domain.EjectionRecords;
 import org.mydotey.ai.artemis.management.domain.EjectionRulePublisher;
 import org.mydotey.ai.artemis.management.domain.EjectionRuleSubscriber;
 import org.mydotey.ai.artemis.management.domain.EjectionRuleSubscriptions;
 import org.mydotey.ai.artemis.management.domain.EjectionStore;
-import org.mydotey.ai.artemis.management.domain.InstanceKey;
+import org.mydotey.ai.artemis.management.domain.EjectionTarget;
 
 /**
  * 摘除规则分发（规则流服务端，D-E7/D-E10）：subscribe（登记 + 快照）/ onEjected /
  * onRecovered 推送在同一锁内串行——订阅建立与摘除操作互斥，快照读取无「半增量」竞态。
  * 管理操作级频率，不采用 ProjectionDispatcher 的队列 + 专属线程管线
  * （ponytail: 若规则推送频率增长到机器级，迁移到同模式）。
+ *
+ * <p>快照 = 有效规则集（未对消，含四级；DB 态即跨重启恢复源）；增量由应用层仅在
+ * 目标生效态翻转时触发（叠加/对消无翻转不推，防消费方误删仍生效规则）。
  *
  * <p>at-most-once：推送失败（subscriber 回调抛出）= 断流注销，消费方重连全量自愈。
  */
@@ -29,17 +33,17 @@ public final class EjectionRuleDispatcher implements EjectionRulePublisher, Ejec
         this.store = store;
     }
 
-    /** 摘除落库后由应用服务调用；无订阅者零开销。分发异常不影响操作（本地已先落库）。 */
+    /** 摘除落库后由应用服务调用（仅生效态翻转入 active 时）；无订阅者零开销。 */
     public void onEjected(EjectionRecord record) {
         synchronized (dispatchLock) {
             push(subscriber -> subscriber.onEjected(record));
         }
     }
 
-    /** 恢复落库后由应用服务调用。 */
-    public void onRecovered(InstanceKey instance) {
+    /** 恢复落库后由应用服务调用（仅生效态翻转入 inactive 时）。 */
+    public void onRecovered(EjectionTarget target) {
         synchronized (dispatchLock) {
-            push(subscriber -> subscriber.onRecovered(instance));
+            push(subscriber -> subscriber.onRecovered(target));
         }
     }
 
@@ -47,7 +51,7 @@ public final class EjectionRuleDispatcher implements EjectionRulePublisher, Ejec
     public void subscribe(EjectionRuleSubscriber subscriber) {
         synchronized (dispatchLock) {
             // 快照现读与登记同锁段：登记后增量必达、快照含登记时刻全量，无窗口
-            List<EjectionRecord> snapshot = store.findAll();
+            List<EjectionRecord> snapshot = EjectionRecords.activeOf(store.findAll());
             subscribers.add(subscriber);
             try {
                 subscriber.onSnapshot(snapshot);

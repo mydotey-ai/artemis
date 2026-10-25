@@ -13,8 +13,8 @@ public interface EjectionRuleSubscriber {
     /** 增量：摘除。 */
     void onEjected(EjectionRecord record);
 
-    /** 增量：恢复。 */
-    void onRecovered(InstanceKey instance);
+    /** 增量：恢复（四级目标；仅生效态翻转时产生，叠加/对消无翻转不推）。 */
+    void onRecovered(EjectionTarget target);
 
     /** 断流（服务端注销；此后不再回调）。 */
     void close();

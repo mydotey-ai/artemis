@@ -218,7 +218,7 @@ class SubscriptionManagerTest {
     @Test
     void should_baseline_only_visible_instances_when_filtered() {
         registry.replaceAll(CLUSTER, List.of(service(ORDER, instance("i1", "a"), instance("i2", "a"))));
-        ejectionFilter.replace(EjectionRules.of(List.of(new EjectionRule(ORDER, "i1", "test"))));
+        ejectionFilter.replace(EjectionRules.of(List.of(EjectionRule.instance(ORDER, "i1", "test"))));
 
         RecordingTarget target = new RecordingTarget();
         filteredManager.subscribe(allServices(), target);
@@ -232,7 +232,7 @@ class SubscriptionManagerTest {
         filteredManager.subscribe(allServices(), target);
         target.events.clear();
 
-        ejectionFilter.replace(EjectionRules.of(List.of(new EjectionRule(ORDER, "i2", "test"))));
+        ejectionFilter.replace(EjectionRules.of(List.of(EjectionRule.instance(ORDER, "i2", "test"))));
 
         // NEW 已摘除：无事件
         filteredManager.onChanges(CLUSTER, List.of(batch(change(instance("i2", "a"), ChangeType.NEW))), key -> null);
@@ -248,7 +248,7 @@ class SubscriptionManagerTest {
         assertThat(target.events).containsExactly("default/order-service:[i2=UPDATE]");
         target.events.clear();
 
-        ejectionFilter.replace(EjectionRules.of(List.of(new EjectionRule(ORDER, "i2", "test"))));
+        ejectionFilter.replace(EjectionRules.of(List.of(EjectionRule.instance(ORDER, "i2", "test"))));
         // UPDATE 已摘除实例：previous/new 同为摘除态（同一实例、同一规则快照），无视图效果
         filteredManager.onChanges(
                 CLUSTER,
