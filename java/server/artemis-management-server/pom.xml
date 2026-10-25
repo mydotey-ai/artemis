@@ -78,6 +78,41 @@
       <groupId>io.grpc</groupId>
       <artifactId>grpc-netty</artifactId>
     </dependency>
+    <!-- DB 接入（v0.4 phase-1，可选装配）：未配置 url 零装配（内存态）、配置后启用。
+         DB 组为正常依赖（optional 会被 boot repackage 排除出 exec jar，部署即崩）；
+         组合 classpath 防护由各服务主类 excludeName 显式声明装配边界 -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-jdbc</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-flyway</artifactId>
+    </dependency>
+    <!-- migration（双方言产品承诺，脚本按 vendor 目录各自维护） -->
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-mysql</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-database-postgresql</artifactId>
+    </dependency>
+    <!-- 双方言驱动均打包（runtime），按 url 自动选择 -->
+    <dependency>
+      <groupId>com.mysql</groupId>
+      <artifactId>mysql-connector-j</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>runtime</scope>
+    </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
@@ -88,6 +123,22 @@
       <groupId>org.mydotey.ai.artemis</groupId>
       <artifactId>artemis-registry-server</artifactId>
       <version>${revision}</version>
+      <scope>test</scope>
+    </dependency>
+    <!-- IT：双方言真实 DB（Testcontainers 2.0，无 Docker 环境整类跳过；版本随 SB BOM） -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-mysql</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-postgresql</artifactId>
       <scope>test</scope>
     </dependency>
   </dependencies>

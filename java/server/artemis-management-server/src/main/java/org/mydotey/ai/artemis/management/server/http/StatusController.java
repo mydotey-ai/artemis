@@ -2,6 +2,7 @@ package org.mydotey.ai.artemis.management.server.http;
 
 import java.util.List;
 import org.mydotey.ai.artemis.management.application.ManagementService;
+import org.mydotey.ai.artemis.management.application.PersistenceInfo;
 import org.mydotey.ai.artemis.management.domain.ConfigProperty;
 import org.mydotey.ai.artemis.management.domain.LeaseStatus;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
@@ -11,16 +12,18 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 接入层：registry 只读状态排障面（leases/config），数据透传 registry 查询结果。
+ * 接入层：registry 只读状态排障面（leases/config）+ 持久化运行形态，数据透传 registry 查询结果。
  */
 @RestController
 @RequestMapping("/admin/v1/status")
 public final class StatusController {
 
     private final ManagementService managementService;
+    private final PersistenceInfo persistenceInfo;
 
-    public StatusController(ManagementService service) {
+    public StatusController(ManagementService service, PersistenceInfo persistenceInfo) {
         this.managementService = service;
+        this.persistenceInfo = persistenceInfo;
     }
 
     @GetMapping("/leases")
@@ -41,6 +44,11 @@ public final class StatusController {
     @GetMapping("/config")
     public ConfigStatusResponse config() {
         return new ConfigStatusResponse(managementService.configStatus());
+    }
+
+    @GetMapping("/persistence")
+    public PersistenceInfo persistence() {
+        return persistenceInfo;
     }
 
     public record ConfigStatusResponse(List<ConfigProperty> properties) {}

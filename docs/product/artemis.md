@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.24    更新时间: 2026-10-24
+版本: 1.25    更新时间: 2026-10-25
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -56,7 +56,7 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 
 ## 4. 交付状态
 
-**v0.2（registry 集群）已交付**（2026-10-23 版本收尾，验收对照见 `docs/milestones/v0.2/plan.md`）；v0.3（discovery）进行中，phase-1–9 已交付（版本验收收尾中）；进度以 `docs/milestones/dev-state.md` 为准。
+**v0.2（registry 集群）已交付**（2026-10-23 版本收尾，验收对照见 `docs/milestones/v0.2/plan.md`）；**v0.3（discovery）已交付**（2026-10-24 版本收尾，验收对照见 `docs/milestones/v0.3/plan.md`）；v0.4（治理面 I）进行中；进度以 `docs/milestones/dev-state.md` 为准。
 
 **phase-1（脚手架 + proto 契约骨架）已交付**：`java/` 十模块 Maven reactor 骨架（parent + 各 core/server/client/starter）与 `proto/` 六组契约骨架（v0.1 定稿 `common.v1` + `registry.v1`，其余四组占位）；`mvn -f java/pom.xml verify` 全绿，enforcer 模块边界断言（core 禁 Spring、client 禁服务端模块）生效。
 
@@ -246,10 +246,19 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **all-in-one 单进程**（新增 `artemis-dist` 模块）：`artemis-dist-<version>-exec.jar` 单包起 registry + discovery——同 JVM 两个独立 Spring 上下文、端口全独立（registry 9090/8080/9091/9093、discovery 9095/8090/9096）、彼此走标准网络协议不进程内直连（ADR-001）；上游固定同进程 registry、多集群聚合不在该形态提供；组合端口经 `artemis.dist.*`（SCF：系统属性 > 环境变量 > 工作目录 `artemis.properties`，非法 fail-fast）；启动失败回滚不留半启进程、SIGTERM 按 discovery → registry 优雅关停。单服务入口与打包不变。详见 [all-in-one.md](../api/all-in-one.md)。
 - **工程形态**：starter 17 单测（双侧条件/让位/接管/共存/关闭语义）；dist 3 服务级 IT（双端口起停、registry 注册 → discovery 网络可见、幂等关停）；单包冒烟（7 端口监听 + 双 actuator 200 + SIGTERM 11s 优雅退出）；全量 `dev-test.sh all` 绿。
 
+**v0.4 phase-1（management DB 接入基座）已交付**：
+
+- **DB 可选装配（双轨）**：DB 是 management 的可选依赖——未配置 `spring.datasource.url` 时保持内存态运行（零 DB 装配，registry/discovery 完全不感知）；配置后 HikariCP 连接池 + Flyway migration 启动期执行。**MySQL 8.x / PostgreSQL 16+ 双方言**为产品承诺：脚本按 vendor 目录（`db/migration/{mysql,postgresql}`）各自维护，当前 V1 空基线、业务表自 V2 起随各 phase 追加；双方言驱动均随包分发，按 url 自动选择。
+- **配置**：`spring.datasource.*`（url/username/password）、`spring.datasource.hikari.*`（连接池）、`spring.flyway.*`（migration）均为 Spring Boot 标准配置键；url 配置为空串时启动显式失败（不静默退化为内存态）。
+- **状态 API**：`GET /admin/v1/status/persistence` 返回运行形态 `{"mode":"MEMORY|DATABASE","databaseProduct":"MySQL|PostgreSQL","schemaVersion":"1"}`（受 Basic 认证保护；`spring.flyway.enabled=false` 时 `schemaVersion` 为 null）。见 [admin-api.md](../api/admin-api.md)。
+- **运行时语义（过渡期）**：DB 态下业务（摘除等）仍为内存实现，持久化随 phase-2（账户）起逐表接管；registry/discovery 主类显式排除数据源自动装配（组合部署装配边界，同 JVM 组合形态不受 DB 依赖混入影响）。
+- **工程形态**：双方言 IT（Testcontainers 2.0 真实容器起停 + migration 断言，无 Docker 环境自动跳过）+ 内存态装配单测；ORM（MyBatis-Plus，技术选型 #13）决断推迟首个业务表 phase（phase-2）。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.25 | 2026-10-25 | v0.4 phase-1 交付：management DB 可选装配（MySQL/PG 双方言 + Flyway + 双轨运行）、`GET /admin/v1/status/persistence`；交付状态首段 v0.3 收尾修正 |
 | 1.24 | 2026-10-24 | v0.3 phase-9 交付：starter 双用途条件装配（缺地址不 fail-fast、配置桥同名让位/按名绑定）、`artemis-dist` all-in-one 单包（同 JVM 双上下文、`artemis.dist.*`）；新建 api/all-in-one.md |
 | 1.23 | 2026-10-24 | v0.3 phase-8 交付：发现侧 Java 8 SDK（订阅/缓存/快照/兜底/地址容灾）、discovery 静态节点目录（ADR-020）、`RegistryClient` 更名与 `clientId`；新建 api/sdk-java-discovery.md、api/discovery-nodes-api.md |
 | 1.22 | 2026-10-24 | v0.3 phase-7 交付：discovery 只读发现管理面（订阅关系/服务视图/上游与规则源状态）；新建 api/discovery-admin-api.md |

@@ -18,8 +18,8 @@
 | 项 | 值 |
 |---|---|
 | phase | — |
-| 步骤 | worktree 开工 |
-| 分支 / worktree | — |
+| 步骤 | — |
+| 分支 / worktree | v0.4-phase1-db-foundation @ .claude/worktrees/v0.4-phase1-db-foundation |
 
 > v0.1/v0.2/v0.3 已收尾（验收对照见各 `plan.md`）。v0.4 于 2026-10-24 启动（治理面 I）。
 
@@ -31,7 +31,7 @@
 
 | phase | 状态 |
 |---|---|
-| phase-1-db-foundation | planned |
+| phase-1-db-foundation | done |
 | phase-2-account-takeover | planned |
 | phase-3-ejection-persistence | planned |
 | phase-4-logical-instance | planned |

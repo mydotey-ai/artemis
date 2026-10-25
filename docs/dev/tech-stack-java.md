@@ -1,6 +1,6 @@
 # Java 技术选型
 
-版本: 1.24    更新时间: 2026-10-24
+版本: 1.26    更新时间: 2026-10-25
 
 > 本文是新一代 Artemis Java 实现的技术选型基线：语言与运行时、工程结构、全量技术组件清单与依赖冲突策略。设计依据为[架构设计](../arch/artemis-next-architecture.md)（§3 技术栈策略、§7 关键决策 D8），开发规范见[Java 开发规范](coding-guidelines-java.md)。Rust 实现（v1.x 混合集群）直接消费仓库顶层 `proto/` 契约目录（见[proto 契约规范](proto-contract.md)），不受本文 Java 组件约束。
 
@@ -111,7 +111,7 @@ Java 各消费模块从仓库顶层 `proto/`（组织与治理见[proto 契约�
 | 18 | 可观测 | Trace | OpenTelemetry（SB 4.1 官方集成） | 全服务端 | v0.1 传播 + 基础 span |
 | 19 | 可观测 | 日志 | SLF4J + Logback + logstash-logback-encoder **9.0** | 服务端；client 仅依赖 SLF4J API | 结构化 JSON 第一天（logstash 默认字段 schema：`@timestamp/logger_name`）；SDK 不打日志实现进宿主（避免 multiple SLF4J providers 冲突） |
 | 20 | 测试 | 单元测试 | JUnit 5 + Mockito + AssertJ | java/ reactor | — |
-| 21 | 测试 | 集成测试 | Testcontainers | DB（期 3）、K8s 验收（v1.0） | 集群语义测试用进程内多实例（随机端口），不起容器 |
+| 21 | 测试 | 集成测试 | Testcontainers **2.0.x**（SB BOM 管版本；模块名带 `testcontainers-` 前缀，容器类移包 `org.testcontainers.{mysql,postgresql}`、去自类型泛型） | DB（期 3）、K8s 验收（v1.0） | 集群语义测试用进程内多实例（随机端口），不起容器；无 Docker 环境 IT 整类跳过（`@Testcontainers(disabledWithoutDocker = true)`，v0.4 phase-1 起） |
 | 22 | 测试 | 压测工具 | 待定（v1.0 容量验证时选型） | — | v0.x 不引入 |
 | 23 | 质量 | 格式化 | Spotless + Palantir java-format | java/ reactor | CI 强制 `spotless:check` |
 | 24 | 质量 | 静态检查 | Checkstyle | java/ reactor | 命名/结构规则 |
@@ -184,12 +184,14 @@ shaded 版将 netty 重打包进 `io.grpc.netty.shaded.*` 命名空间，与宿�
 | 压测工具（10 万实例容量验证） | v1.0 |
 | 容器镜像仓库（GHCR vs Docker Hub） | v1.0 |
 | GC 最终线（G1 vs ZGC） | v1.0 压测后 |
-| MyBatis-Plus 对 SB 4.1 适配版本确认（无适配则评估原生 MyBatis + 通用 mapper） | 期 3（v0.4）实施时 |
+| MyBatis-Plus 对 SB 4.1 适配版本确认（无适配则评估原生 MyBatis + 通用 mapper） | v0.4 phase-2（首个业务表，phase-1 设计定案：基座期无表不引入 ORM） |
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.26 | 2026-10-25 | v0.4 phase-1 交付：#21 Testcontainers 补 2.0 版本线与模块/包名变化、无 Docker 跳过形态 |
+| 1.25 | 2026-10-24 | v0.4 phase-1 设计定案：§6 待定项 #13 决断时机细化至 phase-2（首个业务表）；#21 Testcontainers 首次启用（DB 双方言 IT） |
 | 1.22 | 2026-10-20 | v0.2 phase-1：§4.7 补双监听装配纪律（factory 不作 bean、全量 BindableService 发现需 service filter）、测试端口解析；`@LocalGrpcServerPort` 在双 server 下不适用 |
 | 1.24 | 2026-10-24 | v0.3 phase-9：§2.1 模块树落位 `artemis-dist`（all-in-one 组合入口，同 JVM 双 Spring 上下文；依赖与编译基线不变） |
 | 1.23 | 2026-10-22 | v0.2 phase-5 设计定案：client 生成矩阵扩 replication.v1（SDK 前置寻址消费 GetNodeStatusResponse 消息类，HTTP 端点响应解析） |

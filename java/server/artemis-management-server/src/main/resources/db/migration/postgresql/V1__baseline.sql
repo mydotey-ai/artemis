@@ -1,0 +1,1 @@
+-- v0.4 phase-1 基线：management schema 初始化（空基线，业务表自 V2 起逐 phase 追加）

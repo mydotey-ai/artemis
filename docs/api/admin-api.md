@@ -1,6 +1,6 @@
 # management-service Admin 与状态 API
 
-版本: 1.5    更新时间: 2026-10-24
+版本: 1.6    更新时间: 2026-10-25
 
 > 本文定义 management-service 对外 HTTP API（v0.1 内存态管理面）：实例管理 Admin API 与 registry 状态排障面。有效视图 = registry 只读事实 + management 摘除记录（ADR-016）；registry 不感知摘除。内部 gRPC 查询契约见 [registry-query-api.md](registry-query-api.md)。
 
@@ -193,6 +193,23 @@ Base path：`/admin/v1`
 - 单次最多 10000 条；超限 `truncated=true`。`node` 为节点级窗口统计，用于区分节点级故障与单服务异常。
 - `/admin/v1/status/leases` 的 `protection` 字段保持节点级语义不变。
 
+### 5.4 持久化状态 `GET /admin/v1/status/persistence`
+
+management 自身持久化运行形态（v0.4 phase-1 起，不透传 registry）。
+
+```json
+{
+  "mode": "DATABASE",
+  "databaseProduct": "PostgreSQL",
+  "schemaVersion": "1"
+}
+```
+
+- `mode`：`MEMORY`（未配置 `spring.datasource.url`，内存态运行）或 `DATABASE`（已配置，HikariCP + Flyway 启用）。
+- `databaseProduct`：JDBC 元数据产品名（如 `MySQL` / `PostgreSQL`）；MEMORY 态为 `null`。
+- `schemaVersion`：最新已应用 Flyway migration 版本（字符串原样，如 `"1"`）；`spring.flyway.enabled=false` 或 history 不可读时为 `null`。
+- 配置了 DB 时业务仍为内存实现（v0.4 过渡期语义，持久化逐表接管中）。
+
 ## 6. 错误语义
 
 错误体：
@@ -224,6 +241,7 @@ management 启动不依赖 registry 可用；registry 故障时管理面仍可�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.6 | 2026-10-25 | v0.4 phase-1：新增 `GET /admin/v1/status/persistence`（DB 双轨运行形态与 schema 版本） |
 | 1.5 | 2026-10-24 | v0.3 phase-6：摘除/恢复语义补规则流下发说明（discovery 侧过滤生效） |
 | 1.4 | 2026-10-21 | v0.2 phase-4：新增 `GET /admin/v1/status/protection`（按服务保护态与节点级统计） |
 | 1.3 | 2026-10-20 | v0.2：上游单一 endpoint（无默认值）；凭证与 timeout 动态化 |
