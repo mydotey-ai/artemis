@@ -1,5 +1,14 @@
 {
   "permissions": {
+    "allow": [
+      "ToolSearch",
+      "Monitor",
+      "Skill",
+      "LSP",
+      "NotebookEdit",
+      "mcp__hapi",
+      "mcp__plugin_playwright_playwright"
+    ],
     "deny": [
       "Edit(//home/koqizhao/Projects/mydotey/artemis/**)"
     ]
