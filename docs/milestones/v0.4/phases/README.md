@@ -8,3 +8,4 @@
 | phase-4-logical-instance | [phase-4-logical-instance.md](phase-4-logical-instance.md) | [phase-4-logical-instance-test.md](phase-4-logical-instance-test.md) |
 | phase-5-rule-ack-loop | [phase-5-rule-ack-loop.md](phase-5-rule-ack-loop.md) | [phase-5-rule-ack-loop-test.md](phase-5-rule-ack-loop-test.md) |
 | phase-6-console-readonly | [phase-6-console-readonly.md](phase-6-console-readonly.md) | [phase-6-console-readonly-test.md](phase-6-console-readonly-test.md) |
+| phase-7-all-in-one-full | [phase-7-all-in-one-full.md](phase-7-all-in-one-full.md) | [phase-7-all-in-one-full-test.md](phase-7-all-in-one-full-test.md) |

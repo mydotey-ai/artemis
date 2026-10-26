@@ -11,7 +11,7 @@
   </parent>
 
   <artifactId>artemis-dist</artifactId>
-  <description>all-in-one 单进程组合入口：同 JVM 起 registry + discovery 两个 Spring 上下文、各自端口，网络互访不进程内直连（v0.3 phase-9）</description>
+  <description>all-in-one 单进程组合入口：同 JVM 起 registry + management + discovery 三个 Spring 上下文、各自端口，网络互访不进程内直连（v0.3 phase-9，v0.4 phase-7 扩三服务完整形态）</description>
 
   <dependencyManagement>
     <dependencies>
@@ -39,6 +39,24 @@
       <groupId>org.mydotey.ai.artemis</groupId>
       <artifactId>artemis-discovery-server</artifactId>
       <version>${revision}</version>
+    </dependency>
+    <!-- 三服务完整形态（v0.4 phase-7）：management 上下文并入组合；registry/discovery 入口已排除
+         DataSourceAutoConfiguration，DB 自动装配只在本上下文条件生效 -->
+    <dependency>
+      <groupId>org.mydotey.ai.artemis</groupId>
+      <artifactId>artemis-management-server</artifactId>
+      <version>${revision}</version>
+    </dependency>
+    <!-- IT：DB 态跨重启端到端（Testcontainers PG，无 Docker 环境整类跳过；版本随 SB BOM） -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-postgresql</artifactId>
+      <scope>test</scope>
     </dependency>
     <!-- 组合期端口键 artemis.dist.* 的 SCF source/manager 装配（复用 common 配置 source） -->
     <dependency>

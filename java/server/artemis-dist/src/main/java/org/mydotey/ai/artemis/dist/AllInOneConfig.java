@@ -32,7 +32,7 @@ public final class AllInOneConfig {
     private AllInOneConfig() {}
 
     /**
-     * 单次构建 SCF manager 一次性读出组合期输入（7 个端口 + 宿主已配置的 discovery 节点目录），
+     * 单次构建 SCF manager 一次性读出组合期输入（10 个端口 + 宿主已配置的 discovery 节点目录），
      * 避免逐键重复建 manager/source 链（ReloadablePropertiesFileConfigurationSource 每 manager
      * 一个 watcher 线程，重复创建即泄漏）。
      */
@@ -44,6 +44,12 @@ public final class AllInOneConfig {
                 .registryManagementPort(
                         port(properties, "registry.managementPort", AllInOneOptions.DEFAULT_REGISTRY_MANAGEMENT_PORT))
                 .registryPeerPort(port(properties, "registry.peerPort", AllInOneOptions.DEFAULT_REGISTRY_PEER_PORT))
+                .managementGrpcPort(
+                        port(properties, "management.grpcPort", AllInOneOptions.DEFAULT_MANAGEMENT_GRPC_PORT))
+                .managementHttpPort(
+                        port(properties, "management.httpPort", AllInOneOptions.DEFAULT_MANAGEMENT_HTTP_PORT))
+                .managementManagementPort(port(
+                        properties, "management.managementPort", AllInOneOptions.DEFAULT_MANAGEMENT_MANAGEMENT_PORT))
                 .discoveryGrpcPort(port(properties, "discovery.grpcPort", AllInOneOptions.DEFAULT_DISCOVERY_GRPC_PORT))
                 .discoveryHttpPort(port(properties, "discovery.httpPort", AllInOneOptions.DEFAULT_DISCOVERY_HTTP_PORT))
                 .discoveryManagementPort(

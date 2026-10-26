@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.30    更新时间: 2026-10-26
+版本: 1.31    更新时间: 2026-10-26
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -53,7 +53,7 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 | `artemis-management-core` / `-server` | 25 | 治理面内核 / Spring Boot 装配 |
 | `artemis-client` | 8 | 注册 + 发现统一 SDK（零 Spring） |
 | `spring-boot-starter-artemis-client` | 8 | client 的 Spring Boot 集成（双侧自动装配、生命周期托管、MeterRegistry 注入） |
-| `artemis-dist` | 25 | all-in-one 组合入口：同 JVM 起 registry + discovery 双上下文，产出单包可执行 jar |
+| `artemis-dist` | 25 | all-in-one 组合入口：同 JVM 起 registry + management + discovery 三上下文，产出单包可执行 jar |
 
 ## 4. 交付状态
 
@@ -297,10 +297,18 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **API 扩展（additive）**：`GET /admin/v1/services` 增 `keyword`（大小写不敏感 substring，命中 namespace/service 任一）/`offset`/`limit`（clamp 1..1000，缺省全量），响应增 `total`（过滤后总数）；`GET /admin/v1/services/{ns}/{svc}` 增 `offset`/`limit` 作用于实例视图（计数始终全量）——响应体 ∝ 页大小而非总量（10 万实例语义）。见 [admin-api.md](../api/admin-api.md)。
 - **工程形态**：过滤/切片/total 单测（含 5000 服务构造的分页上界）+ `ManagementConsoleIT`（同 JVM registry + management：页面可达与 401、搜索分页、实例分页端到端）；IT 基建抽取共用（`RegistryFixture` 顶层化、`ManagementHttpIT` 基类）。
 
+**v0.4 phase-7（三服务 all-in-one 完整形态）已交付**：
+
+- **组合结构**：`artemis-dist-<version>-exec.jar` 单包起三服务完整形态——同 JVM 三个独立 Spring 上下文（启动序 registry → management → discovery、关闭序反序、失败反序回滚），端口全独立（registry 9090/8080/9091/9093、management 9094/8081/9092、discovery 9095/8090/9096），彼此走标准网络协议不进程内直连（ADR-001）；v0.3 双服务 jar 被完整形态取代。
+- **治理链默认闭合**：discovery 固定订阅同进程 management（规则流 + 逻辑实例流）、management 固定查询同进程 registry 内部端口——组合期命令行注入，不可经工作目录覆盖；组合端口经 `artemis.dist.*`（+3 键，SCF 静态、非法 fail-fast）。
+- **DB 双轨保持**：未配置 `spring.datasource.url` 时 management 内存态（单机 eval 零 DB）；配置后（Spring 标准途径，仅 management 上下文消费）双方言持久化接管。
+- **v0.4 验收要点端到端**（all-in-one 形态）：三服务单进程起停、摘除规则流闭环 + 生效水位、逻辑实例 union（cluster 正交）、console 页面与分页 API、DB 态跨组合重启摘除重下发（Testcontainers PG）。见 [all-in-one.md](../api/all-in-one.md)。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.31 | 2026-10-26 | v0.4 phase-7 交付：三服务 all-in-one 完整形态（治理链默认闭合 + DB 双轨 + 组合键 +3）+ 四要点端到端；模块表 dist 行更新 |
 | 1.30 | 2026-10-26 | v0.4 phase-6 交付：console 只读版——内嵌原生单文件 SPA（根路径入口、与 Admin API 同认证）+ 服务列表 keyword 模糊/分页/total + 详情实例分页 |
 | 1.29 | 2026-10-26 | v0.4 phase-5 交付：规则下发闭环——版本化规则流（版本 = 翻转记录 sequence）+ discovery ack 上行 + 生效水位 API（`GET /admin/v1/status/rules`）+ discovery 本地应用版本对照；phase-6 节「无版本/ack」表述修正 |
 | 1.28 | 2026-10-25 | v0.4 phase-4 交付：逻辑实例（静态实例）——模型/CRUD/V4 双方言持久化 + 专属下发流 + discovery 保留 cluster `logical` 统一发现视图（union/摘除生效/fail-open） |

@@ -17,6 +17,9 @@ public class AllInOneOptions {
     public static final int DEFAULT_REGISTRY_HTTP_PORT = 8080;
     public static final int DEFAULT_REGISTRY_MANAGEMENT_PORT = 9091;
     public static final int DEFAULT_REGISTRY_PEER_PORT = 9093;
+    public static final int DEFAULT_MANAGEMENT_GRPC_PORT = 9094;
+    public static final int DEFAULT_MANAGEMENT_HTTP_PORT = 8081;
+    public static final int DEFAULT_MANAGEMENT_MANAGEMENT_PORT = 9092;
     public static final int DEFAULT_DISCOVERY_GRPC_PORT = 9095;
     public static final int DEFAULT_DISCOVERY_HTTP_PORT = 8090;
     public static final int DEFAULT_DISCOVERY_MANAGEMENT_PORT = 9096;
@@ -32,6 +35,15 @@ public class AllInOneOptions {
 
     @Builder.Default
     int registryPeerPort = DEFAULT_REGISTRY_PEER_PORT;
+
+    @Builder.Default
+    int managementGrpcPort = DEFAULT_MANAGEMENT_GRPC_PORT;
+
+    @Builder.Default
+    int managementHttpPort = DEFAULT_MANAGEMENT_HTTP_PORT;
+
+    @Builder.Default
+    int managementManagementPort = DEFAULT_MANAGEMENT_MANAGEMENT_PORT;
 
     @Builder.Default
     int discoveryGrpcPort = DEFAULT_DISCOVERY_GRPC_PORT;
