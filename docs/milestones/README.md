@@ -7,3 +7,4 @@
 | [v0.2/README.md](v0.2/README.md) | — | v0.2 registry 集群（目标与 phase 清单见 v0.2/plan.md） |
 | [v0.3/README.md](v0.3/README.md) | — | v0.3 discovery（目标与 phase 清单见 v0.3/plan.md） |
 | [v0.4/README.md](v0.4/README.md) | — | v0.4 治理面 I（目标与 phase 清单见 v0.4/plan.md） |
+| [v0.5/README.md](v0.5/README.md) | — | v0.5 治理面 II（目标与 phase 清单见 v0.5/plan.md） |

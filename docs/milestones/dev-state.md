@@ -10,6 +10,7 @@
 | v0.2 | done | |
 | v0.3 | done | |
 | v0.4 | done | |
+| v0.5 | planned | 当前版本 |
 
 状态枚举：planned | in-progress | acceptance | done（planned = 启动产物已写、基线未提交）。
 
@@ -21,7 +22,7 @@
 | 步骤 | — |
 | 分支 / worktree | — |
 
-> v0.1/v0.2/v0.3/v0.4 已收尾（验收对照见各 `plan.md`）。v0.4（治理面 I）于 2026-10-24 启动、2026-10-26 收尾。
+> v0.1–v0.4 已收尾（验收对照见各 `plan.md`）。v0.5（治理面 II）于 2026-10-26 启动（plan 已写，基线待提交）。
 
 ## 当前 phase 步骤进度（版本 done 后清空本节）
 
