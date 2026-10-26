@@ -1,6 +1,6 @@
 # v0.4 版本规划
 
-版本: 1.0    更新时间: 2026-10-24
+版本: 1.1    更新时间: 2026-10-26
 
 ## 目标
 
@@ -42,9 +42,14 @@ phase-7 说明：`artemis-dist` 扩为三服务同 JVM 组合（v0.3 已落 regi
 
 | roadmap 验收要点 | 对应测试 | 结果 |
 |---|---|---|
+| 摘除跨重启恢复（management 重下发） | `EjectionPersistenceIT.should_restore_ejections_across_management_restart`（phase-3，双方言）；`AllInOnePersistenceIT.should_restore_ejections_across_all_in_one_restart_with_db`（phase-7，all-in-one 形态：DB 摘除重下发 → discovery 过滤恢复 + 水位重建，PG） | 通过 |
+| 规则生效水位可见 | `EjectionRuleStreamIT.should_carry_version_and_track_watermark_when_acked`（phase-5）；`DiscoveryRuleAckLoopIT`（phase-5，三服务端到端：水位可见/重启重 ack/双节点生效计数）；`AllInOneIT.should_filter_discovered_instance_after_ejection_and_expose_watermark`（phase-7，all-in-one 形态） | 通过 |
+| 逻辑实例可发现 | `DiscoveryLogicalInstanceIT`（phase-4，查询/订阅/union/摘除生效/fail-open）；`LogicalInstanceStreamIT`（phase-4）；`AllInOneIT.should_discover_logical_instance_union`（phase-7，all-in-one 形态，cluster 正交断言） | 通过 |
+| console 可用 | `ManagementConsoleIT`（phase-6，页面可达/401、搜索分页、实例分页）；`AllInOneIT.should_serve_console_page_and_paged_services`（phase-7，all-in-one 形态） | 通过 |
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-26 | 版本收尾：验收对照表填齐（四要点全过，7/7 phase done） |
 | 1.0 | 2026-10-24 | 版本启动，初始 phase 拆分（7 phase，滚动细化） |
