@@ -1,9 +1,13 @@
 package org.mydotey.ai.artemis.management.server.http;
 
 import com.google.gson.Gson;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import org.mydotey.ai.artemis.common.governance.EjectionScope;
 import org.mydotey.ai.artemis.management.application.EjectionView;
 import org.mydotey.ai.artemis.management.application.ManagementService;
@@ -15,6 +19,9 @@ import org.mydotey.ai.artemis.management.domain.EjectionTarget;
 import org.mydotey.ai.artemis.management.domain.Instance;
 import org.mydotey.ai.artemis.management.domain.InstanceStatus;
 import org.mydotey.ai.artemis.management.domain.LogicalInstance;
+import org.mydotey.ai.artemis.management.domain.RouteRule;
+import org.mydotey.ai.artemis.management.domain.RouteRuleStatus;
+import org.mydotey.ai.artemis.management.domain.RouteRuleTarget;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -48,6 +55,8 @@ public final class AdminController {
     private static final int MAX_VALUE_LENGTH = 512;
     private static final int MAX_HOST_LENGTH = 255;
     private static final int MAX_METADATA_JSON_LENGTH = 16 * 1024;
+    // targets 序列化字节上界（MySQL TEXT 列 65535 字节防护，留余量）
+    private static final int MAX_TARGETS_JSON_BYTES = 60 * 1024;
     private static final int DEFAULT_LIST_LIMIT = 100;
     private static final int MAX_LIST_LIMIT = 1000;
     private static final Gson METADATA_JSON = new Gson();
@@ -159,6 +168,123 @@ public final class AdminController {
                 managementService.listLogicalInstances(blankToNull(namespace), blankToNull(service), bounded).stream()
                         .map(AdminController::toResponse)
                         .toList());
+    }
+
+    // ---- 路由规则（v0.5 phase-1，资源导向 CRUD；发布/release 归 phase-2）----
+
+    @PostMapping("/route-rules")
+    @ResponseStatus(HttpStatus.CREATED)
+    public RouteRuleResponse createRouteRule(
+            @RequestBody(required = false) RouteRuleRequest request,
+            @RequestAttribute(value = HttpBasicAuthFilter.AUTH_USER_ATTRIBUTE, required = false) String operator) {
+        return toResponse(managementService.createRouteRule(toRouteRule(request), operator(operator)));
+    }
+
+    @GetMapping("/route-rules")
+    public ListRouteRulesResponse listRouteRules(
+            @RequestParam(name = "namespace", required = false) String namespace,
+            @RequestParam(name = "service", required = false) String service,
+            @RequestParam(name = "limit", defaultValue = "" + DEFAULT_LIST_LIMIT) int limit) {
+        int bounded = Math.min(Math.max(1, limit), MAX_LIST_LIMIT);
+        return new ListRouteRulesResponse(
+                managementService.listRouteRules(blankToNull(namespace), blankToNull(service), bounded).stream()
+                        .map(AdminController::toResponse)
+                        .toList());
+    }
+
+    @GetMapping("/route-rules/{namespace}/{service}/{name}")
+    public RouteRuleResponse getRouteRule(
+            @PathVariable("namespace") String namespace,
+            @PathVariable("service") String service,
+            @PathVariable("name") String name) {
+        return toResponse(managementService.getRouteRule(key(namespace, service), name));
+    }
+
+    @PutMapping("/route-rules/{namespace}/{service}/{name}")
+    public RouteRuleResponse updateRouteRule(
+            @PathVariable("namespace") String namespace,
+            @PathVariable("service") String service,
+            @PathVariable("name") String name,
+            @RequestBody(required = false) RouteRuleRequest request,
+            @RequestAttribute(value = HttpBasicAuthFilter.AUTH_USER_ATTRIBUTE, required = false) String operator) {
+        RouteRule rule = toRouteRule(request);
+        // 路径定位键不可改：body 与路径不一致直接拒绝（防静默改键）。
+        // name 用 Objects.equals：body 缺 name 时为 null，equals 方向反了会 NPE 成 500
+        if (!rule.service().equals(key(namespace, service)) || !Objects.equals(rule.name(), name)) {
+            throw new IllegalArgumentException("namespace/service/name must match the request path");
+        }
+        return toResponse(managementService.updateRouteRule(rule, operator(operator)));
+    }
+
+    @DeleteMapping("/route-rules/{namespace}/{service}/{name}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteRouteRule(
+            @PathVariable("namespace") String namespace,
+            @PathVariable("service") String service,
+            @PathVariable("name") String name,
+            @RequestAttribute(value = HttpBasicAuthFilter.AUTH_USER_ATTRIBUTE, required = false) String operator) {
+        managementService.deleteRouteRule(key(namespace, service), name, operator(operator));
+    }
+
+    /** 请求体 → 领域规则（域约束校验在用例层 RouteRules.validate，此处只组装与解析缺省值）。 */
+    private static RouteRule toRouteRule(RouteRuleRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("request body required");
+        }
+        if (request.targets() == null || request.targets().isEmpty()) {
+            throw new IllegalArgumentException("targets required");
+        }
+        List<RouteRuleTarget> targets = new ArrayList<>(request.targets().size());
+        for (RouteRuleTargetRequest target : request.targets()) {
+            if (target == null) {
+                throw new IllegalArgumentException("target required");
+            }
+            Map<String, String> selector = target.selector() == null ? Map.of() : target.selector(); // 空 map = 兜底目标
+            targets.add(new RouteRuleTarget(
+                    selector,
+                    target.weight() == null ? 0 : target.weight(),
+                    target.unreleasedWeight() == null ? 0 : target.unreleasedWeight()));
+        }
+        // 按 UTF-8 字节数设限：MySQL TEXT 列 65535 字节上限，字符计数会放行 4 字节字符溢出（503 而非 400）
+        if (METADATA_JSON.toJson(targets).getBytes(StandardCharsets.UTF_8).length > MAX_TARGETS_JSON_BYTES) {
+            throw new IllegalArgumentException(
+                    "targets must serialize to at most " + MAX_TARGETS_JSON_BYTES + " bytes");
+        }
+        return new RouteRule(
+                key(request.namespace(), request.service()),
+                request.name(),
+                parseRouteRuleStatus(request.status()),
+                List.copyOf(targets),
+                null,
+                null,
+                null); // operator/时间戳由应用层填写
+    }
+
+    /** status 缺省 ACTIVE；仅接受 ACTIVE/INACTIVE。 */
+    private static RouteRuleStatus parseRouteRuleStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return RouteRuleStatus.ACTIVE;
+        }
+        return switch (status.trim().toUpperCase(Locale.ROOT)) {
+            case "ACTIVE" -> RouteRuleStatus.ACTIVE;
+            case "INACTIVE" -> RouteRuleStatus.INACTIVE;
+            default -> throw new IllegalArgumentException("status must be ACTIVE or INACTIVE");
+        };
+    }
+
+    private static RouteRuleResponse toResponse(RouteRule rule) {
+        return new RouteRuleResponse(
+                rule.service().namespace(),
+                rule.service().service(),
+                rule.name(),
+                rule.status().name(),
+                rule.targets().stream()
+                        .map(target -> new RouteRuleTargetResponse(
+                                target.selector(), target.weight(), target.unreleasedWeight()))
+                        .toList(),
+                rule.operator(),
+                rule.createdAt(),
+                rule.updatedAt());
     }
 
     private static LogicalInstance toLogicalInstance(LogicalInstanceRequest request) {
@@ -316,4 +442,24 @@ public final class AdminController {
             Map<String, String> metadata) {}
 
     public record ListLogicalInstancesResponse(List<LogicalInstanceResponse> instances) {}
+
+    /** 路由规则创建/替换请求体（status 缺省 ACTIVE；selector 空 map = 兜底目标）。 */
+    public record RouteRuleRequest(
+            String namespace, String service, String name, String status, List<RouteRuleTargetRequest> targets) {}
+
+    public record RouteRuleTargetRequest(Map<String, String> selector, Integer weight, Integer unreleasedWeight) {}
+
+    public record RouteRuleResponse(
+            String namespace,
+            String service,
+            String name,
+            String status,
+            List<RouteRuleTargetResponse> targets,
+            String operator,
+            Instant createdAt,
+            Instant updatedAt) {}
+
+    public record RouteRuleTargetResponse(Map<String, String> selector, int weight, int unreleasedWeight) {}
+
+    public record ListRouteRulesResponse(List<RouteRuleResponse> rules) {}
 }

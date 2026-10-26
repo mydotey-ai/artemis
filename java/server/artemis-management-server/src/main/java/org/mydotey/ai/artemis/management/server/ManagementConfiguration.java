@@ -13,10 +13,12 @@ import org.mydotey.ai.artemis.management.domain.EjectionAckRegistry;
 import org.mydotey.ai.artemis.management.domain.EjectionStore;
 import org.mydotey.ai.artemis.management.domain.LogicalInstanceStore;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryPort;
+import org.mydotey.ai.artemis.management.domain.RouteRuleStore;
 import org.mydotey.ai.artemis.management.infrastructure.EjectionRuleDispatcher;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryAuditLogStore;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryEjectionStore;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryLogicalInstanceStore;
+import org.mydotey.ai.artemis.management.infrastructure.InMemoryRouteRuleStore;
 import org.mydotey.ai.artemis.management.infrastructure.LogicalInstanceDispatcher;
 import org.mydotey.ai.artemis.management.server.auth.ConfigAccountAuthService;
 import org.mydotey.ai.artemis.management.server.auth.ManagementAuthConfig;
@@ -32,6 +34,8 @@ import org.mydotey.ai.artemis.management.server.repository.EjectionRecordMapper;
 import org.mydotey.ai.artemis.management.server.repository.EjectionStoreImpl;
 import org.mydotey.ai.artemis.management.server.repository.LogicalInstanceMapper;
 import org.mydotey.ai.artemis.management.server.repository.LogicalInstanceStoreImpl;
+import org.mydotey.ai.artemis.management.server.repository.RouteRuleMapper;
+import org.mydotey.ai.artemis.management.server.repository.RouteRuleStoreImpl;
 import org.mydotey.scf.ConfigurationManager;
 import org.mydotey.scf.facade.StringProperties;
 import org.springframework.beans.factory.ObjectProvider;
@@ -82,6 +86,13 @@ public class ManagementConfiguration {
     LogicalInstanceStore logicalInstanceStore(ObjectProvider<LogicalInstanceMapper> mapperProvider, Clock clock) {
         LogicalInstanceMapper mapper = mapperProvider.getIfAvailable();
         return mapper == null ? new InMemoryLogicalInstanceStore() : new LogicalInstanceStoreImpl(mapper, clock);
+    }
+
+    /** 路由规则存储双轨（同判据；时间戳由应用层填写，两态一致）。 */
+    @Bean
+    RouteRuleStore routeRuleStore(ObjectProvider<RouteRuleMapper> mapperProvider) {
+        RouteRuleMapper mapper = mapperProvider.getIfAvailable();
+        return mapper == null ? new InMemoryRouteRuleStore() : new RouteRuleStoreImpl(mapper);
     }
 
     /** 审计存储双轨（同判据；内存态重启丢失为既有语义）。 */
@@ -166,6 +177,7 @@ public class ManagementConfiguration {
             EjectionAckRegistry ejectionAckRegistry,
             LogicalInstanceStore logicalInstanceStore,
             LogicalInstanceDispatcher logicalInstanceDispatcher,
+            RouteRuleStore routeRuleStore,
             Clock clock) {
         return new ManagementServiceImpl(
                 registryQueryPort,
@@ -175,6 +187,7 @@ public class ManagementConfiguration {
                 ejectionAckRegistry,
                 logicalInstanceStore,
                 logicalInstanceDispatcher,
+                routeRuleStore,
                 clock);
     }
 

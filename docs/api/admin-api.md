@@ -1,6 +1,6 @@
 # management-service Admin 与状态 API
 
-版本: 1.11    更新时间: 2026-10-26
+版本: 1.12    更新时间: 2026-10-26
 
 > 本文定义 management-service 对外 HTTP API（管理面：实例管理 Admin API、账户 API 与 registry 状态排障面）。有效视图 = registry 只读事实 + management 摘除记录（ADR-016）；registry 不感知摘除。内部 gRPC 查询契约见 [registry-query-api.md](registry-query-api.md)。
 
@@ -192,6 +192,36 @@ Base path：`/admin/v1`
 
 过滤可选（空白 = 不过滤），按 `(namespace, service, instanceId)` 升序；`limit` 默认 100、上界 1000。
 
+### 4.10 路由规则 CRUD `POST/GET/PUT/DELETE /admin/v1/route-rules`（v0.5 phase-1）
+
+资源导向 CRUD（分组路由 / canary / 两段发布的规则载体，架构 §5.2；分组以实例 metadata 表达，ADR-13）。请求体（创建；PUT 同构，`namespace`/`service`/`name` 必须与路径一致）：
+
+```json
+{
+  "namespace": "default",
+  "service": "order-service",
+  "name": "beta-release",
+  "status": "ACTIVE",
+  "targets": [
+    {"selector": {"group": "beta"}, "weight": 20, "unreleasedWeight": 80},
+    {"selector": {}, "weight": 0, "unreleasedWeight": 20}
+  ]
+}
+```
+
+| 端点 | 语义 |
+|---|---|
+| `POST /admin/v1/route-rules` | 创建（insert-if-absent），201 返回完整视图；同名已存在 → 409 |
+| `GET /admin/v1/route-rules?namespace=&service=&limit=` | 列表，过滤可选，`(namespace, service, name)` 升序，`limit` 默认 100 上界 1000 |
+| `GET /admin/v1/route-rules/{namespace}/{service}/{name}` | 单条查询；缺失 → 404 |
+| `PUT /admin/v1/route-rules/{namespace}/{service}/{name}` | 全量替换（createdAt 继承、updatedAt 刷新）；缺失 → 404；body 键与路径不一致 → 400 |
+| `DELETE /admin/v1/route-rules/{namespace}/{service}/{name}` | 删除，幂等 204（缺失 no-op，不审计） |
+
+- **模型**：目标 = metadata **等值选择器**（多键 AND；空 `selector` = 兜底目标，承接默认组语义）+ 双权重列——`weight` 生效 / `unreleasedWeight` 编辑中（两段式发布，release 拷贝动作 v0.5 phase-2）；`status` ACTIVE（缺省）/INACTIVE（discovery 不应用，执行语义 phase-3）。
+- **域约束（400）**：`name` ≤255 且 `[A-Za-z0-9._-]+`（URL 路径段安全）；`namespace`/`service` ≤255；`targets` 1–10 条；selector 键 1–8 个、键 ≤128、值非空 ≤512；权重 0–10000；targets 序列化 UTF-8 ≤ 60KB。目标间 selector 不要求互斥（消费侧语义）。
+- 每条变更全量进审计表（operation = `CREATE_ROUTE_RULE` / `UPDATE_ROUTE_RULE` / `DELETE_ROUTE_RULE`，target = `route-rule:{ns}/{svc}/{name}`）。
+- **本 phase 只存储与透出**：规则流下发（经 v0.4 版本化规则流通道）与 discovery 过滤器消费归 phase-2/3——创建规则不影响发现结果。
+
 ## 5. 账户 API（v0.4，ADR-021）
 
 单管理员账户管理。仅 DB 态支持——内存态凭证事实源是配置（改配置即改密，动态生效），端点返回 409。
@@ -335,20 +365,23 @@ management 自身持久化运行形态（v0.4 phase-1 起，不透传 registry�
 | 400 | `INVALID_ARGUMENT` | 参数空白、scope 非法或字段组合不符、字段超长（`reason` > 1024 / `namespace`·`service` > 255 / `instanceId`·`value` > 512；逻辑实例 `instanceId` > 255、`host` > 255、metadata 值为 null 或序列化 > 16KB）、body 不可解析、参数类型错误、改密参数非法（old 不匹配 / newPassword < 8 字符） |
 | 401 | `UNAUTHORIZED` | Basic 缺失或错误 |
 | 404 | `NOT_FOUND` | 未知路径 |
+| 404 | `ROUTE_RULE_NOT_FOUND` | 路由规则查询/替换缺失（v0.5 phase-1） |
 | 405 | `METHOD_NOT_ALLOWED` | 方法不支持 |
 | 409 | `NOT_SUPPORTED_IN_MEMORY_MODE` | 内存态调用改密端点（凭证事实源是配置，v0.4 ADR-021） |
+| 409 | `ROUTE_RULE_ALREADY_EXISTS` | 路由规则创建重名（v0.5 phase-1） |
 | 502 | `REGISTRY_ERROR` | registry 返回 `ACK_FAIL` 或其它 gRPC 错误（含响应超过 16 MiB 入站上限） |
 | 503 | `REGISTRY_UNAVAILABLE` | registry `UNAVAILABLE` / `DEADLINE_EXCEEDED` |
 | 503 | `ACCOUNT_STORE_UNAVAILABLE` | 账户表访问失败（DB 态 fail-closed，v0.4 ADR-021） |
 | 503 | `EJECTION_STORE_UNAVAILABLE` | 摘除/审计存储访问失败（DB 态，操作未落库可重试） |
 | 503 | `LOGICAL_INSTANCE_STORE_UNAVAILABLE` | 逻辑实例存储访问失败（DB 态，v0.4 phase-4） |
+| 503 | `ROUTE_RULE_STORE_UNAVAILABLE` | 路由规则存储访问失败（DB 态，v0.5 phase-1） |
 | 500 | `INTERNAL` | 未预期异常（堆栈只进日志） |
 
 management 启动不依赖 registry 可用；registry 故障时管理面仍可启动，查询类 API 返回 503。
 
 ## 8. 已知限制
 
-- 摘除四级与审计已交付（v0.4 phase-3）；逻辑实例已交付（v0.4 phase-4，management 侧服务视图合并逻辑实例归 phase-6 console）；内存态（未配置 DB）仍重启丢失（期 1 设计内行为，配置 DB 即持久化——重启后经流快照重下发恢复）；审批流随 v1.x 按社区需求排期。
+- 摘除四级与审计已交付（v0.4 phase-3）；逻辑实例已交付（v0.4 phase-4，management 侧服务视图合并逻辑实例归 phase-6 console）；路由规则 CRUD 与持久化已交付（v0.5 phase-1），**规则流下发与 discovery 生效归 v0.5 phase-2/3**（当前创建规则不影响发现结果）；内存态（未配置 DB）仍重启丢失（期 1 设计内行为，配置 DB 即持久化——重启后经流快照重下发恢复）；审批流随 v1.x 按社区需求排期。
 - RBAC 随 v1.0；内存态外部 HTTP 单账户凭证（DB 态为单管理员账户表，v0.4）。
 - registry 地址单值、无重试/熔断（v0.2 集群后引入地址列表与容灾）。
 - registry 查询无分页；客户端入站上限 16 MiB，超限返回 502。
@@ -357,6 +390,7 @@ management 启动不依赖 registry 可用；registry 故障时管理面仍可�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.12 | 2026-10-26 | v0.5 phase-1：新增路由规则 CRUD（§4.10 五端点，等值选择器 + 两段双权重 + 域约束与审计语义）；错误表补 404/409/503 route-rule 三码；§8 限制补 phase-2/3 边界 |
 | 1.11 | 2026-10-26 | v0.4 phase-6：console 只读版——§4.1 服务列表增 `keyword`/`offset`/`limit` 与响应 `total`；§4.2 详情增实例分页（计数始终全量）；§1 登记 console 入口 |
 | 1.10 | 2026-10-26 | v0.4 phase-5：新增 §6.5 `GET /admin/v1/status/rules` 规则生效水位（当前版本 + 活订阅水位 + 已生效节点数） |
 | 1.9 | 2026-10-25 | v0.4 phase-4：新增逻辑实例 API（§4.7–4.9 upsert/delete/list，幂等语义与 255 校验上限）；错误表补 `LOGICAL_INSTANCE_STORE_UNAVAILABLE` |

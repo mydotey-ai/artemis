@@ -1,11 +1,13 @@
 package org.mydotey.ai.artemis.management.application;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.mydotey.ai.artemis.common.governance.EjectionScope;
 import org.mydotey.ai.artemis.management.domain.AuditLog;
@@ -25,6 +27,10 @@ import org.mydotey.ai.artemis.management.domain.LogicalInstance;
 import org.mydotey.ai.artemis.management.domain.LogicalInstancePublisher;
 import org.mydotey.ai.artemis.management.domain.LogicalInstanceStore;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryPort;
+import org.mydotey.ai.artemis.management.domain.RouteRule;
+import org.mydotey.ai.artemis.management.domain.RouteRuleException;
+import org.mydotey.ai.artemis.management.domain.RouteRuleStore;
+import org.mydotey.ai.artemis.management.domain.RouteRules;
 import org.mydotey.ai.artemis.management.domain.RuleStatus;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
@@ -54,6 +60,9 @@ public final class ManagementServiceImpl implements ManagementService {
                     LogicalInstance::service, SERVICE_ORDER)
             .thenComparing(instance -> instance.instance().instanceId());
 
+    private static final Comparator<RouteRule> ROUTE_RULE_ORDER =
+            Comparator.comparing(RouteRule::service, SERVICE_ORDER).thenComparing(RouteRule::name);
+
     private final RegistryQueryPort registry;
     private final EjectionStore ejections;
     private final AuditLogStore auditLogs;
@@ -61,6 +70,7 @@ public final class ManagementServiceImpl implements ManagementService {
     private final EjectionAckRegistry acks;
     private final LogicalInstanceStore logicalInstances;
     private final LogicalInstancePublisher logicalPublisher;
+    private final RouteRuleStore routeRules;
     private final Clock clock;
 
     public ManagementServiceImpl(
@@ -71,6 +81,7 @@ public final class ManagementServiceImpl implements ManagementService {
             EjectionAckRegistry acks,
             LogicalInstanceStore logicalInstances,
             LogicalInstancePublisher logicalPublisher,
+            RouteRuleStore routeRules,
             Clock clock) {
         this.registry = registry;
         this.ejections = ejections;
@@ -79,6 +90,7 @@ public final class ManagementServiceImpl implements ManagementService {
         this.acks = acks;
         this.logicalInstances = logicalInstances;
         this.logicalPublisher = logicalPublisher;
+        this.routeRules = routeRules;
         this.clock = clock;
     }
 
@@ -230,6 +242,91 @@ public final class ManagementServiceImpl implements ManagementService {
                 .sorted(LOGICAL_ORDER)
                 .limit(Math.max(1, limit))
                 .toList();
+    }
+
+    @Override
+    public RouteRule createRouteRule(RouteRule rule, String operator) {
+        RouteRules.validate(rule);
+        Instant now = clock.instant();
+        RouteRule stored =
+                new RouteRule(rule.service(), rule.name(), rule.status(), rule.targets(), operator, now, now);
+        if (!routeRules.insert(stored)) {
+            throw new RouteRuleException(
+                    RouteRuleException.ALREADY_EXISTS, "route rule exists: " + describe(rule.service(), rule.name()));
+        }
+        audit("CREATE_ROUTE_RULE", routeRuleTarget(rule.service(), rule.name()), operator, targetsSummary(stored));
+        return stored;
+    }
+
+    @Override
+    public RouteRule updateRouteRule(RouteRule rule, String operator) {
+        RouteRules.validate(rule);
+        RouteRule current = routeRules.find(rule.service(), rule.name());
+        if (current == null) {
+            throw notFound(rule.service(), rule.name());
+        }
+        // createdAt 继承原值（创建事实不随替换漂移）；updatedAt 刷新
+        RouteRule stored = new RouteRule(
+                rule.service(),
+                rule.name(),
+                rule.status(),
+                rule.targets(),
+                operator,
+                current.createdAt(),
+                clock.instant());
+        if (!routeRules.update(stored)) {
+            throw notFound(rule.service(), rule.name()); // find 后被并发删除
+        }
+        audit("UPDATE_ROUTE_RULE", routeRuleTarget(rule.service(), rule.name()), operator, targetsSummary(stored));
+        return stored;
+    }
+
+    @Override
+    public void deleteRouteRule(ServiceKey service, String name, String operator) {
+        if (!routeRules.delete(service, name)) {
+            return; // 缺失幂等 no-op（不删除不审计）
+        }
+        audit("DELETE_ROUTE_RULE", routeRuleTarget(service, name), operator, null);
+    }
+
+    @Override
+    public RouteRule getRouteRule(ServiceKey service, String name) {
+        RouteRule rule = routeRules.find(service, name);
+        if (rule == null) {
+            throw notFound(service, name);
+        }
+        return rule;
+    }
+
+    @Override
+    public List<RouteRule> listRouteRules(String namespace, String service, int limit) {
+        return routeRules.findAll().stream()
+                .filter(rule -> namespace == null
+                        || namespace.isBlank()
+                        || rule.service().namespace().equals(namespace))
+                .filter(rule -> service == null
+                        || service.isBlank()
+                        || rule.service().service().equals(service))
+                .sorted(ROUTE_RULE_ORDER)
+                .limit(Math.max(1, limit))
+                .toList();
+    }
+
+    private static RouteRuleException notFound(ServiceKey service, String name) {
+        return new RouteRuleException(RouteRuleException.NOT_FOUND, "route rule not found: " + describe(service, name));
+    }
+
+    /** 审计 target：资源描述串（带资源前缀，同 ejection 摘要行先例）。 */
+    private static String routeRuleTarget(ServiceKey service, String name) {
+        return "route-rule:" + describe(service, name);
+    }
+
+    /** 审计 detail：目标条数 + weight 序列（release 语义 phase-2，此处记生效列）。 */
+    private static String targetsSummary(RouteRule rule) {
+        String weights = rule.targets().stream()
+                .map(target -> Integer.toString(target.weight()))
+                .collect(Collectors.joining(","));
+        return "targets=" + rule.targets().size() + " weights=[" + weights + "]";
     }
 
     @Override

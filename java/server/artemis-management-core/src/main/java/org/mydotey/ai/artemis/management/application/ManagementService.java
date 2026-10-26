@@ -7,6 +7,7 @@ import org.mydotey.ai.artemis.management.domain.ConfigProperty;
 import org.mydotey.ai.artemis.management.domain.EjectionTarget;
 import org.mydotey.ai.artemis.management.domain.LeaseStatus;
 import org.mydotey.ai.artemis.management.domain.LogicalInstance;
+import org.mydotey.ai.artemis.management.domain.RouteRule;
 import org.mydotey.ai.artemis.management.domain.RuleStatus;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
@@ -46,6 +47,21 @@ public interface ManagementService {
 
     /** 逻辑实例列表（(namespace, service) 过滤可选，键升序，limit 截断）。 */
     List<LogicalInstance> listLogicalInstances(String namespace, String service, int limit);
+
+    /** 创建路由规则（insert-if-absent，时间戳此处填写）；同名已存在 → ALREADY_EXISTS。 */
+    RouteRule createRouteRule(RouteRule rule, String operator);
+
+    /** 全量替换（createdAt 继承原值）；缺失 → NOT_FOUND。 */
+    RouteRule updateRouteRule(RouteRule rule, String operator);
+
+    /** 删除；缺失幂等 no-op（不审计）。 */
+    void deleteRouteRule(ServiceKey service, String name, String operator);
+
+    /** 单条查询；缺失 → NOT_FOUND。 */
+    RouteRule getRouteRule(ServiceKey service, String name);
+
+    /** 列表（(namespace, service) 过滤可选，(namespace, service, name) 升序，limit 截断）。 */
+    List<RouteRule> listRouteRules(String namespace, String service, int limit);
 
     LeaseStatus leaseStatus(String namespace, String service);
 

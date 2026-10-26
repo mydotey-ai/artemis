@@ -38,7 +38,7 @@ abstract class PersistenceDialectTestBase {
     void should_run_flyway_and_report_database_mode() {
         assertThat(persistenceInfo.mode()).isEqualTo(PersistenceInfo.Mode.DATABASE);
         assertThat(persistenceInfo.databaseProduct()).isEqualTo(expectedDatabaseProduct());
-        assertThat(persistenceInfo.schemaVersion()).isEqualTo("4");
+        assertThat(persistenceInfo.schemaVersion()).isEqualTo("5");
     }
 
     @Test
@@ -54,7 +54,7 @@ abstract class PersistenceDialectTestBase {
         JsonNode body = objectMapper.readTree(response.body());
         assertThat(body.get("mode").asText()).isEqualTo("DATABASE");
         assertThat(body.get("databaseProduct").asText()).isEqualTo(expectedDatabaseProduct());
-        assertThat(body.get("schemaVersion").asText()).isEqualTo("4");
+        assertThat(body.get("schemaVersion").asText()).isEqualTo("5");
     }
 
     abstract String expectedDatabaseProduct();

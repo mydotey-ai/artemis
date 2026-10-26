@@ -7,6 +7,8 @@ import io.grpc.ManagedChannelBuilder;
 import io.grpc.Metadata;
 import io.grpc.stub.MetadataUtils;
 import io.grpc.stub.StreamObserver;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.StreamSupport;
@@ -206,6 +208,82 @@ class ManagementAdminIT extends ManagementHttpIT {
                         .get("records")
                         .size())
                 .isZero();
+    }
+
+    @Test
+    void should_manage_route_rules_when_crud_called() throws Exception {
+        String body = """
+                {"namespace":"%s","service":"%s","name":"beta","targets":[
+                {"selector":{"group":"beta"},"weight":20,"unreleasedWeight":80},
+                {"selector":{},"weight":0,"unreleasedWeight":20}]}
+                """.formatted(NAMESPACE, SERVICE);
+
+        // 201 创建 + 视图字段（status 缺省 ACTIVE、operator、两段权重双列、兜底目标）
+        HttpResponse<String> created = post("/admin/v1/route-rules", body);
+        assertThat(created.statusCode()).isEqualTo(201);
+        JsonNode view = json(created);
+        assertThat(view.get("status").asText()).isEqualTo("ACTIVE");
+        assertThat(view.get("operator").asText()).isEqualTo("artemis");
+        assertThat(view.get("targets").size()).isEqualTo(2);
+        assertThat(view.get("targets").get(0).get("unreleasedWeight").asInt()).isEqualTo(80);
+        assertThat(view.get("createdAt")).isNotNull();
+        assertThat(view.get("updatedAt")).isNotNull();
+
+        // 409 重名 / 400 校验（name 非法字符） / 404 缺失
+        assertThat(post("/admin/v1/route-rules", body).statusCode()).isEqualTo(409);
+        assertThat(post("/admin/v1/route-rules", body.replace("\"beta\"", "\"beta rule\""))
+                        .statusCode())
+                .isEqualTo(400);
+        assertThat(get("/admin/v1/route-rules/" + NAMESPACE + "/" + SERVICE + "/missing", true)
+                        .statusCode())
+                .isEqualTo(404);
+
+        // PUT 全量替换（status INACTIVE）→ 200
+        HttpResponse<String> updated = send(
+                HttpRequest.newBuilder(uri("/admin/v1/route-rules/" + NAMESPACE + "/" + SERVICE + "/beta"))
+                        .PUT(HttpRequest.BodyPublishers.ofString("""
+                                {"namespace":"%s","service":"%s","name":"beta","status":"INACTIVE",
+                                "targets":[{"selector":{"group":"beta"},"weight":0,"unreleasedWeight":100}]}
+                                """.formatted(NAMESPACE, SERVICE))),
+                true);
+        assertThat(updated.statusCode()).isEqualTo(200);
+        assertThat(json(updated).get("status").asText()).isEqualTo("INACTIVE");
+        // body 键与路径不一致（防静默改键）→ 400；body 缺 name → 400（非 NPE 500，review #1 锁定）
+        assertThat(send(
+                                HttpRequest.newBuilder(
+                                                uri("/admin/v1/route-rules/" + NAMESPACE + "/" + SERVICE + "/beta"))
+                                        .PUT(HttpRequest.BodyPublishers.ofString(
+                                                body.replace("\"name\":\"beta\"", "\"name\":\"gamma\""))),
+                                true)
+                        .statusCode())
+                .isEqualTo(400);
+        assertThat(send(
+                                HttpRequest.newBuilder(
+                                                uri("/admin/v1/route-rules/" + NAMESPACE + "/" + SERVICE + "/beta"))
+                                        .PUT(HttpRequest.BodyPublishers.ofString(
+                                                body.replace(",\"name\":\"beta\"", ""))),
+                                true)
+                        .statusCode())
+                .isEqualTo(400);
+
+        // DELETE 幂等 204；删除后 GET 404
+        assertThat(send(
+                                HttpRequest.newBuilder(
+                                                uri("/admin/v1/route-rules/" + NAMESPACE + "/" + SERVICE + "/beta"))
+                                        .DELETE(),
+                                true)
+                        .statusCode())
+                .isEqualTo(204);
+        assertThat(send(
+                                HttpRequest.newBuilder(
+                                                uri("/admin/v1/route-rules/" + NAMESPACE + "/" + SERVICE + "/beta"))
+                                        .DELETE(),
+                                true)
+                        .statusCode())
+                .isEqualTo(204);
+        assertThat(get("/admin/v1/route-rules/" + NAMESPACE + "/" + SERVICE + "/beta", true)
+                        .statusCode())
+                .isEqualTo(404);
     }
 
     @Test

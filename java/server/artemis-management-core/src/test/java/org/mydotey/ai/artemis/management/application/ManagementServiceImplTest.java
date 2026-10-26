@@ -1,9 +1,12 @@
 package org.mydotey.ai.artemis.management.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.groups.Tuple.tuple;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -23,6 +26,10 @@ import org.mydotey.ai.artemis.management.domain.LeaseDetail;
 import org.mydotey.ai.artemis.management.domain.LeaseStatus;
 import org.mydotey.ai.artemis.management.domain.LogicalInstance;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryPort;
+import org.mydotey.ai.artemis.management.domain.RouteRule;
+import org.mydotey.ai.artemis.management.domain.RouteRuleException;
+import org.mydotey.ai.artemis.management.domain.RouteRuleStatus;
+import org.mydotey.ai.artemis.management.domain.RouteRuleTarget;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStats;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
@@ -32,6 +39,7 @@ import org.mydotey.ai.artemis.management.infrastructure.EjectionRuleDispatcher;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryAuditLogStore;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryEjectionStore;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryLogicalInstanceStore;
+import org.mydotey.ai.artemis.management.infrastructure.InMemoryRouteRuleStore;
 import org.mydotey.ai.artemis.management.infrastructure.LogicalInstanceDispatcher;
 
 class ManagementServiceImplTest {
@@ -46,16 +54,11 @@ class ManagementServiceImplTest {
     private final EjectionRuleDispatcher dispatcher = new EjectionRuleDispatcher(ejections);
     private final InMemoryLogicalInstanceStore logicalInstances = new InMemoryLogicalInstanceStore();
     private final LogicalInstanceDispatcher logicalDispatcher = new LogicalInstanceDispatcher(logicalInstances);
+    private final InMemoryRouteRuleStore routeRules = new InMemoryRouteRuleStore();
     private final EjectionAckRegistry acks = new EjectionAckRegistry(Clock.fixed(NOW, ZoneOffset.UTC));
+    private final SettableClock clock = new SettableClock();
     private final ManagementServiceImpl service = new ManagementServiceImpl(
-            registry,
-            ejections,
-            auditLogs,
-            dispatcher,
-            acks,
-            logicalInstances,
-            logicalDispatcher,
-            Clock.fixed(NOW, ZoneOffset.UTC));
+            registry, ejections, auditLogs, dispatcher, acks, logicalInstances, logicalDispatcher, routeRules, clock);
 
     // ---- 视图组合 ----
 
@@ -425,6 +428,7 @@ class ManagementServiceImplTest {
                 acks,
                 logicalInstances,
                 logicalDispatcher,
+                routeRules,
                 Clock.fixed(NOW, ZoneOffset.UTC));
 
         assertThat(serviceWithFailingAudit.eject(target("i1"), "r", OPERATOR)).isNotNull();
@@ -646,6 +650,148 @@ class ManagementServiceImplTest {
 
         @Override
         public void close() {}
+    }
+
+    /** 可拨时钟（默认 NOW）：route-rule 时间戳语义（createdAt 继承 / updatedAt 刷新）断言用。 */
+    private static final class SettableClock extends Clock {
+        private volatile Instant now = NOW;
+
+        void set(Instant instant) {
+            this.now = instant;
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+    }
+
+    // ---- 路由规则 CRUD（v0.5 phase-1）----
+
+    @Test
+    void should_create_route_rule_when_valid() {
+        RouteRule created = service.createRouteRule(rule("beta", Map.of("group", "beta"), 20, 80), OPERATOR);
+
+        assertThat(created.service()).isEqualTo(SERVICE);
+        assertThat(created.status()).isEqualTo(RouteRuleStatus.ACTIVE); // 请求缺省
+        assertThat(created.operator()).isEqualTo(OPERATOR);
+        assertThat(created.createdAt()).isEqualTo(NOW);
+        assertThat(created.updatedAt()).isEqualTo(NOW);
+        assertThat(service.getRouteRule(SERVICE, "beta")).isEqualTo(created);
+    }
+
+    @Test
+    void should_reject_create_when_duplicate_name() {
+        service.createRouteRule(rule("beta", Map.of("group", "beta"), 20, 80), OPERATOR);
+
+        assertThatThrownBy(() -> service.createRouteRule(rule("beta", Map.of("group", "beta"), 30, 70), OPERATOR))
+                .isInstanceOfSatisfying(
+                        RouteRuleException.class,
+                        e -> assertThat(e.code()).isEqualTo(RouteRuleException.ALREADY_EXISTS));
+    }
+
+    @Test
+    void should_replace_whole_rule_when_update() {
+        service.createRouteRule(rule("beta", Map.of("group", "beta"), 20, 80), OPERATOR);
+        clock.set(NOW.plusSeconds(60));
+
+        RouteRule updated = service.updateRouteRule(
+                new RouteRule(
+                        SERVICE,
+                        "beta",
+                        RouteRuleStatus.INACTIVE,
+                        List.of(
+                                new RouteRuleTarget(Map.of("group", "beta"), 0, 20),
+                                new RouteRuleTarget(Map.of(), 0, 80)),
+                        null,
+                        null,
+                        null),
+                OPERATOR);
+
+        assertThat(updated.createdAt()).isEqualTo(NOW); // 创建事实继承
+        assertThat(updated.updatedAt()).isEqualTo(NOW.plusSeconds(60)); // 替换时刻刷新
+        assertThat(updated.status()).isEqualTo(RouteRuleStatus.INACTIVE);
+        assertThat(updated.targets()).hasSize(2);
+        assertThat(service.getRouteRule(SERVICE, "beta")).isEqualTo(updated);
+
+        assertThatThrownBy(() -> service.updateRouteRule(rule("missing", Map.of(), 1, 0), OPERATOR))
+                .isInstanceOfSatisfying(
+                        RouteRuleException.class, e -> assertThat(e.code()).isEqualTo(RouteRuleException.NOT_FOUND));
+    }
+
+    @Test
+    void should_delete_idempotently_when_missing() {
+        service.deleteRouteRule(SERVICE, "beta", OPERATOR); // 缺失 no-op
+        assertThat(auditLogs.find(null, 10)).isEmpty();
+
+        service.createRouteRule(rule("beta", Map.of("group", "beta"), 20, 80), OPERATOR);
+        service.deleteRouteRule(SERVICE, "beta", OPERATOR);
+        service.deleteRouteRule(SERVICE, "beta", OPERATOR); // 二次删幂等
+
+        assertThatThrownBy(() -> service.getRouteRule(SERVICE, "beta"))
+                .isInstanceOfSatisfying(
+                        RouteRuleException.class, e -> assertThat(e.code()).isEqualTo(RouteRuleException.NOT_FOUND));
+    }
+
+    @Test
+    void should_write_audit_log_when_route_rule_crud() {
+        service.createRouteRule(rule("beta", Map.of("group", "beta"), 20, 80), OPERATOR);
+        service.updateRouteRule(rule("beta", Map.of(), 100, 0), OPERATOR);
+        service.deleteRouteRule(SERVICE, "beta", OPERATOR);
+
+        List<AuditLog> logs = auditLogs.find(null, 10);
+        assertThat(logs)
+                .extracting(AuditLog::operation)
+                .containsExactly("DELETE_ROUTE_RULE", "UPDATE_ROUTE_RULE", "CREATE_ROUTE_RULE"); // 时间倒序
+        assertThat(logs).allSatisfy(log -> {
+            assertThat(log.target()).isEqualTo("route-rule:ns/svc/beta");
+            assertThat(log.operator()).isEqualTo(OPERATOR);
+            assertThat(log.result()).isEqualTo("SUCCESS");
+        });
+        assertThat(logs.get(2).detail()).isEqualTo("targets=1 weights=[20]"); // 创建行带目标摘要
+    }
+
+    @Test
+    void should_list_route_rules_when_filter() {
+        service.createRouteRule(rule("beta", Map.of("group", "beta"), 20, 80), OPERATOR);
+        service.createRouteRule(rule("alpha", Map.of(), 100, 0), OPERATOR);
+        service.createRouteRule(
+                new RouteRule(
+                        new ServiceKey("ns", "other"),
+                        "alpha",
+                        RouteRuleStatus.ACTIVE,
+                        List.of(new RouteRuleTarget(Map.of(), 100, 0)),
+                        null,
+                        null,
+                        null),
+                OPERATOR);
+
+        assertThat(service.listRouteRules(null, null, 10))
+                .extracting(rule -> rule.service().service(), RouteRule::name)
+                .containsExactly(tuple("other", "alpha"), tuple("svc", "alpha"), tuple("svc", "beta"));
+        assertThat(service.listRouteRules("ns", "svc", 10)).hasSize(2);
+        assertThat(service.listRouteRules(null, null, 1)).hasSize(1); // limit 截断
+    }
+
+    private static RouteRule rule(String name, Map<String, String> selector, int weight, int unreleased) {
+        return new RouteRule(
+                SERVICE,
+                name,
+                RouteRuleStatus.ACTIVE,
+                List.of(new RouteRuleTarget(selector, weight, unreleased)),
+                null,
+                null,
+                null);
     }
 
     private static final class FakeRegistry implements RegistryQueryPort {

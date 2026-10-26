@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.mydotey.ai.artemis.management.domain.AccountAccessException;
 import org.mydotey.ai.artemis.management.domain.EjectionAccessException;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryException;
+import org.mydotey.ai.artemis.management.domain.RouteRuleException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -67,6 +68,20 @@ public final class ManagementExceptionHandler {
     public ResponseEntity<ErrorResponse> ejectionAccess(EjectionAccessException e) {
         log.warn("ejection store access failed: code={}, message={}", e.code(), e.getMessage());
         return response(HttpStatus.SERVICE_UNAVAILABLE, e.code(), e.getMessage());
+    }
+
+    /** 路由规则资源状态与存储不可用：已存在 409 / 缺失 404 / 存储 503（操作未落库可重试）。 */
+    @ExceptionHandler(RouteRuleException.class)
+    public ResponseEntity<ErrorResponse> routeRule(RouteRuleException e) {
+        HttpStatus status = switch (e.code()) {
+            case RouteRuleException.ALREADY_EXISTS -> HttpStatus.CONFLICT;
+            case RouteRuleException.NOT_FOUND -> HttpStatus.NOT_FOUND;
+            default -> HttpStatus.SERVICE_UNAVAILABLE;
+        };
+        if (status == HttpStatus.SERVICE_UNAVAILABLE) {
+            log.warn("route rule store access failed: code={}, message={}", e.code(), e.getMessage());
+        }
+        return response(status, e.code(), e.getMessage());
     }
 
     /** 内存态改密（ADR-021 双轨）：凭证事实源是配置。 */

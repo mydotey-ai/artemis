@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.31    更新时间: 2026-10-26
+版本: 1.32    更新时间: 2026-10-26
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -304,10 +304,18 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **DB 双轨保持**：未配置 `spring.datasource.url` 时 management 内存态（单机 eval 零 DB）；配置后（Spring 标准途径，仅 management 上下文消费）双方言持久化接管。
 - **v0.4 验收要点端到端**（all-in-one 形态）：三服务单进程起停、摘除规则流闭环 + 生效水位、逻辑实例 union（cluster 正交）、console 页面与分页 API、DB 态跨组合重启摘除重下发（Testcontainers PG）。见 [all-in-one.md](../api/all-in-one.md)。
 
+**v0.5 phase-1（route-rule 资源模型与持久化）已交付**：
+
+- **资源模型**（本版全部治理能力的规则载体）：`route-rule` = 服务内命名资源，一组有序目标按权重分流——目标 = 实例 metadata **等值选择器**（多键 AND，空 selector = 兜底目标）+ **两段双权重**（`weight` 生效列 / `unreleasedWeight` 编辑列，release 拷贝动作 phase-2）+ 状态 ACTIVE/INACTIVE；动作词汇 = 权重分配（不保留原产品 strategy：就近访问由宿主 RPC 框架执行，注册中心只表达切分意图）；分组不进数据模型（ADR-013），canary 占位命名策略归 phase-4。
+- **V5 双方言持久化**：`artemis_route_rule`（唯一键 (namespace, service, name)，targets JSON 列、双方言零方言层差异）；表只存当前态——回滚所需历史由 phase-2 release 记录承载；双轨沿用 DataSource 判据，跨重启保留（双方言 IT 验证）。
+- **CRUD API**（资源导向，一个端点一个意图）：POST 201/409、GET 列表与单条、PUT 全量替换（404/键路径一致 400）、DELETE 幂等 204；域约束（name `[A-Za-z0-9._-]+`、targets 1–10、selector 键值上限、权重 0–10000、序列化 UTF-8 ≤ 60KB）信任边界一次校验；变更全量进审计表。见 [admin-api.md](../api/admin-api.md) §4.10。
+- **工程形态**：CRUD 无读-判-写复合段零新增锁（insert-if-absent / 条件替换原子语义 + DB 唯一键）；code-review 6 findings 修复（PUT 缺 name NPE、DB 行数判定对齐内存态、UTF-8 字节上限、码点计量等）；7 单测 + 4 IT（双方言重启用例 ×2）。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.32 | 2026-10-26 | v0.5 phase-1 交付：route-rule 资源模型（等值选择器 + 两段双权重）+ V5 双方言持久化 + 资源导向 CRUD 与审计 |
 | 1.31 | 2026-10-26 | v0.4 phase-7 交付：三服务 all-in-one 完整形态（治理链默认闭合 + DB 双轨 + 组合键 +3）+ 四要点端到端；模块表 dist 行更新 |
 | 1.30 | 2026-10-26 | v0.4 phase-6 交付：console 只读版——内嵌原生单文件 SPA（根路径入口、与 Admin API 同认证）+ 服务列表 keyword 模糊/分页/total + 详情实例分页 |
 | 1.29 | 2026-10-26 | v0.4 phase-5 交付：规则下发闭环——版本化规则流（版本 = 翻转记录 sequence）+ discovery ack 上行 + 生效水位 API（`GET /admin/v1/status/rules`）+ discovery 本地应用版本对照；phase-6 节「无版本/ack」表述修正 |
