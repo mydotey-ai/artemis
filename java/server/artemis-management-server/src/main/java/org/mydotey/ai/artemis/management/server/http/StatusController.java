@@ -5,6 +5,7 @@ import org.mydotey.ai.artemis.management.application.ManagementService;
 import org.mydotey.ai.artemis.management.application.PersistenceInfo;
 import org.mydotey.ai.artemis.management.domain.ConfigProperty;
 import org.mydotey.ai.artemis.management.domain.LeaseStatus;
+import org.mydotey.ai.artemis.management.domain.RuleStatus;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -49,6 +50,12 @@ public final class StatusController {
     @GetMapping("/persistence")
     public PersistenceInfo persistence() {
         return persistenceInfo;
+    }
+
+    /** 规则生效水位（phase-5）：当前版本 + 各活订阅方已应用版本 + 已生效节点数。 */
+    @GetMapping("/rules")
+    public RuleStatus rules() {
+        return managementService.ruleStatus();
     }
 
     public record ConfigStatusResponse(List<ConfigProperty> properties) {}

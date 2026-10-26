@@ -198,6 +198,35 @@ class EjectionRuleSynchronizerTest {
         }
     }
 
+    @Test
+    void should_ack_applied_version_when_snapshot_or_increment_applied() throws Exception {
+        try (EjectionRuleSynchronizer ignored = startSynchronizer()) {
+            source.awaitWatch();
+            source.pushSnapshot(List.of(rule("i1")), 7);
+            await(() -> status.appliedVersion() == 7);
+
+            source.pushEjected(rule("i2"), 9);
+            await(() -> status.appliedVersion() == 9);
+
+            assertThat(source.ackedVersions).containsExactly(7L, 9L);
+        }
+    }
+
+    @Test
+    void should_tolerate_ack_failure_when_upstream_unavailable() throws Exception {
+        source.failAcks = true;
+        try (EjectionRuleSynchronizer ignored = startSynchronizer()) {
+            source.awaitWatch();
+            source.pushSnapshot(List.of(rule("i1")), 3);
+            await(() -> status.appliedVersion() == 3);
+
+            // ack 失败不中断应用循环：后续增量照常应用（状态推进即证明）
+            source.pushEjected(rule("i2"), 4);
+            await(() -> filter.rules().isEjected(ORDER, "i2", Map.of()));
+            assertThat(status.appliedVersion()).isEqualTo(4);
+        }
+    }
+
     private static EjectionRule rule(String instanceId) {
         return EjectionRule.instance(ORDER, instanceId, "test");
     }
@@ -224,10 +253,13 @@ class EjectionRuleSynchronizerTest {
         }
     }
 
-    /** 测试源：手动推送事件 + 可控断流。 */
+    /** 测试源：手动推送事件（内部版本计数器，可显式指定）+ 可控断流 + ack 记录。 */
     private static final class FakeSource implements EjectionRuleSource {
 
         private final List<Session> sessions = new ArrayList<>();
+        private final List<Long> ackedVersions = new ArrayList<>();
+        private long nextVersion = 1;
+        boolean failAcks;
 
         @Override
         public synchronized EjectionRuleWatch watch(EjectionRuleListener listener) {
@@ -236,16 +268,36 @@ class EjectionRuleSynchronizerTest {
             return session;
         }
 
+        @Override
+        public synchronized void ack(long appliedVersion) {
+            if (failAcks) {
+                throw new IllegalStateException("ack unavailable");
+            }
+            ackedVersions.add(appliedVersion);
+        }
+
         synchronized void pushSnapshot(List<EjectionRule> rules) {
-            sessions.forEach(session -> session.listener.onSnapshot(rules));
+            pushSnapshot(rules, nextVersion++);
+        }
+
+        synchronized void pushSnapshot(List<EjectionRule> rules, long version) {
+            sessions.forEach(session -> session.listener.onSnapshot(rules, version));
         }
 
         synchronized void pushEjected(EjectionRule rule) {
-            sessions.forEach(session -> session.listener.onEjected(rule));
+            pushEjected(rule, nextVersion++);
+        }
+
+        synchronized void pushEjected(EjectionRule rule, long version) {
+            sessions.forEach(session -> session.listener.onEjected(rule, version));
         }
 
         synchronized void pushRecovered(EjectionTarget target) {
-            sessions.forEach(session -> session.listener.onRecovered(target));
+            pushRecovered(target, nextVersion++);
+        }
+
+        synchronized void pushRecovered(EjectionTarget target, long version) {
+            sessions.forEach(session -> session.listener.onRecovered(target, version));
         }
 
         /** 等 watch 建立（重连轮次 = 等新 session，取代旧计数）。 */

@@ -6,3 +6,4 @@
 | phase-2-account-takeover | [phase-2-account-takeover.md](phase-2-account-takeover.md) | [phase-2-account-takeover-test.md](phase-2-account-takeover-test.md) |
 | phase-3-ejection-persistence | [phase-3-ejection-persistence.md](phase-3-ejection-persistence.md) | [phase-3-ejection-persistence-test.md](phase-3-ejection-persistence-test.md) |
 | phase-4-logical-instance | [phase-4-logical-instance.md](phase-4-logical-instance.md) | [phase-4-logical-instance-test.md](phase-4-logical-instance-test.md) |
+| phase-5-rule-ack-loop | [phase-5-rule-ack-loop.md](phase-5-rule-ack-loop.md) | [phase-5-rule-ack-loop-test.md](phase-5-rule-ack-loop-test.md) |

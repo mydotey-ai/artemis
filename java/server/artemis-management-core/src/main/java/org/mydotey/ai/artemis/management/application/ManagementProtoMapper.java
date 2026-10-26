@@ -47,25 +47,29 @@ public final class ManagementProtoMapper {
                 instance.getMetadataMap());
     }
 
-    // ---- 摘除规则流（management.v1，toProto 出站事件，四级）----
+    // ---- 摘除规则流（management.v1，toProto 出站事件，四级；phase-5 携带版本）----
 
-    public org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent toSnapshotEvent(List<EjectionRecord> records) {
+    public org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent toSnapshotEvent(
+            List<EjectionRecord> records, long version) {
         var snapshot = org.mydotey.ai.artemis.proto.management.v1.EjectionRulesSnapshot.newBuilder();
         for (EjectionRecord record : records) {
             snapshot.addRules(toRule(record));
         }
         return org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent.newBuilder()
                 .setSnapshot(snapshot)
+                .setVersion(version)
                 .build();
     }
 
     public org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent toEjectedEvent(EjectionRecord record) {
         return org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent.newBuilder()
                 .setEjected(toRule(record))
+                .setVersion(record.sequence()) // 版本 = 翻转记录 sequence
                 .build();
     }
 
-    public org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent toRecoveredEvent(EjectionTarget target) {
+    public org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent toRecoveredEvent(
+            EjectionTarget target, long version) {
         var builder = org.mydotey.ai.artemis.proto.management.v1.EjectionRecovered.newBuilder()
                 .setScope(toProto(target.scope()));
         if (target.scope() == EjectionScope.INSTANCE) {
@@ -75,6 +79,7 @@ public final class ManagementProtoMapper {
         }
         return org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent.newBuilder()
                 .setRecovered(builder)
+                .setVersion(version)
                 .build();
     }
 

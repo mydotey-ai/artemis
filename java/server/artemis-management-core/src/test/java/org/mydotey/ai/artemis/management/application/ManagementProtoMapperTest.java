@@ -77,15 +77,17 @@ class ManagementProtoMapperTest {
         assertThat(selectorRule.getEjected().getTargetValue()).isEqualTo("10.1.1.1");
         assertThat(selectorRule.getEjected().hasService()).isFalse();
 
-        var recovered = mapper.toRecoveredEvent(EjectionTarget.selector(EjectionScope.ZONE, "dc-2"));
+        var recovered = mapper.toRecoveredEvent(EjectionTarget.selector(EjectionScope.ZONE, "dc-2"), 5);
         assertThat(recovered.getRecovered().getScope())
                 .isEqualTo(org.mydotey.ai.artemis.proto.management.v1.EjectionScope.EJECTION_SCOPE_ZONE);
         assertThat(recovered.getRecovered().getTargetValue()).isEqualTo("dc-2");
 
         // 快照含四级
-        var snapshot = mapper.toSnapshotEvent(List.of(
-                record(EjectionTarget.instance(new ServiceKey("ns", "svc"), "i1"), "r1"),
-                record(EjectionTarget.selector(EjectionScope.GROUP, "canary"), "g")));
+        var snapshot = mapper.toSnapshotEvent(
+                List.of(
+                        record(EjectionTarget.instance(new ServiceKey("ns", "svc"), "i1"), "r1"),
+                        record(EjectionTarget.selector(EjectionScope.GROUP, "canary"), "g")),
+                6);
         assertThat(snapshot.getSnapshot().getRulesCount()).isEqualTo(2);
         assertThat(snapshot.getSnapshot().getRules(1).getScope())
                 .isEqualTo(org.mydotey.ai.artemis.proto.management.v1.EjectionScope.EJECTION_SCOPE_GROUP);

@@ -1,6 +1,6 @@
 # management-service Admin 与状态 API
 
-版本: 1.9    更新时间: 2026-10-25
+版本: 1.10    更新时间: 2026-10-26
 
 > 本文定义 management-service 对外 HTTP API（管理面：实例管理 Admin API、账户 API 与 registry 状态排障面）。有效视图 = registry 只读事实 + management 摘除记录（ADR-016）；registry 不感知摘除。内部 gRPC 查询契约见 [registry-query-api.md](registry-query-api.md)。
 
@@ -289,6 +289,30 @@ management 自身持久化运行形态（v0.4 phase-1 起，不透传 registry�
 - `schemaVersion`：最新已应用 Flyway migration 版本（字符串原样，如 `"1"`）；`spring.flyway.enabled=false` 或 history 不可读时为 `null`。
 - 配置了 DB 时业务仍为内存实现（v0.4 过渡期语义，持久化逐表接管中）。
 
+### 6.5 规则生效水位 `GET /admin/v1/status/rules`（v0.4 phase-5）
+
+规则版本 + discovery ack 生效闭环的观测出口（哪个版本、多少节点已生效）。
+
+```json
+{
+  "currentVersion": 3,
+  "appliedLatestCount": 1,
+  "subscribers": [
+    {
+      "subscriberId": "artemis-discovery@host-a-1a2b3c4d",
+      "appliedVersion": 3,
+      "lastAckAt": "2026-10-26T10:00:00Z",
+      "atLatest": true
+    }
+  ]
+}
+```
+
+- `currentVersion`：当前规则集状态版本 = 最后一次生效态翻转的记录 sequence（查询时重放派生；无记录 = 0）。
+- `subscribers`：**活订阅**水位（断流即清除条目——断连节点生效态未知不冒充已生效）。`appliedVersion` 为 `null` = 已订阅尚未 ack（快照在途）；`atLatest` = 已应用当前版本。
+- `appliedLatestCount`：已应用当前版本的订阅方数（「多少节点已生效」）。
+- 水位为内存观测态不持久化：management 重启后经 discovery 重连快照 + 重新 ack 重建；内存态 management 重启版本归零（快照全量替换语义下无害）。
+
 ## 7. 错误语义
 
 错误体：
@@ -323,6 +347,8 @@ management 启动不依赖 registry 可用；registry 故障时管理面仍可�
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
+| ------ | ------ | ------ |
+| 1.10 | 2026-10-26 | v0.4 phase-5：新增 §6.5 `GET /admin/v1/status/rules` 规则生效水位（当前版本 + 活订阅水位 + 已生效节点数） |
 | ------ | ------ | ------ |
 | 1.9 | 2026-10-25 | v0.4 phase-4：新增逻辑实例 API（§4.7–4.9 upsert/delete/list，幂等语义与 255 校验上限）；错误表补 `LOGICAL_INSTANCE_STORE_UNAVAILABLE` |
 | 1.8 | 2026-10-25 | v0.4 phase-3：统一四级 ejection API（替换 v0.1 实例级端点）、记录/审计查询、双轨持久化与操作记录即状态语义、503 `EJECTION_STORE_UNAVAILABLE` |

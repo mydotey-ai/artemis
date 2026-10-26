@@ -125,6 +125,8 @@ abstract class EjectionPersistenceIT {
 
             // 规则流快照恢复（roadmap v0.4 验收要点）：新订阅收含四级摘除的快照
             EjectionRulesEvent snapshot = watchSnapshot(grpcPort);
+            // 快照携带版本（phase-5）：DB sequence 持久，跨重启派生不归零
+            assertThat(snapshot.getVersion()).isPositive();
             assertThat(snapshot.hasSnapshot()).isTrue();
             assertThat(snapshot.getSnapshot().getRulesList().stream()
                             .anyMatch(rule -> rule.getTargetValue().equals("dc-restart")))
@@ -189,7 +191,11 @@ abstract class EjectionPersistenceIT {
     }
 
     private HttpResponse<String> post(String path, String body) throws Exception {
-        HttpRequest request = HttpRequest.newBuilder(uri(httpPort, path))
+        return post(httpPort, path, body);
+    }
+
+    private HttpResponse<String> post(int port, String path, String body) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(uri(port, path))
                 .header("Authorization", AUTH)
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body))

@@ -42,6 +42,10 @@ import org.mydotey.scf.facade.StringProperties;
  * <p>fail-open（D-E3）：断流不清缓存——规则集只在收到事件时替换，断连期间最后已知
  * 规则继续生效；全抖动指数退避（默认 1s→10s）重连，恢复即重新全量覆盖收敛。
  * readiness 不受影响（规则是过滤增强，非数据面同步）。
+ *
+ * <p>生效 ack（phase-5）：每次应用（快照/增量）后向 management 上报已应用版本，
+ * worker 线程内联短超时调用（管理操作级频率）；失败 WARN 放弃——重连快照后重新
+ * ack 收敛，无需重试状态机。
  */
 @Slf4j
 public final class EjectionRuleSynchronizer implements AutoCloseable {
@@ -155,20 +159,30 @@ public final class EjectionRuleSynchronizer implements AutoCloseable {
 
     private void apply(Object event) {
         if (event instanceof SnapshotEvent snapshot) {
-            EjectionRules oldRules = filter.rules();
-            EjectionRules newRules = EjectionRules.of(snapshot.rules());
-            applyAndFanout(oldRules, newRules);
+            applyAndFanout(filter.rules(), EjectionRules.of(snapshot.rules()));
             everSynced = true;
             managementStatus.update(ManagementState.SYNCED);
             log.info(
-                    "ejection rules snapshot applied, rules={}",
-                    snapshot.rules().size());
+                    "ejection rules snapshot applied, rules={}, version={}",
+                    snapshot.rules().size(),
+                    snapshot.version());
+            applied(snapshot.version());
         } else if (event instanceof EjectedEvent ejected) {
-            EjectionRules oldRules = filter.rules();
-            applyAndFanout(oldRules, oldRules.with(ejected.rule()));
+            applyAndFanout(filter.rules(), filter.rules().with(ejected.rule()));
+            applied(ejected.version());
         } else if (event instanceof RecoveredEvent recovered) {
-            EjectionRules oldRules = filter.rules();
-            applyAndFanout(oldRules, oldRules.without(recovered.target));
+            applyAndFanout(filter.rules(), filter.rules().without(recovered.target()));
+            applied(recovered.version());
+        }
+    }
+
+    /** 应用收尾（phase-5）：推进本地已应用版本并上报 management。 */
+    private void applied(long version) {
+        managementStatus.updateAppliedVersion(version);
+        try {
+            source.ack(version);
+        } catch (Exception e) {
+            log.warn("ejection rule ack failed, version={}", version, e);
         }
     }
 
@@ -281,23 +295,23 @@ public final class EjectionRuleSynchronizer implements AutoCloseable {
         }
 
         @Override
-        public void onSnapshot(List<EjectionRule> rules) {
-            if (!events.queue.offer(new SnapshotEvent(rules))) {
+        public void onSnapshot(List<EjectionRule> rules, long version) {
+            if (!events.queue.offer(new SnapshotEvent(rules, version))) {
                 log.warn("ejection rule event queue full, reconnecting for full snapshot");
                 events.signalReconnect();
             }
         }
 
         @Override
-        public void onEjected(EjectionRule rule) {
-            if (!events.queue.offer(new EjectedEvent(rule))) {
+        public void onEjected(EjectionRule rule, long version) {
+            if (!events.queue.offer(new EjectedEvent(rule, version))) {
                 events.signalReconnect();
             }
         }
 
         @Override
-        public void onRecovered(EjectionTarget target) {
-            if (!events.queue.offer(new RecoveredEvent(target))) {
+        public void onRecovered(EjectionTarget target, long version) {
+            if (!events.queue.offer(new RecoveredEvent(target, version))) {
                 events.signalReconnect();
             }
         }
@@ -308,9 +322,9 @@ public final class EjectionRuleSynchronizer implements AutoCloseable {
         }
     }
 
-    private record SnapshotEvent(List<EjectionRule> rules) {}
+    private record SnapshotEvent(List<EjectionRule> rules, long version) {}
 
-    private record EjectedEvent(EjectionRule rule) {}
+    private record EjectedEvent(EjectionRule rule, long version) {}
 
-    private record RecoveredEvent(EjectionTarget target) {}
+    private record RecoveredEvent(EjectionTarget target, long version) {}
 }

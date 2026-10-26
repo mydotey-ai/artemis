@@ -4,11 +4,13 @@ import java.time.Clock;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import lombok.extern.slf4j.Slf4j;
 import org.mydotey.ai.artemis.common.governance.EjectionScope;
 import org.mydotey.ai.artemis.management.domain.AuditLog;
 import org.mydotey.ai.artemis.management.domain.AuditLogStore;
 import org.mydotey.ai.artemis.management.domain.ConfigProperty;
+import org.mydotey.ai.artemis.management.domain.EjectionAckRegistry;
 import org.mydotey.ai.artemis.management.domain.EjectionAction;
 import org.mydotey.ai.artemis.management.domain.EjectionRecord;
 import org.mydotey.ai.artemis.management.domain.EjectionRecords;
@@ -22,6 +24,7 @@ import org.mydotey.ai.artemis.management.domain.LogicalInstance;
 import org.mydotey.ai.artemis.management.domain.LogicalInstancePublisher;
 import org.mydotey.ai.artemis.management.domain.LogicalInstanceStore;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryPort;
+import org.mydotey.ai.artemis.management.domain.RuleStatus;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
 import org.mydotey.ai.artemis.management.domain.ServiceSummary;
@@ -54,6 +57,7 @@ public final class ManagementServiceImpl implements ManagementService {
     private final EjectionStore ejections;
     private final AuditLogStore auditLogs;
     private final EjectionRulePublisher publisher;
+    private final EjectionAckRegistry acks;
     private final LogicalInstanceStore logicalInstances;
     private final LogicalInstancePublisher logicalPublisher;
     private final Clock clock;
@@ -63,6 +67,7 @@ public final class ManagementServiceImpl implements ManagementService {
             EjectionStore ejections,
             AuditLogStore auditLogs,
             EjectionRulePublisher publisher,
+            EjectionAckRegistry acks,
             LogicalInstanceStore logicalInstances,
             LogicalInstancePublisher logicalPublisher,
             Clock clock) {
@@ -70,6 +75,7 @@ public final class ManagementServiceImpl implements ManagementService {
         this.ejections = ejections;
         this.auditLogs = auditLogs;
         this.publisher = publisher;
+        this.acks = acks;
         this.logicalInstances = logicalInstances;
         this.logicalPublisher = logicalPublisher;
         this.clock = clock;
@@ -129,9 +135,10 @@ public final class ManagementServiceImpl implements ManagementService {
             if (!EjectionRecords.isActive(ejections.findAll(), target)) {
                 return; // 无可对消记录：幂等 no-op（不追加不审计）
             }
-            ejections.append(new EjectionRecord(target, EjectionAction.RECOVER, null, operator, clock.instant(), 0));
+            EjectionRecord stored = ejections.append(
+                    new EjectionRecord(target, EjectionAction.RECOVER, null, operator, clock.instant(), 0));
             if (!EjectionRecords.isActive(ejections.findAll(), target)) {
-                publisher.onRecovered(target); // 完全对消翻转入 inactive 才推（锁内，同 #1）
+                publisher.onRecovered(target, stored.sequence()); // 完全对消翻转入 inactive 才推（锁内，同 #1）
             }
         }
         audit(EjectionAction.RECOVER.name(), target.describe(), operator, null);
@@ -216,6 +223,22 @@ public final class ManagementServiceImpl implements ManagementService {
     @Override
     public List<ConfigProperty> configStatus() {
         return registry.configStatus();
+    }
+
+    @Override
+    public RuleStatus ruleStatus() {
+        long currentVersion = EjectionRecords.lastFlipSequence(ejections.findAll());
+        List<RuleStatus.SubscriberWatermark> subscribers = acks.entries().stream()
+                .map(entry -> new RuleStatus.SubscriberWatermark(
+                        entry.subscriberId(),
+                        entry.appliedVersion(),
+                        entry.lastAckAt(),
+                        Objects.equals(entry.appliedVersion(), currentVersion)))
+                .toList();
+        int appliedLatestCount = (int) subscribers.stream()
+                .filter(RuleStatus.SubscriberWatermark::atLatest)
+                .count();
+        return new RuleStatus(currentVersion, subscribers, appliedLatestCount);
     }
 
     /** 审计摘要行：尽力而为（失败不阻塞治理操作，仅记录；状态源唯一在业务存储）。 */

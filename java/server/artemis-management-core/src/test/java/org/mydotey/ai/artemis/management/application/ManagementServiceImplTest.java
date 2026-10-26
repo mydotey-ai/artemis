@@ -14,6 +14,7 @@ import org.mydotey.ai.artemis.common.governance.EjectionScope;
 import org.mydotey.ai.artemis.management.domain.AuditLog;
 import org.mydotey.ai.artemis.management.domain.AuditLogStore;
 import org.mydotey.ai.artemis.management.domain.ConfigProperty;
+import org.mydotey.ai.artemis.management.domain.EjectionAckRegistry;
 import org.mydotey.ai.artemis.management.domain.EjectionRecord;
 import org.mydotey.ai.artemis.management.domain.EjectionTarget;
 import org.mydotey.ai.artemis.management.domain.Instance;
@@ -45,11 +46,13 @@ class ManagementServiceImplTest {
     private final EjectionRuleDispatcher dispatcher = new EjectionRuleDispatcher(ejections);
     private final InMemoryLogicalInstanceStore logicalInstances = new InMemoryLogicalInstanceStore();
     private final LogicalInstanceDispatcher logicalDispatcher = new LogicalInstanceDispatcher(logicalInstances);
+    private final EjectionAckRegistry acks = new EjectionAckRegistry(Clock.fixed(NOW, ZoneOffset.UTC));
     private final ManagementServiceImpl service = new ManagementServiceImpl(
             registry,
             ejections,
             auditLogs,
             dispatcher,
+            acks,
             logicalInstances,
             logicalDispatcher,
             Clock.fixed(NOW, ZoneOffset.UTC));
@@ -239,7 +242,8 @@ class ManagementServiceImplTest {
         service.recover(target("i1"), OPERATOR); // 翻转入 inactive：推
 
         assertThat(subscriber.events)
-                .containsExactly("snapshot:0", "ejected:" + view.instanceId(), "recovered:" + view.instanceId());
+                .containsExactly(
+                        "snapshot:0:v0", "ejected:" + view.instanceId(), "recovered:" + view.instanceId() + ":v4");
     }
 
     @Test
@@ -263,7 +267,7 @@ class ManagementServiceImplTest {
         dispatcher.subscribe(subscriber);
 
         // 快照只含有效集（selector 级）
-        assertThat(subscriber.events).containsExactly("snapshot:1");
+        assertThat(subscriber.events).containsExactly("snapshot:1:v3");
     }
 
     // ---- 审计 ----
@@ -321,6 +325,7 @@ class ManagementServiceImplTest {
                 ejections,
                 failing,
                 dispatcher,
+                acks,
                 logicalInstances,
                 logicalDispatcher,
                 Clock.fixed(NOW, ZoneOffset.UTC));
@@ -443,6 +448,21 @@ class ManagementServiceImplTest {
 
     // ---- 设施 ----
 
+    @Test
+    void should_compose_rule_status_when_queried() {
+        service.eject(target("i1"), "r", OPERATOR); // 翻转 → 版本 1
+        acks.register("sub-1");
+        acks.record("sub-1", service.ruleStatus().currentVersion());
+
+        var status = service.ruleStatus();
+        assertThat(status.currentVersion()).isEqualTo(1L);
+        assertThat(status.appliedLatestCount()).isEqualTo(1);
+        assertThat(status.subscribers()).singleElement().satisfies(watermark -> {
+            assertThat(watermark.subscriberId()).isEqualTo("sub-1");
+            assertThat(watermark.atLatest()).isTrue();
+        });
+    }
+
     private static EjectionTarget target(String instanceId) {
         return EjectionTarget.instance(SERVICE, instanceId);
     }
@@ -491,8 +511,8 @@ class ManagementServiceImplTest {
         final List<String> events = new ArrayList<>();
 
         @Override
-        public void onSnapshot(List<EjectionRecord> records) {
-            events.add("snapshot:" + records.size());
+        public void onSnapshot(List<EjectionRecord> records, long version) {
+            events.add("snapshot:" + records.size() + ":v" + version);
         }
 
         @Override
@@ -501,8 +521,8 @@ class ManagementServiceImplTest {
         }
 
         @Override
-        public void onRecovered(EjectionTarget target) {
-            events.add("recovered:" + target.instanceId());
+        public void onRecovered(EjectionTarget target, long version) {
+            events.add("recovered:" + target.instanceId() + ":v" + version);
         }
 
         @Override
@@ -513,7 +533,7 @@ class ManagementServiceImplTest {
             implements org.mydotey.ai.artemis.management.domain.EjectionRuleSubscriber {
 
         @Override
-        public void onSnapshot(List<EjectionRecord> records) {
+        public void onSnapshot(List<EjectionRecord> records, long version) {
             throw new IllegalStateException("boom");
         }
 
@@ -523,7 +543,7 @@ class ManagementServiceImplTest {
         }
 
         @Override
-        public void onRecovered(EjectionTarget target) {
+        public void onRecovered(EjectionTarget target, long version) {
             throw new IllegalStateException("boom");
         }
 

@@ -83,6 +83,27 @@ public final class EjectionRecords {
         return counts;
     }
 
+    /**
+     * 规则集状态版本（phase-5）：最后一次生效态翻转记录的 sequence，无记录 = 0。
+     * 与推送语义对齐——叠加/对消无翻转不产生版本（占号跳号合法）；管理操作级频率，
+     * 全记录重放可忽略。
+     */
+    public static long lastFlipSequence(List<EjectionRecord> records) {
+        Map<EjectionTarget, Integer> balances = new HashMap<>();
+        Map<EjectionTarget, Boolean> active = new HashMap<>();
+        long lastFlip = 0;
+        for (EjectionRecord record : records) {
+            EjectionTarget target = record.target();
+            int balance = balances.merge(target, record.action() == EjectionAction.EJECT ? 1 : -1, Integer::sum);
+            boolean nowActive = balance > 0;
+            if (nowActive != active.getOrDefault(target, false)) {
+                active.put(target, nowActive);
+                lastFlip = record.sequence();
+            }
+        }
+        return lastFlip;
+    }
+
     /** 四级级联命中：instance 级 (service, instanceId) 等值，selector 级按 metadata[scope.metadataKey()] 等值；未命中 null。 */
     public static EjectionRecord match(List<EjectionRecord> active, ServiceKey service, Instance instance) {
         EjectionRecord matched = null;

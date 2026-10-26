@@ -1,6 +1,6 @@
 # discovery 发现管理 API
 
-版本: 1.0    更新时间: 2026-10-24
+版本: 1.1    更新时间: 2026-10-26
 
 > 本文定义 discovery-service 的**只读**发现管理面 HTTP API（`/admin/v1`，v0.3 phase-7）：订阅关系查看（调用方视角）、服务视图查询、上游状态/新鲜度查询。数据面 gRPC 契约见 [查询](discovery-query-api.md)、[订阅](discovery-subscription-api.md)、[对账](discovery-reconciliation-api.md)。
 
@@ -100,7 +100,7 @@
   "upstreams": [
     {"cluster": "cluster-a", "state": "SYNCED"}
   ],
-  "management": {"enabled": true, "state": "SYNCED"}
+  "management": {"enabled": true, "state": "SYNCED", "appliedVersion": 3}
 }
 ```
 
@@ -108,6 +108,7 @@
 - `management`：摘除规则源状态（phase-6 D-E9 出口）：
   - `enabled=false, state=DISABLED`：未配置 management（0..1），不订阅规则、不过滤。
   - `SYNCING` / `SYNCED` / `DISCONNECTED`：连接与首轮快照中 / 已同步消费增量 / 断流重连或已停机（规则冻结、最后已知规则继续生效）。
+  - `appliedVersion`：本节点已应用规则集版本（v0.4 phase-5；-1 = 尚未应用任何版本）——与 management 生效水位（`/admin/v1/status/rules`）对照排障。
 
 ## 6. 配置
 
@@ -117,4 +118,5 @@
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-26 | v0.4 phase-5：`management` 字段增 `appliedVersion`（本节点已应用规则集版本，与 management 水位对照） |
 | 1.0 | 2026-10-24 | 初版：v0.3 phase-7 只读发现管理面（订阅关系/服务视图/上游与规则源状态） |

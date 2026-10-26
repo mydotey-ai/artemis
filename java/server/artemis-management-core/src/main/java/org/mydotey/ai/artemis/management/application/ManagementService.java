@@ -7,6 +7,7 @@ import org.mydotey.ai.artemis.management.domain.ConfigProperty;
 import org.mydotey.ai.artemis.management.domain.EjectionTarget;
 import org.mydotey.ai.artemis.management.domain.LeaseStatus;
 import org.mydotey.ai.artemis.management.domain.LogicalInstance;
+import org.mydotey.ai.artemis.management.domain.RuleStatus;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
 
@@ -46,4 +47,7 @@ public interface ManagementService {
     SelfProtectionStatus selfProtectionStatus(String namespace, String service, boolean includeNormal);
 
     List<ConfigProperty> configStatus();
+
+    /** 规则生效水位（phase-5）：当前版本 + 各活订阅方已应用版本 + 已生效节点数。 */
+    RuleStatus ruleStatus();
 }

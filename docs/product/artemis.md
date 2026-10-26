@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.28    更新时间: 2026-10-25
+版本: 1.29    更新时间: 2026-10-26
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -215,7 +215,7 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 
 **v0.3 phase-6（management 摘除规则订阅与 discovery 过滤）已交付**：
 
-- **摘除规则流**（`management.v1 EjectionRuleService/WatchEjections`，server-stream）：management 内部 gRPC 端口（条件启用——配置 `artemis.management.grpc.port` 才监听，默认不监听可独立运行；独立认证默认关闭）。首条全量快照（message presence 区分空集）→ 其后增量按产生序；服务端单锁全序免快照竞态；at-most-once（无版本/ack，v0.4 完整规则链）、慢消费者 isReady 断流；management 内存态重启清零，discovery 重连空快照即摘除消失（期 1 设计内行为）。
+- **摘除规则流**（`management.v1 EjectionRuleService/WatchEjections`，server-stream）：management 内部 gRPC 端口（条件启用——配置 `artemis.management.grpc.port` 才监听，默认不监听可独立运行；独立认证默认关闭）。首条全量快照（message presence 区分空集）→ 其后增量按产生序；服务端单锁全序免快照竞态；at-most-once（v0.4 phase-5 起携带版本 + ack，见下 phase-5 节）、慢消费者 isReady 断流；management 内存态重启清零，discovery 重连空快照即摘除消失（期 1 设计内行为）。
 - **discovery 过滤器链 SPI**（继承资产 #7，架构 §4.2）：`DiscoveryFilter`（实例可见性谓词）+ 链（逐 filter fail-open——单 filter 异常放行不中断发现服务）。查询/订阅推送/对账 checksum **三出口一致过滤**（过滤后视图口径——checksum 不过滤会使 SDK 对账永久不一致）；checksum 零计算路径保留（规则无效果时读条目缓存）。
 - **摘除过滤语义**：规则按 `(namespace, service, instanceId)` 匹配**所有来源 cluster** 同键实例（跨 cluster 生效）；投影存储保持 registry 事实（未过滤），过滤只发生在视图构成时刻（与 phase-5 聚合同构）。规则变更以**视图语义直投**推送订阅者（摘除 → `DELETE` 携带实例完整数据、恢复 → `NEW`），labels/clusters/services 订阅过滤照常。
 - **fail-open / 最后已知规则**：management 不可用时 discovery 沿用最后已知规则继续过滤（规则缓存只在收到事件时替换、断连不清空），退避重连（默认 1s→10s）恢复后重新全量覆盖收敛。
@@ -281,10 +281,20 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **discovery 统一发现视图**：逻辑实例以保留 cluster `logical` 进入投影（复用既有投影同步/查询/订阅/对账全套）——与真实实例 union；摘除对逻辑实例同样生效（instance 级按键、selector 级按 metadata）；management 不可用时沿用最后已知逻辑实例（fail-open），不门控 discovery readiness；上游 cluster id 撞保留名启动失败。
 - **工程形态**：dispatcher/store/应用用例/映射单测；`LogicalInstanceStreamIT`（流契约）+ `DiscoveryLogicalInstanceIT`（三服务端到端：union/推送/摘除过滤/fail-open/0..1）+ 双方言 `LogicalInstancePersistenceIT`（跨重启重下发，无 Docker 环境跳过）。
 
+**v0.4 phase-5（规则下发闭环）已交付**：
+
+- **规则版本化**：摘除规则流事件（快照与增量）携带规则集状态版本 = **触发生效态翻转的记录 sequence**（DB 自增主键 / 内存计数器，零新增状态；叠加/对消无翻转不推亦不产生版本）。版本是**水位/观测语义，非顺序协议**——跳号合法、等/旧号增量幂等重放，正确性骨干仍是 at-most-once + 断流重连快照全量覆盖自愈。
+- **生效 ack 上行**：`EjectionRuleService` 增 `AckEjections` unary（discovery 应用规则后上报已应用版本；失败容忍，重连快照后重新 ack 收敛）；ack 走当前 watch 所在端点（订阅登记在该 management 进程）。
+- **生效水位 API**：`GET /admin/v1/status/rules`——当前版本 + 各**活订阅**已应用版本（appliedVersion/lastAckAt/atLatest）+ 已生效节点数（appliedLatestCount）。水位只反映活订阅（断流即清除，不冒充已生效、免无界滞留），内存观测态不持久化（重启经重连重建）；订阅条目带代际令牌，同 id 重连的迟到旧流注销不误删新条目。
+- **内存/DB 双态语义**：内存态 management 重启版本随记录归零（快照全量替换 + 重新 ack 后水位重新一致）；DB 态版本跨重启单调延续（sequence 持久）。
+- **discovery 本地对照**：`/admin/v1/upstreams` 增 `management.appliedVersion`（本节点已应用版本，-1 = 尚未应用）。
+- **工程形态**：`lastFlipSequence` 纯函数与 AckRegistry（代际令牌）单测 + 同步器 ack 行为单测；`EjectionRuleStreamIT`（版本 + ack 水位契约）+ `DiscoveryRuleAckLoopIT`（三服务端到端：水位可见 / management 重启重连重新 ack / 双 discovery 节点生效计数）+ 双方言 `EjectionPersistenceIT` 增版本跨重启延续断言。见 [ejection-rule-stream-api.md](../api/ejection-rule-stream-api.md)。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.29 | 2026-10-26 | v0.4 phase-5 交付：规则下发闭环——版本化规则流（版本 = 翻转记录 sequence）+ discovery ack 上行 + 生效水位 API（`GET /admin/v1/status/rules`）+ discovery 本地应用版本对照；phase-6 节「无版本/ack」表述修正 |
 | 1.28 | 2026-10-25 | v0.4 phase-4 交付：逻辑实例（静态实例）——模型/CRUD/V4 双方言持久化 + 专属下发流 + discovery 保留 cluster `logical` 统一发现视图（union/摘除生效/fail-open） |
 | 1.27 | 2026-10-25 | v0.4 phase-3 交付：四级摘除（metadata selector 实时匹配）+ 操作记录即状态（叠加/反向对消）+ V3 双方言持久化与审计 + 统一 ejection API + 跨重启重下发恢复 |
 | 1.26 | 2026-10-25 | v0.4 phase-2 交付：单管理员 DB 账户 + 统一认证接管（ADR-021：管理访问面收敛、配置凭证 seed 物化）、改密 API |

@@ -100,7 +100,8 @@ public final class DiscoveryAdminService {
         List<UpstreamStatus> upstreams = new ArrayList<>(upstreamStatuses.snapshot());
         upstreams.sort(Comparator.comparing(UpstreamStatus::cluster));
         ManagementState management = managementStatus.state();
-        return new UpstreamsView(upstreams, management != ManagementState.DISABLED, management);
+        return new UpstreamsView(
+                upstreams, management != ManagementState.DISABLED, management, managementStatus.appliedVersion());
     }
 
     private static void requireNonBlank(String value, String name) {

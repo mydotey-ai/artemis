@@ -183,6 +183,47 @@ class EjectionRuleStreamIT {
     }
 
     @Test
+    void should_carry_version_and_track_watermark_when_acked() throws Exception {
+        // 独立 subscriberId：免受其它用例流取消的注销竞态干扰
+        EventQueue events = watch("watermark-it");
+        EjectionRulesEvent snapshot = events.take(1).get(0);
+        long snapshotVersion = snapshot.getVersion();
+
+        // ack 已应用版本 → 水位可见（当前版本 = 已应用、生效节点数 1）
+        ack("watermark-it", snapshotVersion);
+        assertThat(ruleStatus().get("currentVersion").getAsLong()).isEqualTo(snapshotVersion);
+        assertThat(ruleStatus().get("appliedLatestCount").getAsInt()).isEqualTo(1);
+
+        // 摘除 → 增量携带更高版本；ack 前未生效（count 0），ack 后生效（count 1）
+        eject("i1", "maintenance");
+        EjectionRulesEvent ejected = events.take(1).get(0);
+        long ejectedVersion = ejected.getVersion();
+        assertThat(ejectedVersion).isGreaterThan(snapshotVersion);
+        assertThat(ruleStatus().get("appliedLatestCount").getAsInt()).isZero();
+        ack("watermark-it", ejectedVersion);
+        assertThat(ruleStatus().get("appliedLatestCount").getAsInt()).isEqualTo(1);
+
+        events.cancel(); // 流取消 → 本订阅方水位条目清除（水位只反映活订阅；
+        // 其它用例遗留未取消流的条目不在断言范围——channel 优雅关闭不主动断流）
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (hasWatermarkEntry("watermark-it")) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("watermark entry not evicted after cancel");
+            }
+            Thread.sleep(10);
+        }
+    }
+
+    private boolean hasWatermarkEntry(String subscriberId) {
+        for (var entry : ruleStatus().get("subscribers").getAsJsonArray()) {
+            if (entry.getAsJsonObject().get("subscriberId").getAsString().equals(subscriberId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Test
     void should_unregister_on_client_cancel_and_keep_stream_healthy() throws Exception {
         EventQueue cancelled = watch();
         cancelled.take(1); // 快照
@@ -200,17 +241,44 @@ class EjectionRuleStreamIT {
     // ---- 设施 ----
 
     private EventQueue watch() {
+        return watch("ejection-rule-it");
+    }
+
+    private EventQueue watch(String subscriberId) {
         EventQueue events = new EventQueue();
         io.grpc.ClientCall<EjectionRulesRequest, EjectionRulesEvent> call =
                 channel.newCall(EjectionRuleServiceGrpc.getWatchEjectionsMethod(), io.grpc.CallOptions.DEFAULT);
         events.attach(call);
         io.grpc.stub.ClientCalls.asyncServerStreamingCall(
                 call,
-                EjectionRulesRequest.newBuilder()
-                        .setSubscriberId("ejection-rule-it")
-                        .build(),
+                EjectionRulesRequest.newBuilder().setSubscriberId(subscriberId).build(),
                 events);
         return events;
+    }
+
+    /** 生效 ack 上行（phase-5）：unary AckEjections。 */
+    private void ack(String subscriberId, long appliedVersion) {
+        EjectionRuleServiceGrpc.newBlockingStub(channel)
+                .ackEjections(org.mydotey.ai.artemis.proto.management.v1.AckEjectionsRequest.newBuilder()
+                        .setSubscriberId(subscriberId)
+                        .setAppliedVersion(appliedVersion)
+                        .build());
+    }
+
+    /** GET /admin/v1/status/rules（phase-5 生效水位出口；gson 解析）。 */
+    private com.google.gson.JsonObject ruleStatus() {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create("http://localhost:" + httpPort + "/admin/v1/status/rules"))
+                    .header("Authorization", AUTH)
+                    .GET()
+                    .build();
+            return com.google.gson.JsonParser.parseString(HTTP.send(request, HttpResponse.BodyHandlers.ofString())
+                            .body())
+                    .getAsJsonObject();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private void eject(String instanceId, String reason) throws Exception {

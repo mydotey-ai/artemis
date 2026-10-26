@@ -18,7 +18,8 @@ import org.mydotey.ai.artemis.management.domain.EjectionTarget;
  * （ponytail: 若规则推送频率增长到机器级，迁移到同模式）。
  *
  * <p>快照 = 有效规则集（未对消，含四级；DB 态即跨重启恢复源）；增量由应用层仅在
- * 目标生效态翻转时触发（叠加/对消无翻转不推，防消费方误删仍生效规则）。
+ * 目标生效态翻转时触发（叠加/对消无翻转不推，防消费方误删仍生效规则）。事件携带
+ * 规则集状态版本 = 触发翻转记录 sequence（phase-5 水位语义，与「无翻转不推」对齐）。
  *
  * <p>at-most-once：推送失败（subscriber 回调抛出）= 断流注销，消费方重连全量自愈。
  */
@@ -41,9 +42,9 @@ public final class EjectionRuleDispatcher implements EjectionRulePublisher, Ejec
     }
 
     /** 恢复落库后由应用服务调用（仅生效态翻转入 inactive 时）。 */
-    public void onRecovered(EjectionTarget target) {
+    public void onRecovered(EjectionTarget target, long version) {
         synchronized (dispatchLock) {
-            push(subscriber -> subscriber.onRecovered(target));
+            push(subscriber -> subscriber.onRecovered(target, version));
         }
     }
 
@@ -51,10 +52,11 @@ public final class EjectionRuleDispatcher implements EjectionRulePublisher, Ejec
     public void subscribe(EjectionRuleSubscriber subscriber) {
         synchronized (dispatchLock) {
             // 快照现读与登记同锁段：登记后增量必达、快照含登记时刻全量，无窗口
-            List<EjectionRecord> snapshot = EjectionRecords.activeOf(store.findAll());
+            List<EjectionRecord> records = store.findAll();
+            List<EjectionRecord> snapshot = EjectionRecords.activeOf(records);
             subscribers.add(subscriber);
             try {
-                subscriber.onSnapshot(snapshot);
+                subscriber.onSnapshot(snapshot, EjectionRecords.lastFlipSequence(records));
             } catch (RuntimeException e) {
                 disconnect(subscriber, "snapshot push failed", e);
             }

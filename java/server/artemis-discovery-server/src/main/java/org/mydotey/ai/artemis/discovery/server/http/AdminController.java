@@ -54,7 +54,8 @@ public final class AdminController {
     public UpstreamsResponse upstreams() {
         var view = adminService.upstreams();
         return new UpstreamsResponse(
-                view.upstreams(), new ManagementView(view.managementEnabled(), view.managementState()));
+                view.upstreams(),
+                new ManagementView(view.managementEnabled(), view.managementState(), view.managementAppliedVersion()));
     }
 
     /** 契约输出形态（D-A3）：选择器拍平为 services/labels/clusters，集合稳定排序。 */
@@ -87,5 +88,6 @@ public final class AdminController {
 
     public record UpstreamsResponse(List<UpstreamStatus> upstreams, ManagementView management) {}
 
-    public record ManagementView(boolean enabled, ManagementState state) {}
+    /** appliedVersion：本节点已应用规则集版本（-1 = 尚未应用；phase-5 排障对照）。 */
+    public record ManagementView(boolean enabled, ManagementState state, long appliedVersion) {}
 }

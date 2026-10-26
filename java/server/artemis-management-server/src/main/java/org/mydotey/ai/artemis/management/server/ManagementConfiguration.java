@@ -9,6 +9,7 @@ import org.mydotey.ai.artemis.management.application.ManagementServiceImpl;
 import org.mydotey.ai.artemis.management.application.PersistenceInfo;
 import org.mydotey.ai.artemis.management.domain.AccountStore;
 import org.mydotey.ai.artemis.management.domain.AuditLogStore;
+import org.mydotey.ai.artemis.management.domain.EjectionAckRegistry;
 import org.mydotey.ai.artemis.management.domain.EjectionStore;
 import org.mydotey.ai.artemis.management.domain.LogicalInstanceStore;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryPort;
@@ -96,6 +97,12 @@ public class ManagementConfiguration {
         return new EjectionRuleDispatcher(ejectionStore);
     }
 
+    /** 生效 ack 登记无条件装配（phase-5；内存观测态，无订阅者零条目）。 */
+    @Bean
+    EjectionAckRegistry ejectionAckRegistry(Clock clock) {
+        return new EjectionAckRegistry(clock);
+    }
+
     /** 逻辑实例流分发无条件装配（无 gRPC 端口时零订阅者，通知为空操作）。 */
     @Bean(destroyMethod = "close")
     LogicalInstanceDispatcher logicalInstanceDispatcher(LogicalInstanceStore logicalInstanceStore) {
@@ -156,6 +163,7 @@ public class ManagementConfiguration {
             EjectionStore ejectionStore,
             AuditLogStore auditLogStore,
             EjectionRuleDispatcher ejectionRuleDispatcher,
+            EjectionAckRegistry ejectionAckRegistry,
             LogicalInstanceStore logicalInstanceStore,
             LogicalInstanceDispatcher logicalInstanceDispatcher,
             Clock clock) {
@@ -164,6 +172,7 @@ public class ManagementConfiguration {
                 ejectionStore,
                 auditLogStore,
                 ejectionRuleDispatcher,
+                ejectionAckRegistry,
                 logicalInstanceStore,
                 logicalInstanceDispatcher,
                 clock);

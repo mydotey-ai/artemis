@@ -28,9 +28,9 @@ class EjectionRuleDispatcherTest {
         dispatcher.subscribe(subscriber);
 
         dispatcher.onEjected(eject(EjectionTarget.instance(SERVICE, "i2"), "r2"));
-        dispatcher.onRecovered(EjectionTarget.selector(EjectionScope.ZONE, "dc-2"));
+        dispatcher.onRecovered(EjectionTarget.selector(EjectionScope.ZONE, "dc-2"), 3);
 
-        assertThat(subscriber.events).containsExactly("snapshot:i1", "ejected:i2", "recovered:zone:dc-2");
+        assertThat(subscriber.events).containsExactly("snapshot:v1:i1", "ejected:v0:i2", "recovered:v3:zone:dc-2");
     }
 
     @Test
@@ -38,7 +38,7 @@ class EjectionRuleDispatcherTest {
         RecordingSubscriber subscriber = new RecordingSubscriber();
         dispatcher.subscribe(subscriber);
 
-        assertThat(subscriber.events).containsExactly("snapshot:");
+        assertThat(subscriber.events).containsExactly("snapshot:v0:");
     }
 
     @Test
@@ -53,7 +53,7 @@ class EjectionRuleDispatcherTest {
 
         dispatcher.subscribe(subscriber);
 
-        assertThat(subscriber.events).containsExactly("snapshot:i1,i2");
+        assertThat(subscriber.events).containsExactly("snapshot:v2:i1,i2");
     }
 
     @Test
@@ -66,7 +66,7 @@ class EjectionRuleDispatcherTest {
         RecordingSubscriber subscriber = new RecordingSubscriber();
         dispatcher.subscribe(subscriber);
 
-        assertThat(subscriber.events).containsExactly("snapshot:server:10.1.1.1");
+        assertThat(subscriber.events).containsExactly("snapshot:v3:server:10.1.1.1");
     }
 
     @Test
@@ -79,8 +79,23 @@ class EjectionRuleDispatcherTest {
 
         dispatcher.onEjected(eject(EjectionTarget.instance(SERVICE, "i9"), "r"));
 
-        assertThat(healthy.events).containsExactly("snapshot:", "ejected:i9");
-        assertThat(failing.events).containsExactly("snapshot:"); // 断流注销后不再收到
+        assertThat(healthy.events).containsExactly("snapshot:v0:", "ejected:v0:i9");
+        assertThat(failing.events).containsExactly("snapshot:v0:"); // 断流注销后不再收到
+    }
+
+    @Test
+    void should_carry_flip_record_sequence_as_version_when_dispatching() {
+        // seq1 翻转入 active（版本 1）；seq2 叠加无翻转——不推、不产生版本
+        store.append(eject(EjectionTarget.instance(SERVICE, "i1"), "r1"));
+        store.append(eject(EjectionTarget.instance(SERVICE, "i1"), "r2"));
+        RecordingSubscriber subscriber = new RecordingSubscriber();
+        dispatcher.subscribe(subscriber);
+
+        // seq3 翻转（i2 新目标）：增量携带触发记录 sequence
+        EjectionRecord third = store.append(eject(EjectionTarget.instance(SERVICE, "i2"), "r3"));
+        dispatcher.onEjected(third);
+
+        assertThat(subscriber.events).containsExactly("snapshot:v1:i1", "ejected:v3:i2");
     }
 
     @Test
@@ -111,8 +126,8 @@ class EjectionRuleDispatcherTest {
         boolean closed;
 
         @Override
-        public void onSnapshot(List<EjectionRecord> records) {
-            events.add("snapshot:"
+        public void onSnapshot(List<EjectionRecord> records, long version) {
+            events.add("snapshot:v" + version + ":"
                     + records.stream()
                             .map(record -> record.target().scope() == EjectionScope.INSTANCE
                                     ? record.target().instanceId()
@@ -127,12 +142,12 @@ class EjectionRuleDispatcherTest {
             if (failOnEjected) {
                 throw new IllegalStateException("boom");
             }
-            events.add("ejected:" + record.target().instanceId());
+            events.add("ejected:v" + record.sequence() + ":" + record.target().instanceId());
         }
 
         @Override
-        public void onRecovered(EjectionTarget target) {
-            events.add("recovered:"
+        public void onRecovered(EjectionTarget target, long version) {
+            events.add("recovered:v" + version + ":"
                     + (target.scope() == EjectionScope.INSTANCE
                             ? target.instanceId()
                             : target.scope().name().toLowerCase() + ":" + target.value()));
