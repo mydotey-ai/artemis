@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.33    更新时间: 2026-10-27
+版本: 1.34    更新时间: 2026-10-27
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -315,14 +315,23 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 
 - **两段状态机**（继承资产 §5-5 现代化）：生效列 `weight` 唯一写入口 = release / rollback——编辑通道（create/update）物理不触碰生效值（create 初始 0、update 按 selector 等值继承，等值重复 target 拒绝），从根上修复原产品「编辑清空已发布权重」缺陷模式；结构（selector 集合）单份直改（明示边界：结构变更直接生效，权重值变更走两段）。
 - **发布与回滚（资源 `release`，一个 API 一个运维意图）**：`POST .../release` 拷贝编辑列生效 + 落 append-only 发布记录（快照）；`POST .../rollback` 指向历史记录的反向 release——两列写回源快照完全恢复该发布时刻状态；`GET .../diff` 发布预览（基 = 最新/指定发布快照，结构增删与权重变更全量可见）、`GET .../releases` 历史列表（一键回滚的输入源）。见 [admin-api.md](../api/admin-api.md) §4.11。
-- **规则流下发 + 生效水位**：独立 `management.v1 RouteRuleService`（快照/增量 + envelope version + `AckRouteRules`，形态复用 v0.4 版本化规则流）；流内容 = ACTIVE 集、版本 = dispatcher tick（重启归零经重连快照收敛）；生效水位出口 `GET /admin/v1/status/rules` 增 routeRules 节（与摘除流独立版本域）；discovery 侧缓存消费 + `/upstreams` 对照（fail-open）。**执行（selector 过滤）归 phase-3**——当前规则变化不影响发现结果。见 [route-rule-stream-api.md](../api/route-rule-stream-api.md)。
+- **规则流下发 + 生效水位**：独立 `management.v1 RouteRuleService`（快照/增量 + envelope version + `AckRouteRules`，形态复用 v0.4 版本化规则流）；流内容 = ACTIVE 集、版本 = dispatcher tick（重启归零经重连快照收敛）；生效水位出口 `GET /admin/v1/status/rules` 增 routeRules 节（与摘除流独立版本域）；discovery 侧缓存消费 + `/upstreams` 对照（fail-open）。**执行（selector 过滤）见下 phase-3**。见 [route-rule-stream-api.md](../api/route-rule-stream-api.md)。
 - **V6 双方言持久化**：`artemis_route_rule_release`（append-only，索引 (namespace, service, rule_name, id)；记录保留不随规则删除级联）——DB 态 release 记录跨重启保留、重启后按历史 releaseId 回滚仍生效；两写无跨表事务（生效优先：update → 流通知 → 记录 append，失败重试幂等补录）。
 - **工程形态**：`routeRuleLock` 写推成对串行（防流上乱序，ejectionLock 先例）；code-review 11 findings（修 7 / 接受 4：无存量兼容 ×2、结构债 phase-3 收 ×2）；两写失败流通知缺口与记录坏行放大两高优修复；14 单测 + 5 IT（端到端灰度「一个 API 完成」与回滚视图还原——roadmap v0.5 验收要点前两条落地）。
+
+**v0.5 phase-3（分组路由执行）已交付**：
+
+- **执行语义（Group filter，权重二值承接）**：route-rule 在 discovery 过滤器链的执行点落地——实例可见 ⟺ 命中目标中任一**生效列 `weight` > 0**（0 = 摘出发现视图；比例切分归调用方侧消费，注册中心只表达与执行「谁承接流量」）；非空 selector（多键 AND 等值匹配实例 metadata）命中、未命中任何 selector 的实例归兜底目标（空 selector，至多一条）；命中 0 权重目标的实例**不归兜底**；服务多规则 AND、无规则全可见；逻辑实例（`logical` cluster）与真实实例同判定。与摘除过滤 AND 叠加（正交），查询/推送/对账 checksums 三出口一致口径，逐 filter fail-open。
+- **规则变化视图直投**：规则流事件应用 = 表锁内「过滤器整集替换 + 新旧可见性对称差扇出」成对——退出视图发 DELETE、进入发 NEW（与投影扇出/基线互斥，ejection 同型）；受影响服务 = 规则覆盖服务集（服务内资源，无 selector 全局波及）；fail-open 断流不清缓存（最后已知规则继续）。
+- **两段发布联动语义（运维须知）**：release 使生效权重跨越 0 → 视图变化 + 直投；未跨 0 的权重调整不影响视图（水位照常推进）；rollback 同构反向。**创建规则未 release 时生效列全 0 = 该服务全部实例摘出**（创建 = 定义结构、release = 生效的严格执行语义）——安全姿势 = INACTIVE 创建（流不下发）→ release → activate。
+- **纵深防御**：空 targets 规则（上游不变量破坏）视为无治理意图全可见——规则数据损坏不得静默摘除整个服务；多兜底目标取首个生效（确定性降级）。
+- **工程形态**：结构债 #9 收口（ejection/route-rule 两同步器抽 `ManagementRuleSynchronizer` 共享骨架，ejection 既有测试原样通过为安全网）+ #10 收口（两规则流 source 抽 `ManagementRuleChannels` 共享 channel/轮换/认证设施）；零 proto/API/配置变更；code-review 7 findings 全修；17 单测 + 4 IT（三出口一致 / 无兜底摘出 / 回滚还原 / 逻辑实例）。
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.34 | 2026-10-27 | v0.5 phase-3 交付：Group filter 执行语义（selector 匹配 + 权重二值承接 + 兜底）+ 规则变化视图直投 + 三出口一致 + 结构债 #9/#10 收口；phase-2 节「执行归 phase-3」状态句更新 |
 | 1.33 | 2026-10-27 | v0.5 phase-2 交付：两段状态机（编辑通道收紧）+ release/rollback/diff/releases + RouteRuleService 规则流与 routeRules 水位 + V6 发布记录持久化 |
 | 1.32 | 2026-10-26 | v0.5 phase-1 交付：route-rule 资源模型（等值选择器 + 两段双权重）+ V5 双方言持久化 + 资源导向 CRUD 与审计 |
 | 1.31 | 2026-10-26 | v0.4 phase-7 交付：三服务 all-in-one 完整形态（治理链默认闭合 + DB 双轨 + 组合键 +3）+ 四要点端到端；模块表 dist 行更新 |

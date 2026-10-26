@@ -58,6 +58,93 @@ class RouteRulesTest {
                         org.assertj.core.groups.Tuple.tuple("pay-service", "z"));
     }
 
+    @Test
+    void should_route_visibility_by_selector_and_weight() {
+        // beta 组 weight 0（摘出）+ 兜底 weight 70
+        RouteRules rules = RouteRules.of(List.of(new RouteRule(
+                ORDER,
+                "release",
+                List.of(
+                        new RouteRule.RouteRuleTarget(Map.of("group", "beta"), 0, 30),
+                        new RouteRule.RouteRuleTarget(Map.of(), 70, 70)))));
+
+        assertThat(rules.isVisible(ORDER, Map.of("group", "beta"))).isFalse(); // 命中 0 权重目标 → 摘出
+        assertThat(rules.isVisible(ORDER, Map.of("group", "stable"))).isTrue(); // 未命中 → 兜底承接
+        assertThat(rules.isVisible(ORDER, Map.of())).isTrue(); // 无 metadata 约定 → 兜底承接
+        assertThat(rules.isVisible(PAY, Map.of("group", "beta"))).isTrue(); // 服务无规则 → 全可见
+        assertThat(rules.services()).containsExactly(ORDER);
+
+        // 命中 0 权重目标不归兜底（兜底 > 0 仍摘出）；多键 AND：单键命中不匹配
+        RouteRules twoKeys = RouteRules.of(List.of(new RouteRule(
+                ORDER,
+                "zone",
+                List.of(new RouteRule.RouteRuleTarget(Map.of("group", "beta", "zone", "dc-1"), 100, 100)))));
+        assertThat(twoKeys.isVisible(ORDER, Map.of("group", "beta"))).isFalse();
+        assertThat(twoKeys.isVisible(ORDER, Map.of("group", "beta", "zone", "dc-1")))
+                .isTrue();
+
+        // 无兜底：未命中任何 selector 的实例无承接目标 → 不可见
+        RouteRules noFallback = RouteRules.of(List.of(new RouteRule(
+                ORDER, "only", List.of(new RouteRule.RouteRuleTarget(Map.of("group", "beta"), 100, 100)))));
+        assertThat(noFallback.isVisible(ORDER, Map.of("group", "stable"))).isFalse();
+        assertThat(noFallback.isVisible(ORDER, Map.of("group", "beta"))).isTrue();
+    }
+
+    @Test
+    void should_combine_multiple_rules_with_and() {
+        // r1 只放 beta 组、r2 只放 dc-1：实例须同时满足两条才可见
+        RouteRules rules = RouteRules.of(List.of(
+                new RouteRule(
+                        ORDER, "group", List.of(new RouteRule.RouteRuleTarget(Map.of("group", "beta"), 100, 100))),
+                new RouteRule(
+                        ORDER, "zone", List.of(new RouteRule.RouteRuleTarget(Map.of("zone", "dc-1"), 100, 100)))));
+
+        assertThat(rules.isVisible(ORDER, Map.of("group", "beta", "zone", "dc-1")))
+                .isTrue();
+        assertThat(rules.isVisible(ORDER, Map.of("group", "beta", "zone", "dc-2")))
+                .isFalse();
+        assertThat(rules.rules(ORDER)).hasSize(2);
+    }
+
+    @Test
+    void should_reflect_rule_updates_in_group_filter() {
+        GroupFilter filter = new GroupFilter();
+        Instance beta = new Instance("i1", "10.0.0.1", 8080, InstanceStatus.UP, 100, Map.of("group", "beta"));
+        Instance stable = new Instance("i2", "10.0.0.1", 8080, InstanceStatus.UP, 100, Map.of("group", "stable"));
+
+        assertThat(filter.isVisible(ORDER, beta)).isTrue(); // 无规则全可见
+
+        filter.replace(RouteRules.of(List.of(new RouteRule(
+                ORDER,
+                "release",
+                List.of(
+                        new RouteRule.RouteRuleTarget(Map.of("group", "beta"), 0, 30),
+                        new RouteRule.RouteRuleTarget(Map.of(), 70, 70))))));
+        assertThat(filter.isVisible(ORDER, beta)).isFalse();
+        assertThat(filter.isVisible(ORDER, stable)).isTrue();
+
+        filter.replace(RouteRules.EMPTY);
+        assertThat(filter.isVisible(ORDER, beta)).isTrue(); // 空快照回归全可见
+    }
+
+    @Test
+    void should_tolerate_malformed_rule_as_no_governance() {
+        // 空 targets（management 校验 1–10 条但 wire 不设防）：视为无治理意图全可见，
+        // 规则数据损坏不得静默摘除整个服务（review #1 纵深防御）
+        RouteRules emptyTargets = RouteRules.of(List.of(new RouteRule(ORDER, "broken", List.of())));
+        assertThat(emptyTargets.isVisible(ORDER, Map.of("group", "beta"))).isTrue();
+
+        // 多兜底目标（违反「至多一条」等值约束）：首个生效（review #2 确定性降级）——
+        // 首个 w0、次个 w70 → 按首个判定，未命中实例摘出
+        RouteRules twoFallbacks = RouteRules.of(List.of(new RouteRule(
+                ORDER,
+                "dup",
+                List.of(
+                        new RouteRule.RouteRuleTarget(Map.of(), 0, 0),
+                        new RouteRule.RouteRuleTarget(Map.of(), 70, 70)))));
+        assertThat(twoFallbacks.isVisible(ORDER, Map.of())).isFalse();
+    }
+
     private static RouteRule rule(ServiceKey service, String name) {
         return new RouteRule(service, name, List.of(new RouteRule.RouteRuleTarget(Map.of(), 100, 100)));
     }

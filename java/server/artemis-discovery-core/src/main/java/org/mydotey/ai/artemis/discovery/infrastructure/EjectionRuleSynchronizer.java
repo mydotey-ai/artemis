@@ -1,66 +1,34 @@
 package org.mydotey.ai.artemis.discovery.infrastructure;
 
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
 import lombok.extern.slf4j.Slf4j;
-import org.mydotey.ai.artemis.discovery.domain.ChangeType;
 import org.mydotey.ai.artemis.discovery.domain.EjectionFilter;
 import org.mydotey.ai.artemis.discovery.domain.EjectionRule;
 import org.mydotey.ai.artemis.discovery.domain.EjectionRuleListener;
 import org.mydotey.ai.artemis.discovery.domain.EjectionRuleSource;
 import org.mydotey.ai.artemis.discovery.domain.EjectionRules;
 import org.mydotey.ai.artemis.discovery.domain.EjectionTarget;
-import org.mydotey.ai.artemis.discovery.domain.Instance;
-import org.mydotey.ai.artemis.discovery.domain.InstanceChange;
-import org.mydotey.ai.artemis.discovery.domain.ManagementState;
 import org.mydotey.ai.artemis.discovery.domain.ManagementStatus;
 import org.mydotey.ai.artemis.discovery.domain.ProjectionRegistry;
-import org.mydotey.ai.artemis.discovery.domain.ServiceChange;
 import org.mydotey.ai.artemis.discovery.domain.ServiceInstances;
 import org.mydotey.ai.artemis.discovery.domain.ServiceKey;
 import org.mydotey.ai.artemis.discovery.domain.SubscriptionManager;
 
 /**
- * 摘除规则同步引擎（D-E3/D-E6/D-E7）：单同步线程循环 + per-round 有界事件队列
- * （模式同 {@link ProjectionSynchronizer} 简化——快照在流内首条，无 bootstrap 两段序）。
+ * 摘除规则同步引擎（D-E3/D-E6/D-E7，骨架见 {@link ManagementRuleSynchronizer}）：
+ * 应用 = 表锁内「EjectionFilter 替换 + 新旧规则集对称差扇出」成对（review FIX-1 同型，
+ * 与投影线程「translate + apply」互斥——防双路径事件丢失）。
  *
- * <p>事件应用：快照 = 全量替换、增量 = with/without；应用 = 先 {@link EjectionFilter#replace}
- * （volatile 发布，查询/对账/翻译即时生效）后新旧规则集对称差扇出（D-E6）——受影响服务
- * 逐 cluster 取投影实例完整数据（投影无此实例则该 cluster 无推送——视图本无效果），
- * ejected-now → DELETE、recovered-now → NEW，经 {@link SubscriptionManager#onViewChanges}
- * 视图语义直投（表锁内，与投影扇出/基线互斥）。规则跨 cluster 生效（D-E5）。
- *
- * <p>fail-open（D-E3）：断流不清缓存——规则集只在收到事件时替换，断连期间最后已知
- * 规则继续生效；全抖动指数退避（默认 1s→10s）重连，恢复即重新全量覆盖收敛。
- * readiness 不受影响（规则是过滤增强，非数据面同步）。
- *
- * <p>生效 ack（phase-5）：每次应用（快照/增量）后向 management 上报已应用版本，
- * worker 线程内联短超时调用（管理操作级频率）；失败 WARN 放弃——重连快照后重新
- * ack 收敛，无需重试状态机。
+ * <p>受影响服务 = instance 级规则服务键 ∪ selector 级值集变化时的全部投影服务
+ * （selector 规则全局生效，D-E5）；逐投影实例按四级判定取新旧可见性差。
  */
 @Slf4j
-public final class EjectionRuleSynchronizer implements AutoCloseable {
+public final class EjectionRuleSynchronizer extends ManagementRuleSynchronizer {
 
     private final EjectionRuleSource source;
     private final EjectionFilter filter;
-    private final ProjectionRegistry registry;
-    private final SubscriptionManager subscriptionManager;
-    private final ManagementStatus managementStatus;
-
-    private final int queueCapacity;
-    private final long backoffMinMs;
-    private final long backoffMaxMs;
-
-    private final Thread worker;
-    private volatile boolean running = true;
-    private volatile boolean enabled = true;
-    private boolean everSynced; // worker 线程独占（断连判定，同 ProjectionSynchronizer）
 
     public EjectionRuleSynchronizer(
             ManagementSyncProperties sync,
@@ -69,120 +37,51 @@ public final class EjectionRuleSynchronizer implements AutoCloseable {
             ProjectionRegistry registry,
             SubscriptionManager subscriptionManager,
             ManagementStatus managementStatus) {
+        super(sync, managementStatus, registry, subscriptionManager, "artemis-discovery-ejection-sync");
         this.source = source;
         this.filter = filter;
-        this.registry = registry;
-        this.subscriptionManager = subscriptionManager;
-        this.managementStatus = managementStatus;
-        this.queueCapacity = sync.queueCapacity;
-        this.backoffMinMs = sync.backoffMinMs;
-        this.backoffMaxMs = sync.backoffMaxMs;
-        this.worker =
-                Thread.ofPlatform().name("artemis-discovery-ejection-sync").unstarted(this::run);
     }
 
-    /** 未配置 management（0..1，D-E4）时装配层调用：start 不启动线程、零开销，状态 DISABLED。 */
-    public void disable() {
-        enabled = false;
-        managementStatus.update(ManagementState.DISABLED);
+    @Override
+    protected AutoCloseable watch(EventSink sink) {
+        return source.watch(new ForwardingListener(sink));
     }
 
-    public void start() {
-        if (!enabled) {
-            return;
-        }
-        managementStatus.update(ManagementState.SYNCING);
-        worker.start();
+    @Override
+    protected void ack(long appliedVersion) {
+        source.ack(appliedVersion);
     }
 
-    private void run() {
-        long backoffBase = 0;
-        while (running) {
-            try {
-                managementStatus.update(ManagementState.SYNCING);
-                syncRound();
-                backoffBase = 0; // 成功一轮即重置退避
-            } catch (InterruptedException e) {
-                return; // close 中断
-            } catch (Exception e) {
-                log.warn("ejection rule sync round failed", e);
-            }
-            if (everSynced) {
-                managementStatus.update(ManagementState.DISCONNECTED); // 规则冻结、最后已知规则继续（D-E3）
-            }
-            backoffBase = nextBackoffBase(backoffBase);
-            try {
-                sleepJittered(backoffBase);
-            } catch (InterruptedException e) {
-                return; // close 中断
-            }
-        }
-    }
-
-    /** 单轮：watch → 消费事件直到断流。断流不清缓存（D-E3），退避后整轮重来（重新全量覆盖）。 */
-    private void syncRound() throws InterruptedException {
-        RoundEvents events = new RoundEvents();
-        try (var ignored = source.watch(new ForwardingListener(events))) {
-            drain(events);
-        }
-    }
-
-    private void drain(RoundEvents events) throws InterruptedException {
-        while (running && !events.reconnectRequested) {
-            Object event = events.queue.take();
-            if (event == events.reconnectSentinel) {
-                return;
-            }
-            apply(event);
-        }
-    }
-
-    private void apply(Object event) {
+    @Override
+    protected void apply(Object event) {
         if (event instanceof SnapshotEvent snapshot) {
-            applyAndFanout(filter.rules(), EjectionRules.of(snapshot.rules()));
-            everSynced = true;
-            managementStatus.update(ManagementState.SYNCED);
+            applyAndFanout(EjectionRules.of(snapshot.rules()));
             log.info(
                     "ejection rules snapshot applied, rules={}, version={}",
                     snapshot.rules().size(),
                     snapshot.version());
             applied(snapshot.version());
         } else if (event instanceof EjectedEvent ejected) {
-            applyAndFanout(filter.rules(), filter.rules().with(ejected.rule()));
+            applyAndFanout(filter.rules().with(ejected.rule()));
             applied(ejected.version());
         } else if (event instanceof RecoveredEvent recovered) {
-            applyAndFanout(filter.rules(), filter.rules().without(recovered.target()));
+            applyAndFanout(filter.rules().without(recovered.target()));
             applied(recovered.version());
         }
     }
 
-    /** 应用收尾（phase-5）：推进本地已应用版本并上报 management。 */
-    private void applied(long version) {
-        managementStatus.updateAppliedVersion(version);
-        try {
-            source.ack(version);
-        } catch (Exception e) {
-            log.warn("ejection rule ack failed, version={}", version, e);
-        }
-    }
-
-    private void applyAndFanout(EjectionRules oldRules, EjectionRules newRules) {
+    private void applyAndFanout(EjectionRules newRules) {
+        EjectionRules oldRules = filter.rules();
         if (oldRules == newRules) {
             return; // 幂等增量无变化
         }
-        // 表锁内「规则替换 + 扇出」成对（review FIX-1 同型）：与投影线程的「translate + apply」
-        // 互斥——否则 [replace, lock] 窗口内投影 DELETE 已摘除实例会双路径皆无事件
-        // （translate 判不可见、fanoutDiff 判投影已无），视图退出 DELETE 丢失。
+        // 表锁内「规则替换 + 扇出」成对（review FIX-1 同型）
         subscriptionManager.runWithFanout(() -> {
             filter.replace(newRules);
             fanoutDiff(oldRules, newRules);
         });
     }
 
-    /** 新旧规则集对称差 → 受影响服务逐 cluster 视图变更直投（D-E6，跨 cluster 生效 D-E5）；
-     * 调用方已持表锁。受影响服务 = instance 级规则服务键 ∪ selector 值集变化时的全部投影服务；
-     * 逐投影实例按四级判定（instance 级 + selector metadata 匹配）取新旧可见性差。
-     * ponytail: selector 扇出全投影扫描（低频运维操作）；规则 × 服务规模增长后按 metadata 反向索引。 */
     private void fanoutDiff(EjectionRules oldRules, EjectionRules newRules) {
         Set<ServiceKey> affected = new HashSet<>(oldRules.services());
         affected.addAll(newRules.services());
@@ -193,108 +92,46 @@ public final class EjectionRuleSynchronizer implements AutoCloseable {
                 }
             }
         }
-        for (ServiceKey service : affected) {
-            for (String cluster : registry.clusterIds()) {
-                ServiceInstances projection = registry.service(cluster, service);
-                if (projection == null) {
-                    continue;
-                }
-                List<InstanceChange> changes = null;
-                for (Instance instance : projection.instances()) {
-                    boolean wasEjected = oldRules.isEjected(service, instance.instanceId(), instance.metadata());
-                    boolean nowEjected = newRules.isEjected(service, instance.instanceId(), instance.metadata());
-                    if (nowEjected && !wasEjected) {
-                        changes = addChange(changes, instance, ChangeType.DELETE);
-                    } else if (wasEjected && !nowEjected) {
-                        changes = addChange(changes, instance, ChangeType.NEW);
-                    }
-                }
-                if (changes != null && !changes.isEmpty()) {
-                    subscriptionManager.onViewChanges(cluster, List.of(new ServiceChange(service, changes)));
-                }
-            }
-        }
-    }
-
-    private static List<InstanceChange> addChange(List<InstanceChange> changes, Instance instance, ChangeType type) {
-        if (changes == null) {
-            changes = new ArrayList<>();
-        }
-        changes.add(new InstanceChange(instance, type));
-        return changes;
-    }
-
-    /** 全抖动指数退避（同 ProjectionSynchronizer 策略）：base 倍增封顶，sleep 取 [0, base) 均匀。 */
-    private long nextBackoffBase(long currentBase) {
-        long next = currentBase == 0 ? backoffMinMs : Math.min(currentBase * 2, backoffMaxMs);
-        return Math.max(1, next);
-    }
-
-    private void sleepJittered(long base) throws InterruptedException {
-        TimeUnit.MILLISECONDS.sleep(ThreadLocalRandom.current().nextLong(base) + 1);
-    }
-
-    @Override
-    public void close() {
-        running = false;
-        worker.interrupt();
-        if (enabled) {
-            managementStatus.update(ManagementState.DISCONNECTED); // 停机后不再连接规则源
-        }
-        try {
-            worker.join(5_000);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
-    /** 本轮事件通道：队列 + 断流标志 + 哨兵（旧轮对象被新轮替换即整体废弃）。 */
-    private final class RoundEvents {
-
-        private final Object reconnectSentinel = new Object();
-        private final BlockingQueue<Object> queue = new ArrayBlockingQueue<>(queueCapacity);
-        private volatile boolean reconnectRequested;
-
-        void signalReconnect() {
-            reconnectRequested = true;
-            queue.offer(reconnectSentinel); // 队列满时失败无妨：drain 每轮检查标志兜底
-        }
+        fanoutVisibilityDiff(
+                affected,
+                (service, instance) -> !oldRules.isEjected(service, instance.instanceId(), instance.metadata()),
+                (service, instance) -> !newRules.isEjected(service, instance.instanceId(), instance.metadata()));
     }
 
     /** gRPC 回调线程转发：只 offer 到本轮队列，慢消费（队列满）触发断流重连。 */
     private final class ForwardingListener implements EjectionRuleListener {
 
-        private final RoundEvents events;
+        private final EventSink sink;
 
-        ForwardingListener(RoundEvents events) {
-            this.events = events;
+        ForwardingListener(EventSink sink) {
+            this.sink = sink;
         }
 
         @Override
         public void onSnapshot(List<EjectionRule> rules, long version) {
-            if (!events.queue.offer(new SnapshotEvent(rules, version))) {
+            if (!sink.offer(new SnapshotEvent(rules, version))) {
                 log.warn("ejection rule event queue full, reconnecting for full snapshot");
-                events.signalReconnect();
+                sink.signalReconnect();
             }
         }
 
         @Override
         public void onEjected(EjectionRule rule, long version) {
-            if (!events.queue.offer(new EjectedEvent(rule, version))) {
-                events.signalReconnect();
+            if (!sink.offer(new EjectedEvent(rule, version))) {
+                sink.signalReconnect();
             }
         }
 
         @Override
         public void onRecovered(EjectionTarget target, long version) {
-            if (!events.queue.offer(new RecoveredEvent(target, version))) {
-                events.signalReconnect();
+            if (!sink.offer(new RecoveredEvent(target, version))) {
+                sink.signalReconnect();
             }
         }
 
         @Override
         public void onClosed() {
-            events.signalReconnect();
+            sink.signalReconnect();
         }
     }
 

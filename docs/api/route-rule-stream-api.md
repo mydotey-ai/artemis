@@ -1,6 +1,6 @@
 # management 路由规则流 API
 
-版本: 1.0    更新时间: 2026-10-27
+版本: 1.1    更新时间: 2026-10-27
 
 > 本文定义 management → discovery 的路由规则订阅流契约（v0.5 phase-2，架构 §2.2 通道①）。**非 SDK 公开 API**：契约位于 `management.v1`（管理面组），client SDK 不生成；消费者是 discovery-service。形态复用 v0.4 版本化规则流（快照/增量 + envelope version + ack 生效水位，[ejection-rule-stream-api.md](ejection-rule-stream-api.md) 同构）；承载两段式权重发布的规则下发（管理侧语义见 [admin-api.md](admin-api.md) §4.10–4.11）。
 
@@ -36,11 +36,12 @@
 
 ## 4. discovery 侧应用语义
 
-- **phase-2 只缓存不执行**：规则视图整集替换（快照）/幂等集合操作（增量 upsert/delete）+ 应用后 ack；**selector 匹配与权重切分执行（Group filter）归 v0.5 phase-3** 接入过滤器链（届时按摘除流「视图变更直投」模式补扇出）。
+- **执行已接入（phase-3，Group filter）**：规则视图整集替换（快照）/幂等集合操作（增量 upsert/delete）+ 应用后 ack；执行 = 过滤器链可见性判定（selector 等值匹配 + 生效权重二值承接，产品文档 v0.5 phase-3 节）+ 规则变化「视图变更直投」扇出（摘除流同型：退出 DELETE / 进入 NEW，与投影扇出/基线互斥）——查询/推送/对账三出口一致。
 - **fail-open / 未配置 management（0..1）**：断流不清缓存（最后已知规则继续）、未配置不订阅不执行——均同摘除流纪律。
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-27 | phase-3 执行接入：§4 「只缓存不执行」边界更新为 Group filter 执行 + 视图直投扇出 |
 | 1.0 | 2026-10-27 | 初版：v0.5 phase-2 路由规则订阅流契约（ACTIVE 集 / upsert-deleted 增量 / version = dispatcher tick / AckRouteRules 水位 / 只缓存不执行边界） |

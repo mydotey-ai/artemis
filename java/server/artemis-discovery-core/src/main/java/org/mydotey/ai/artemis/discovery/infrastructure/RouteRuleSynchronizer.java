@@ -1,220 +1,132 @@
 package org.mydotey.ai.artemis.discovery.infrastructure;
 
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
-import org.mydotey.ai.artemis.discovery.domain.ManagementState;
+import org.mydotey.ai.artemis.discovery.domain.GroupFilter;
 import org.mydotey.ai.artemis.discovery.domain.ManagementStatus;
+import org.mydotey.ai.artemis.discovery.domain.ProjectionRegistry;
 import org.mydotey.ai.artemis.discovery.domain.RouteRule;
 import org.mydotey.ai.artemis.discovery.domain.RouteRuleKey;
 import org.mydotey.ai.artemis.discovery.domain.RouteRuleListener;
 import org.mydotey.ai.artemis.discovery.domain.RouteRuleSource;
 import org.mydotey.ai.artemis.discovery.domain.RouteRules;
+import org.mydotey.ai.artemis.discovery.domain.ServiceKey;
+import org.mydotey.ai.artemis.discovery.domain.SubscriptionManager;
 
 /**
- * 路由规则同步引擎（phase-2）：单同步线程循环 + per-round 有界事件队列 + 全抖动退避
- * 重连（骨架同 {@link EjectionRuleSynchronizer}，减去扇出——phase-2 只缓存规则视图，
- * phase-3 Group filter 接执行点时按 ejection {@code runWithFanout} 模式补视图直投）。
- *
- * <p>应用 = 整集替换（快照）或幂等集合操作（增量 upsert/delete），volatile 发布当前
- * 集（{@link #rules()} 本地视图 + IT 断言通道）。fail-open（D-E3）：断流不清缓存，
- * 最后已知规则继续；重连重新全量覆盖收敛。生效 ack：每次应用后向 management 上报
- * 已应用版本（worker 线程内联短超时，失败 WARN 放弃——重连快照后重新 ack 收敛）。
+ * 路由规则同步引擎（phase-2 缓存，phase-3 接执行点，骨架见
+ * {@link ManagementRuleSynchronizer}）：应用 = 表锁内「GroupFilter 整集替换 + 新旧
+ * 规则集对称差扇出」成对（ejection FIX-1 同型）。受影响服务 = 新旧规则集 service 键集
+ * 并（route-rule 是服务内资源，selector 不跨服务生效——无 ejection 的 selector 全局
+ * 波及分支）；退出视图 DELETE、进入视图 NEW，判定与 {@link GroupFilter} 同源。
  */
 @Slf4j
-public final class RouteRuleSynchronizer implements AutoCloseable {
+public final class RouteRuleSynchronizer extends ManagementRuleSynchronizer {
 
     private final RouteRuleSource source;
-    private final ManagementStatus managementStatus;
-
-    private final int queueCapacity;
-    private final long backoffMinMs;
-    private final long backoffMaxMs;
-
-    private final Thread worker;
-    private volatile boolean running = true;
-    private volatile boolean enabled = true;
-    private boolean everSynced; // worker 线程独占（断连判定，同 EjectionRuleSynchronizer）
-    private volatile RouteRules current = RouteRules.EMPTY;
+    private final GroupFilter filter;
 
     public RouteRuleSynchronizer(
-            ManagementSyncProperties sync, RouteRuleSource source, ManagementStatus managementStatus) {
+            ManagementSyncProperties sync,
+            RouteRuleSource source,
+            GroupFilter filter,
+            ProjectionRegistry registry,
+            SubscriptionManager subscriptionManager,
+            ManagementStatus managementStatus) {
+        super(sync, managementStatus, registry, subscriptionManager, "artemis-discovery-route-rule-sync");
         this.source = source;
-        this.managementStatus = managementStatus;
-        this.queueCapacity = sync.queueCapacity;
-        this.backoffMinMs = sync.backoffMinMs;
-        this.backoffMaxMs = sync.backoffMaxMs;
-        this.worker =
-                Thread.ofPlatform().name("artemis-discovery-route-rule-sync").unstarted(this::run);
+        this.filter = filter;
     }
 
-    /** 当前规则集（volatile 发布；本地视图与 IT 断言通道，phase-3 filter 消费）。 */
+    /** 当前生效规则集（filter 同源视图；排障与 IT 断言通道）。 */
     public RouteRules rules() {
-        return current;
+        return filter.rules();
     }
 
-    /** 未配置 management（0..1，D-E4）时装配层调用：start 不启动线程、零开销。 */
-    public void disable() {
-        enabled = false;
-        managementStatus.update(ManagementState.DISABLED);
+    @Override
+    protected AutoCloseable watch(EventSink sink) {
+        return source.watch(new ForwardingListener(sink));
     }
 
-    public void start() {
-        if (!enabled) {
-            return;
-        }
-        managementStatus.update(ManagementState.SYNCING);
-        worker.start();
+    @Override
+    protected void ack(long appliedVersion) {
+        source.ack(appliedVersion);
     }
 
-    private void run() {
-        long backoffBase = 0;
-        while (running) {
-            try {
-                managementStatus.update(ManagementState.SYNCING);
-                syncRound();
-                backoffBase = 0; // 成功一轮即重置退避
-            } catch (InterruptedException e) {
-                return; // close 中断
-            } catch (Exception e) {
-                log.warn("route rule sync round failed", e);
-            }
-            if (everSynced) {
-                managementStatus.update(ManagementState.DISCONNECTED); // 规则冻结、最后已知规则继续（D-E3）
-            }
-            backoffBase = nextBackoffBase(backoffBase);
-            try {
-                sleepJittered(backoffBase);
-            } catch (InterruptedException e) {
-                return; // close 中断
-            }
-        }
-    }
-
-    /** 单轮：watch → 消费事件直到断流。断流不清缓存（D-E3），退避后整轮重来。 */
-    private void syncRound() throws InterruptedException {
-        RoundEvents events = new RoundEvents();
-        try (var ignored = source.watch(new ForwardingListener(events))) {
-            drain(events);
-        }
-    }
-
-    private void drain(RoundEvents events) throws InterruptedException {
-        while (running && !events.reconnectRequested) {
-            Object event = events.queue.take();
-            if (event == events.reconnectSentinel) {
-                return;
-            }
-            apply(event);
-        }
-    }
-
-    private void apply(Object event) {
+    @Override
+    protected void apply(Object event) {
         if (event instanceof SnapshotEvent snapshot) {
-            everSynced = true;
-            current = RouteRules.of(snapshot.rules());
+            applyAndFanout(RouteRules.of(snapshot.rules()));
             log.info(
                     "route rules snapshot applied, rules={}, version={}",
                     snapshot.rules().size(),
                     snapshot.version());
             applied(snapshot.version());
         } else if (event instanceof UpsertedEvent upserted) {
-            current = current.with(upserted.rule());
+            applyAndFanout(filter.rules().with(upserted.rule()));
             applied(upserted.version());
         } else if (event instanceof DeletedEvent deleted) {
-            current = current.without(deleted.key());
+            applyAndFanout(filter.rules().without(deleted.key()));
             applied(deleted.version());
         }
     }
 
-    /** 应用收尾：推进本地已应用版本并上报 management（失败 WARN 放弃，重连快照重新 ack）。 */
-    private void applied(long version) {
-        managementStatus.update(ManagementState.SYNCED);
-        managementStatus.updateAppliedVersion(version);
-        try {
-            source.ack(version);
-        } catch (Exception e) {
-            log.warn("route rule ack failed, version={}", version, e);
+    private void applyAndFanout(RouteRules newRules) {
+        RouteRules oldRules = filter.rules();
+        if (oldRules == newRules) {
+            return; // 幂等增量无变化
         }
-    }
-
-    /** 全抖动指数退避（同 EjectionRuleSynchronizer 策略）。 */
-    private long nextBackoffBase(long currentBase) {
-        long next = currentBase == 0 ? backoffMinMs : Math.min(currentBase * 2, backoffMaxMs);
-        return Math.max(1, next);
-    }
-
-    private void sleepJittered(long base) throws InterruptedException {
-        TimeUnit.MILLISECONDS.sleep(ThreadLocalRandom.current().nextLong(base) + 1);
-    }
-
-    @Override
-    public void close() {
-        running = false;
-        worker.interrupt();
-        if (enabled) {
-            managementStatus.update(ManagementState.DISCONNECTED); // 停机后不再连接规则源
-        }
-        try {
-            worker.join(5_000);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
-    /** 本轮事件通道：队列 + 断流标志 + 哨兵（旧轮对象被新轮替换即整体废弃）。 */
-    private final class RoundEvents {
-
-        private final Object reconnectSentinel = new Object();
-        private final BlockingQueue<Object> queue = new ArrayBlockingQueue<>(queueCapacity);
-        private volatile boolean reconnectRequested;
-
-        void signalReconnect() {
-            reconnectRequested = true;
-            queue.offer(reconnectSentinel); // 队列满时失败无妨：drain 每轮检查标志兜底
-        }
+        subscriptionManager.runWithFanout(() -> {
+            filter.replace(newRules);
+            Set<ServiceKey> affected = new HashSet<>(oldRules.services());
+            affected.addAll(newRules.services());
+            fanoutVisibilityDiff(
+                    affected,
+                    (service, instance) -> oldRules.isVisible(service, instance.metadata()),
+                    (service, instance) -> newRules.isVisible(service, instance.metadata()));
+        });
     }
 
     /** gRPC 回调线程转发：只 offer 到本轮队列，慢消费（队列满）触发断流重连。 */
     private final class ForwardingListener implements RouteRuleListener {
 
-        private final RoundEvents events;
+        private final EventSink sink;
 
-        ForwardingListener(RoundEvents events) {
-            this.events = events;
+        ForwardingListener(EventSink sink) {
+            this.sink = sink;
         }
 
         @Override
-        public void onSnapshot(java.util.List<RouteRule> rules, long version) {
-            if (!events.queue.offer(new SnapshotEvent(rules, version))) {
+        public void onSnapshot(List<RouteRule> rules, long version) {
+            if (!sink.offer(new SnapshotEvent(rules, version))) {
                 log.warn("route rule event queue full, reconnecting for full snapshot");
-                events.signalReconnect();
+                sink.signalReconnect();
             }
         }
 
         @Override
         public void onUpserted(RouteRule rule, long version) {
-            if (!events.queue.offer(new UpsertedEvent(rule, version))) {
-                events.signalReconnect();
+            if (!sink.offer(new UpsertedEvent(rule, version))) {
+                sink.signalReconnect();
             }
         }
 
         @Override
         public void onDeleted(RouteRuleKey key, long version) {
-            if (!events.queue.offer(new DeletedEvent(key, version))) {
-                events.signalReconnect();
+            if (!sink.offer(new DeletedEvent(key, version))) {
+                sink.signalReconnect();
             }
         }
 
         @Override
         public void onClosed() {
-            events.signalReconnect();
+            sink.signalReconnect();
         }
     }
 
-    private record SnapshotEvent(java.util.List<RouteRule> rules, long version) {}
+    private record SnapshotEvent(List<RouteRule> rules, long version) {}
 
     private record UpsertedEvent(RouteRule rule, long version) {}
 

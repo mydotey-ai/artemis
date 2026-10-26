@@ -10,6 +10,7 @@ import org.mydotey.ai.artemis.discovery.application.DiscoveryReconciliationServi
 import org.mydotey.ai.artemis.discovery.application.DiscoverySubscriptionService;
 import org.mydotey.ai.artemis.discovery.domain.DiscoveryFilterChain;
 import org.mydotey.ai.artemis.discovery.domain.EjectionFilter;
+import org.mydotey.ai.artemis.discovery.domain.GroupFilter;
 import org.mydotey.ai.artemis.discovery.domain.ManagementStatus;
 import org.mydotey.ai.artemis.discovery.domain.ProjectionRegistry;
 import org.mydotey.ai.artemis.discovery.domain.SubscriptionManager;
@@ -88,8 +89,17 @@ public class DiscoveryConfiguration {
     }
 
     @Bean
-    DiscoveryFilterChain discoveryFilterChain(ManagementConfig managementConfig, EjectionFilter ejectionFilter) {
-        return managementConfig.enabled() ? DiscoveryFilterChain.of(ejectionFilter) : DiscoveryFilterChain.empty();
+    GroupFilter groupFilter() {
+        return new GroupFilter();
+    }
+
+    /** 链上 AND 叠加：摘除与分组路由正交（顺序无关）。 */
+    @Bean
+    DiscoveryFilterChain discoveryFilterChain(
+            ManagementConfig managementConfig, EjectionFilter ejectionFilter, GroupFilter groupFilter) {
+        return managementConfig.enabled()
+                ? DiscoveryFilterChain.of(ejectionFilter, groupFilter)
+                : DiscoveryFilterChain.empty();
     }
 
     @Bean
@@ -200,15 +210,23 @@ public class DiscoveryConfiguration {
         return new GrpcRouteRuleSource(managementConfig, managementAuthConfig);
     }
 
-    /** 路由规则同步引擎（phase-2，只缓存不执行——执行点 phase-3 接入）：未配置 management 不启动。 */
+    /** 路由规则同步引擎（phase-3 接执行点：GroupFilter 发布 + 视图扇出）：未配置 management 不启动。 */
     @Bean(initMethod = "start", destroyMethod = "close")
     RouteRuleSynchronizer routeRuleSynchronizer(
             ManagementSyncProperties managementSyncProperties,
             ManagementConfig managementConfig,
             GrpcRouteRuleSource routeRuleSource,
+            GroupFilter groupFilter,
+            ProjectionRegistry registry,
+            SubscriptionManager subscriptionManager,
             @Qualifier("routeRuleManagementStatus") ManagementStatus routeRuleManagementStatus) {
-        RouteRuleSynchronizer synchronizer =
-                new RouteRuleSynchronizer(managementSyncProperties, routeRuleSource, routeRuleManagementStatus);
+        RouteRuleSynchronizer synchronizer = new RouteRuleSynchronizer(
+                managementSyncProperties,
+                routeRuleSource,
+                groupFilter,
+                registry,
+                subscriptionManager,
+                routeRuleManagementStatus);
         if (!managementConfig.enabled()) {
             synchronizer.disable(); // 0..1：不建连接不启线程
         }
