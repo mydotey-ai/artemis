@@ -1,5 +1,6 @@
 package org.mydotey.ai.artemis.management.domain;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -107,5 +108,42 @@ class RouteRulesTest {
 
     private static RouteRule rule(String name, List<RouteRuleTarget> targets) {
         return new RouteRule(SERVICE, name, RouteRuleStatus.ACTIVE, targets, null, null, null);
+    }
+    // ---- phase-2：等值重复与 ACTIVE 过滤 ----
+
+    @Test
+    void should_reject_duplicate_selector_targets_when_validate() {
+        RouteRule rule = new RouteRule(
+                new ServiceKey("ns", "svc"),
+                "beta",
+                RouteRuleStatus.ACTIVE,
+                List.of(
+                        new RouteRuleTarget(Map.of("group", "beta"), 0, 20),
+                        new RouteRuleTarget(Map.of("group", "beta"), 0, 30)),
+                null,
+                null,
+                null);
+
+        assertThatThrownBy(() -> RouteRules.validate(rule)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void should_filter_active_rules_when_active_of() {
+        RouteRule active = rule(RouteRuleStatus.ACTIVE);
+        RouteRule inactive = rule(RouteRuleStatus.INACTIVE);
+
+        assertThat(RouteRules.activeOf(List.of(active, inactive))).containsExactly(active);
+        assertThat(RouteRules.activeOf(List.of(inactive))).isEmpty();
+    }
+
+    private static RouteRule rule(RouteRuleStatus status) {
+        return new RouteRule(
+                new ServiceKey("ns", "svc"),
+                "beta",
+                status,
+                List.of(new RouteRuleTarget(Map.of(), 0, 100)),
+                null,
+                null,
+                null);
     }
 }

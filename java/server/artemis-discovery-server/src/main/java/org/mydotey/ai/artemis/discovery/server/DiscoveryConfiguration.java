@@ -15,6 +15,8 @@ import org.mydotey.ai.artemis.discovery.domain.ProjectionRegistry;
 import org.mydotey.ai.artemis.discovery.domain.SubscriptionManager;
 import org.mydotey.ai.artemis.discovery.domain.UpstreamStatuses;
 import org.mydotey.ai.artemis.discovery.infrastructure.EjectionRuleSynchronizer;
+import org.mydotey.ai.artemis.discovery.infrastructure.ManagementSyncProperties;
+import org.mydotey.ai.artemis.discovery.infrastructure.RouteRuleSynchronizer;
 import org.mydotey.ai.artemis.discovery.server.auth.AuthConfig;
 import org.mydotey.ai.artemis.discovery.server.config.DiscoveryConfigurationSources;
 import org.mydotey.ai.artemis.discovery.server.grpc.DiscoveryQueryGrpcService;
@@ -27,6 +29,7 @@ import org.mydotey.ai.artemis.discovery.server.health.DiscoveryReadinessHealthIn
 import org.mydotey.ai.artemis.discovery.server.http.HttpBasicAuthFilter;
 import org.mydotey.ai.artemis.discovery.server.upstream.GrpcEjectionRuleSource;
 import org.mydotey.ai.artemis.discovery.server.upstream.GrpcLogicalInstanceSource;
+import org.mydotey.ai.artemis.discovery.server.upstream.GrpcRouteRuleSource;
 import org.mydotey.ai.artemis.discovery.server.upstream.ManagementAuthConfig;
 import org.mydotey.ai.artemis.discovery.server.upstream.ManagementConfig;
 import org.mydotey.ai.artemis.discovery.server.upstream.NodeDirectoryConfig;
@@ -35,6 +38,7 @@ import org.mydotey.ai.artemis.discovery.server.upstream.UpstreamConfig;
 import org.mydotey.ai.artemis.discovery.server.upstream.UpstreamSynchronizers;
 import org.mydotey.scf.ConfigurationManager;
 import org.mydotey.scf.facade.StringProperties;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
@@ -148,24 +152,63 @@ public class DiscoveryConfiguration {
         return new GrpcLogicalInstanceSource(managementConfig, managementAuthConfig);
     }
 
+    /** management 上游同步共享参数（phase-2）：同 SCF key 单一 PropertyConfig，两同步器同源。 */
+    @Bean
+    ManagementSyncProperties managementSyncProperties(StringProperties properties) {
+        return new ManagementSyncProperties(properties);
+    }
+
     /** 规则源状态持有者（phase-7 D-A5）：同步引擎上报、管理面查询。 */
     @Bean
     ManagementStatus managementStatus() {
         return new ManagementStatus();
     }
 
+    /** 路由规则流状态持有者（phase-2，与摘除流独立实例——状态与版本域 per 流）。 */
+    @Bean
+    ManagementStatus routeRuleManagementStatus() {
+        return new ManagementStatus();
+    }
+
     /** 规则同步引擎（phase-6）：未配置 management 时不启动线程（0..1，D-E4/D-E3）。 */
     @Bean(initMethod = "start", destroyMethod = "close")
     EjectionRuleSynchronizer ejectionRuleSynchronizer(
-            StringProperties properties,
+            ManagementSyncProperties managementSyncProperties,
             ManagementConfig managementConfig,
             GrpcEjectionRuleSource ejectionRuleSource,
             EjectionFilter ejectionFilter,
             ProjectionRegistry registry,
             SubscriptionManager subscriptionManager,
-            ManagementStatus managementStatus) {
+            @Qualifier("managementStatus") ManagementStatus managementStatus) {
         EjectionRuleSynchronizer synchronizer = new EjectionRuleSynchronizer(
-                properties, ejectionRuleSource, ejectionFilter, registry, subscriptionManager, managementStatus);
+                managementSyncProperties,
+                ejectionRuleSource,
+                ejectionFilter,
+                registry,
+                subscriptionManager,
+                managementStatus);
+        if (!managementConfig.enabled()) {
+            synchronizer.disable(); // 0..1：不建连接不启线程
+        }
+        return synchronizer;
+    }
+
+    /** 路由规则流 gRPC 源（phase-2；未启用时惰性零连接，channel 池随 context 关闭释放）。 */
+    @Bean(destroyMethod = "close")
+    GrpcRouteRuleSource grpcRouteRuleSource(
+            ManagementConfig managementConfig, ManagementAuthConfig managementAuthConfig) {
+        return new GrpcRouteRuleSource(managementConfig, managementAuthConfig);
+    }
+
+    /** 路由规则同步引擎（phase-2，只缓存不执行——执行点 phase-3 接入）：未配置 management 不启动。 */
+    @Bean(initMethod = "start", destroyMethod = "close")
+    RouteRuleSynchronizer routeRuleSynchronizer(
+            ManagementSyncProperties managementSyncProperties,
+            ManagementConfig managementConfig,
+            GrpcRouteRuleSource routeRuleSource,
+            @Qualifier("routeRuleManagementStatus") ManagementStatus routeRuleManagementStatus) {
+        RouteRuleSynchronizer synchronizer =
+                new RouteRuleSynchronizer(managementSyncProperties, routeRuleSource, routeRuleManagementStatus);
         if (!managementConfig.enabled()) {
             synchronizer.disable(); // 0..1：不建连接不启线程
         }
@@ -220,8 +263,10 @@ public class DiscoveryConfiguration {
             ProjectionRegistry registry,
             DiscoveryFilterChain chain,
             UpstreamStatuses upstreamStatuses,
-            ManagementStatus managementStatus) {
-        return new DiscoveryAdminService(subscriptionManager, registry, chain, upstreamStatuses, managementStatus);
+            @Qualifier("managementStatus") ManagementStatus managementStatus,
+            @Qualifier("routeRuleManagementStatus") ManagementStatus routeRuleManagementStatus) {
+        return new DiscoveryAdminService(
+                subscriptionManager, registry, chain, upstreamStatuses, managementStatus, routeRuleManagementStatus);
     }
 
     /** 管理面 HTTP 认证：仅 /admin/*（D-A7），账户与外部 gRPC 共用。 */

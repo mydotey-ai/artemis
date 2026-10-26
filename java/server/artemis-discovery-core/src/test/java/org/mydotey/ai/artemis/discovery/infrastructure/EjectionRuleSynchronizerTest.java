@@ -48,10 +48,12 @@ class EjectionRuleSynchronizerTest {
 
     private EjectionRuleSynchronizer startSynchronizer(long backoffMinMs, long backoffMaxMs) {
         EjectionRuleSynchronizer synchronizer = new EjectionRuleSynchronizer(
-                new TestProperties(Map.of(
-                                "artemis.discovery.management.reconnectBackoffMinMs", String.valueOf(backoffMinMs),
-                                "artemis.discovery.management.reconnectBackoffMaxMs", String.valueOf(backoffMaxMs)))
-                        .properties(),
+                new ManagementSyncProperties(new TestProperties(Map.of(
+                                "artemis.discovery.management.reconnectBackoffMinMs",
+                                String.valueOf(backoffMinMs),
+                                "artemis.discovery.management.reconnectBackoffMaxMs",
+                                String.valueOf(backoffMaxMs)))
+                        .properties()),
                 source,
                 filter,
                 registry,
@@ -87,7 +89,12 @@ class EjectionRuleSynchronizerTest {
     @Test
     void should_report_disabled_when_management_not_configured() {
         EjectionRuleSynchronizer synchronizer = new EjectionRuleSynchronizer(
-                new TestProperties(Map.of()).properties(), source, filter, registry, manager, status);
+                new ManagementSyncProperties(new TestProperties(Map.of()).properties()),
+                source,
+                filter,
+                registry,
+                manager,
+                status);
         synchronizer.disable();
 
         assertThat(status.state()).isEqualTo(ManagementState.DISABLED);

@@ -17,7 +17,6 @@ import org.mydotey.ai.artemis.common.governance.EjectionScope;
 import org.mydotey.ai.artemis.management.domain.AuditLog;
 import org.mydotey.ai.artemis.management.domain.AuditLogStore;
 import org.mydotey.ai.artemis.management.domain.ConfigProperty;
-import org.mydotey.ai.artemis.management.domain.EjectionAckRegistry;
 import org.mydotey.ai.artemis.management.domain.EjectionRecord;
 import org.mydotey.ai.artemis.management.domain.EjectionTarget;
 import org.mydotey.ai.artemis.management.domain.Instance;
@@ -26,10 +25,13 @@ import org.mydotey.ai.artemis.management.domain.LeaseDetail;
 import org.mydotey.ai.artemis.management.domain.LeaseStatus;
 import org.mydotey.ai.artemis.management.domain.LogicalInstance;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryPort;
+import org.mydotey.ai.artemis.management.domain.ReleaseType;
 import org.mydotey.ai.artemis.management.domain.RouteRule;
 import org.mydotey.ai.artemis.management.domain.RouteRuleException;
+import org.mydotey.ai.artemis.management.domain.RouteRuleRelease;
 import org.mydotey.ai.artemis.management.domain.RouteRuleStatus;
 import org.mydotey.ai.artemis.management.domain.RouteRuleTarget;
+import org.mydotey.ai.artemis.management.domain.RuleAckRegistry;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStats;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
@@ -39,8 +41,10 @@ import org.mydotey.ai.artemis.management.infrastructure.EjectionRuleDispatcher;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryAuditLogStore;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryEjectionStore;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryLogicalInstanceStore;
+import org.mydotey.ai.artemis.management.infrastructure.InMemoryRouteRuleReleaseStore;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryRouteRuleStore;
 import org.mydotey.ai.artemis.management.infrastructure.LogicalInstanceDispatcher;
+import org.mydotey.ai.artemis.management.infrastructure.RouteRuleDispatcher;
 
 class ManagementServiceImplTest {
 
@@ -55,10 +59,24 @@ class ManagementServiceImplTest {
     private final InMemoryLogicalInstanceStore logicalInstances = new InMemoryLogicalInstanceStore();
     private final LogicalInstanceDispatcher logicalDispatcher = new LogicalInstanceDispatcher(logicalInstances);
     private final InMemoryRouteRuleStore routeRules = new InMemoryRouteRuleStore();
-    private final EjectionAckRegistry acks = new EjectionAckRegistry(Clock.fixed(NOW, ZoneOffset.UTC));
+    private final InMemoryRouteRuleReleaseStore releases = new InMemoryRouteRuleReleaseStore();
+    private final RouteRuleDispatcher routeRuleDispatcher = new RouteRuleDispatcher(routeRules);
+    private final RuleAckRegistry acks = new RuleAckRegistry(Clock.fixed(NOW, ZoneOffset.UTC));
+    private final RuleAckRegistry routeRuleAcks = new RuleAckRegistry(Clock.fixed(NOW, ZoneOffset.UTC));
     private final SettableClock clock = new SettableClock();
     private final ManagementServiceImpl service = new ManagementServiceImpl(
-            registry, ejections, auditLogs, dispatcher, acks, logicalInstances, logicalDispatcher, routeRules, clock);
+            registry,
+            ejections,
+            auditLogs,
+            dispatcher,
+            acks,
+            logicalInstances,
+            logicalDispatcher,
+            routeRules,
+            releases,
+            routeRuleDispatcher,
+            routeRuleAcks,
+            clock);
 
     // ---- 视图组合 ----
 
@@ -429,6 +447,9 @@ class ManagementServiceImplTest {
                 logicalInstances,
                 logicalDispatcher,
                 routeRules,
+                releases,
+                routeRuleDispatcher,
+                routeRuleAcks,
                 Clock.fixed(NOW, ZoneOffset.UTC));
 
         assertThat(serviceWithFailingAudit.eject(target("i1"), "r", OPERATOR)).isNotNull();
@@ -743,6 +764,253 @@ class ManagementServiceImplTest {
                         RouteRuleException.class, e -> assertThat(e.code()).isEqualTo(RouteRuleException.NOT_FOUND));
     }
 
+    // ---- 两段式发布（v0.5 phase-2）----
+
+    @Test
+    void should_initialize_weight_zero_when_create_route_rule() {
+        // 传入 weight 999 亦归零：生效列唯一写入口是 release/rollback（两段式不变量）
+        RouteRule created = service.createRouteRule(rule("beta", Map.of("group", "beta"), 999, 80), OPERATOR);
+
+        assertThat(created.targets()).singleElement().satisfies(target -> {
+            assertThat(target.weight()).isZero();
+            assertThat(target.unreleasedWeight()).isEqualTo(80);
+        });
+    }
+
+    @Test
+    void should_inherit_weight_by_selector_equality_when_update() {
+        service.createRouteRule(
+                new RouteRule(
+                        SERVICE,
+                        "beta",
+                        RouteRuleStatus.ACTIVE,
+                        List.of(
+                                new RouteRuleTarget(Map.of("group", "beta"), 0, 20),
+                                new RouteRuleTarget(Map.of(), 0, 80)),
+                        null,
+                        null,
+                        null),
+                OPERATOR);
+        service.releaseRouteRule(SERVICE, "beta", OPERATOR); // 生效列 20/80
+        clock.set(NOW.plusSeconds(60));
+
+        // 编辑：beta 目标改权重 30、新增 canary 目标；selector 等值继承生效列
+        RouteRule updated = service.updateRouteRule(
+                new RouteRule(
+                        SERVICE,
+                        "beta",
+                        RouteRuleStatus.ACTIVE,
+                        List.of(
+                                new RouteRuleTarget(Map.of("group", "beta"), 0, 30),
+                                new RouteRuleTarget(Map.of("group", "canary"), 0, 10),
+                                new RouteRuleTarget(Map.of(), 0, 70)),
+                        null,
+                        null,
+                        null),
+                OPERATOR);
+
+        assertThat(updated.targets())
+                .extracting(RouteRuleTarget::selector, RouteRuleTarget::weight, RouteRuleTarget::unreleasedWeight)
+                .containsExactly(
+                        tuple(Map.of("group", "beta"), 20, 30), // 等值继承
+                        tuple(Map.of("group", "canary"), 0, 10), // 无匹配归零
+                        tuple(Map.of(), 80, 70)); // 兜底等值继承
+    }
+
+    @Test
+    void should_copy_unreleased_to_weight_when_release() {
+        service.createRouteRule(
+                new RouteRule(
+                        SERVICE,
+                        "beta",
+                        RouteRuleStatus.ACTIVE,
+                        List.of(
+                                new RouteRuleTarget(Map.of("group", "beta"), 0, 20),
+                                new RouteRuleTarget(Map.of(), 0, 80)),
+                        null,
+                        null,
+                        null),
+                OPERATOR);
+        clock.set(NOW.plusSeconds(60));
+
+        RouteRule released = service.releaseRouteRule(SERVICE, "beta", OPERATOR);
+
+        assertThat(released.updatedAt()).isEqualTo(NOW.plusSeconds(60));
+        assertThat(released.targets())
+                .extracting(RouteRuleTarget::weight, RouteRuleTarget::unreleasedWeight)
+                .containsExactly(tuple(20, 20), tuple(80, 80)); // 拷贝后两列相等
+        assertThat(service.getRouteRule(SERVICE, "beta")).isEqualTo(released);
+
+        // 两列已相等再 release：照常生效并落记录（显式动作，审计需要）
+        clock.set(NOW.plusSeconds(120));
+        service.releaseRouteRule(SERVICE, "beta", OPERATOR);
+        assertThat(service.listReleases(SERVICE, "beta", 10)).hasSize(2);
+    }
+
+    @Test
+    void should_append_release_record_with_post_snapshot_when_release() {
+        service.createRouteRule(rule("beta", Map.of("group", "beta"), 0, 80), OPERATOR);
+
+        RouteRule released = service.releaseRouteRule(SERVICE, "beta", OPERATOR);
+        RouteRuleRelease record = service.listReleases(SERVICE, "beta", 10).get(0);
+
+        assertThat(record.id()).isPositive();
+        assertThat(record.type()).isEqualTo(ReleaseType.RELEASE);
+        assertThat(record.rollbackTo()).isNull();
+        assertThat(record.operator()).isEqualTo(OPERATOR);
+        assertThat(record.releasedAt()).isEqualTo(NOW);
+        assertThat(record.snapshot()).isEqualTo(released.targets()); // 快照 = 发布后完整 targets
+        assertThat(auditLogs.find("RELEASE_ROUTE_RULE", 10))
+                .singleElement()
+                .satisfies(log -> assertThat(log.detail()).contains("releaseId=" + record.id()));
+    }
+
+    @Test
+    void should_restore_both_columns_from_source_snapshot_when_rollback() {
+        service.createRouteRule(
+                new RouteRule(
+                        SERVICE,
+                        "beta",
+                        RouteRuleStatus.ACTIVE,
+                        List.of(
+                                new RouteRuleTarget(Map.of("group", "beta"), 0, 20),
+                                new RouteRuleTarget(Map.of(), 0, 80)),
+                        null,
+                        null,
+                        null),
+                OPERATOR);
+        service.releaseRouteRule(SERVICE, "beta", OPERATOR); // release #1：20/80
+        long firstReleaseId = service.listReleases(SERVICE, "beta", 10).get(0).id();
+
+        // 第二轮编辑 + 发布：50/50（release #2）
+        service.updateRouteRule(
+                new RouteRule(
+                        SERVICE,
+                        "beta",
+                        RouteRuleStatus.ACTIVE,
+                        List.of(
+                                new RouteRuleTarget(Map.of("group", "beta"), 0, 50),
+                                new RouteRuleTarget(Map.of(), 0, 50)),
+                        null,
+                        null,
+                        null),
+                OPERATOR);
+        service.releaseRouteRule(SERVICE, "beta", OPERATOR);
+        clock.set(NOW.plusSeconds(60));
+
+        RouteRule restored = service.rollbackRouteRule(SERVICE, "beta", firstReleaseId, OPERATOR);
+
+        assertThat(restored.targets())
+                .extracting(RouteRuleTarget::weight, RouteRuleTarget::unreleasedWeight)
+                .containsExactly(tuple(20, 20), tuple(80, 80)); // 两列都写回源快照
+
+        RouteRuleRelease rollback = service.listReleases(SERVICE, "beta", 10).get(0); // 最新在前
+        assertThat(rollback.type()).isEqualTo(ReleaseType.ROLLBACK);
+        assertThat(rollback.rollbackTo()).isEqualTo(firstReleaseId);
+        assertThat(rollback.snapshot()).isEqualTo(restored.targets());
+        assertThat(auditLogs.find("ROLLBACK_ROUTE_RULE", 10))
+                .singleElement()
+                .satisfies(log -> assertThat(log.detail()).contains("rollbackTo=" + firstReleaseId));
+    }
+
+    @Test
+    void should_return_not_found_when_rollback_source_missing_or_foreign() {
+        service.createRouteRule(rule("beta", Map.of("group", "beta"), 0, 80), OPERATOR);
+
+        assertThatThrownBy(() -> service.rollbackRouteRule(SERVICE, "beta", 404L, OPERATOR))
+                .isInstanceOfSatisfying(
+                        RouteRuleException.class,
+                        e -> assertThat(e.code()).isEqualTo(RouteRuleException.RELEASE_NOT_FOUND));
+
+        // 异规则记录：另一规则的 release 不可作回滚源
+        service.createRouteRule(rule("other", Map.of(), 0, 100), OPERATOR);
+        service.releaseRouteRule(SERVICE, "other", OPERATOR);
+        long foreignId = service.listReleases(SERVICE, "other", 10).get(0).id();
+        assertThatThrownBy(() -> service.rollbackRouteRule(SERVICE, "beta", foreignId, OPERATOR))
+                .isInstanceOfSatisfying(
+                        RouteRuleException.class,
+                        e -> assertThat(e.code()).isEqualTo(RouteRuleException.RELEASE_NOT_FOUND));
+
+        assertThatThrownBy(() -> service.rollbackRouteRule(SERVICE, "missing", 1L, OPERATOR))
+                .isInstanceOfSatisfying(
+                        RouteRuleException.class, e -> assertThat(e.code()).isEqualTo(RouteRuleException.NOT_FOUND));
+    }
+
+    @Test
+    void should_diff_added_removed_changed_targets_when_preview() {
+        service.createRouteRule(
+                new RouteRule(
+                        SERVICE,
+                        "beta",
+                        RouteRuleStatus.ACTIVE,
+                        List.of(
+                                new RouteRuleTarget(Map.of("group", "beta"), 0, 20),
+                                new RouteRuleTarget(Map.of(), 0, 80)),
+                        null,
+                        null,
+                        null),
+                OPERATOR);
+        service.releaseRouteRule(SERVICE, "beta", OPERATOR); // 生效 20/80
+
+        // 编辑：beta 权重改 30、兜底移除、新增 canary
+        service.updateRouteRule(
+                new RouteRule(
+                        SERVICE,
+                        "beta",
+                        RouteRuleStatus.ACTIVE,
+                        List.of(
+                                new RouteRuleTarget(Map.of("group", "beta"), 0, 30),
+                                new RouteRuleTarget(Map.of("group", "canary"), 0, 10)),
+                        null,
+                        null,
+                        null),
+                OPERATOR);
+
+        ReleaseDiff diff = service.routeRuleDiff(SERVICE, "beta", null);
+
+        assertThat(diff.baseReleaseId()).isNull();
+        assertThat(diff.targets())
+                .extracting(
+                        ReleaseDiff.TargetDiff::selector,
+                        ReleaseDiff.TargetDiff::currentWeight,
+                        ReleaseDiff.TargetDiff::nextWeight)
+                .containsExactly(
+                        tuple(Map.of("group", "beta"), 20, 30), // 变更
+                        tuple(Map.of("group", "canary"), null, 10), // 新增（当前生效无）
+                        tuple(Map.of(), 80, null)); // 移除（编辑无）
+
+        // 无差异：两列相等时 diff 全 0 差异（值相等成对）
+        service.releaseRouteRule(SERVICE, "beta", OPERATOR);
+        ReleaseDiff noDiff = service.routeRuleDiff(SERVICE, "beta", null);
+        assertThat(noDiff.targets())
+                .allSatisfy(target -> assertThat(target.currentWeight()).isEqualTo(target.nextWeight()));
+    }
+
+    @Test
+    void should_diff_against_release_snapshot_when_release_id_specified() {
+        service.createRouteRule(rule("beta", Map.of("group", "beta"), 0, 20), OPERATOR);
+        service.releaseRouteRule(SERVICE, "beta", OPERATOR);
+        long firstId = service.listReleases(SERVICE, "beta", 10).get(0).id();
+
+        // 再发布为 80：回滚预览（基 = 当前生效 80，目标 = 快照 20）
+        service.updateRouteRule(rule("beta", Map.of("group", "beta"), 0, 80), OPERATOR);
+        service.releaseRouteRule(SERVICE, "beta", OPERATOR);
+
+        ReleaseDiff diff = service.routeRuleDiff(SERVICE, "beta", firstId);
+
+        // 基 = 指定快照（20）、next = 当前编辑（80）：当前编辑相对该历史版本的差异
+        assertThat(diff.baseReleaseId()).isEqualTo(firstId);
+        assertThat(diff.targets()).singleElement().satisfies(target -> {
+            assertThat(target.currentWeight()).isEqualTo(20);
+            assertThat(target.nextWeight()).isEqualTo(80);
+        });
+
+        assertThatThrownBy(() -> service.routeRuleDiff(SERVICE, "beta", 404L))
+                .isInstanceOfSatisfying(
+                        RouteRuleException.class,
+                        e -> assertThat(e.code()).isEqualTo(RouteRuleException.RELEASE_NOT_FOUND));
+    }
+
     @Test
     void should_write_audit_log_when_route_rule_crud() {
         service.createRouteRule(rule("beta", Map.of("group", "beta"), 20, 80), OPERATOR);
@@ -758,7 +1026,7 @@ class ManagementServiceImplTest {
             assertThat(log.operator()).isEqualTo(OPERATOR);
             assertThat(log.result()).isEqualTo("SUCCESS");
         });
-        assertThat(logs.get(2).detail()).isEqualTo("targets=1 weights=[20]"); // 创建行带目标摘要
+        assertThat(logs.get(2).detail()).isEqualTo("targets=1 weights=[0]"); // 创建行带目标摘要（初始生效列 0）
     }
 
     @Test

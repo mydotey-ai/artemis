@@ -13,9 +13,9 @@ import org.springframework.context.ConfigurableApplicationContext;
 import tools.jackson.databind.JsonNode;
 
 /**
- * 双方言路由规则持久化 IT（v0.5 phase-1）：DB 态 CRUD 落库、审计可查、
- * **跨 management 重启（同 DB 新 context）规则保留**（plan phase-1 验收要点）。
- * 模式同 EjectionPersistenceIT（重启 = 同 DB 新 context，认证源为表账户 seed 默认凭证）。
+ * 双方言路由规则持久化 IT（v0.5 phase-1 CRUD + phase-2 发布）：DB 态 CRUD 落库、审计
+ * 可查、**跨 management 重启（同 DB 新 context）规则与发布记录保留、重启后回滚仍生效**
+ *（plan phase-2 DB 验收要点）。模式同 EjectionPersistenceIT（重启 = 同 DB 新 context）。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = "management.server.port=0")
 abstract class RouteRulePersistenceIT extends ManagementHttpIT {
@@ -26,7 +26,7 @@ abstract class RouteRulePersistenceIT extends ManagementHttpIT {
     private static final String RESTART_SERVICE = "restart-service";
     private static final String RULE = "{\"namespace\":\"%s\",\"service\":\"%s\",\"name\":\"%s\","
             + "\"status\":\"%s\",\"targets\":["
-            + "{\"selector\":{\"group\":\"%s\"},\"weight\":%d,\"unreleasedWeight\":%d}]}";
+            + "{\"selector\":{\"group\":\"%s\"},\"unreleasedWeight\":%d}]}";
 
     abstract String jdbcUrl();
 
@@ -36,18 +36,17 @@ abstract class RouteRulePersistenceIT extends ManagementHttpIT {
 
     @Test
     void should_persist_route_rules_and_audit_when_database_mode() throws Exception {
-        assertThat(post("/admin/v1/route-rules", rule("alpha", "ACTIVE", "a", 10, 90))
+        assertThat(post("/admin/v1/route-rules", rule("alpha", "ACTIVE", "a", 90))
                         .statusCode())
                 .isEqualTo(201);
-        assertThat(post("/admin/v1/route-rules", rule("beta", "ACTIVE", "b", 20, 80))
+        assertThat(post("/admin/v1/route-rules", rule("beta", "ACTIVE", "b", 80))
                         .statusCode())
                 .isEqualTo(201);
-        // PUT 全量替换（两段权重与状态均可改）
+        // PUT 全量替换（编辑列与状态可改；生效列不在请求体——两段式）
         assertThat(send(
                                 HttpRequest.newBuilder(
                                                 uri("/admin/v1/route-rules/" + NAMESPACE + "/" + SERVICE + "/beta"))
-                                        .PUT(HttpRequest.BodyPublishers.ofString(
-                                                rule("beta", "INACTIVE", "b", 0, 100))),
+                                        .PUT(HttpRequest.BodyPublishers.ofString(rule("beta", "INACTIVE", "b", 100))),
                                 true)
                         .statusCode())
                 .isEqualTo(200);
@@ -82,14 +81,37 @@ abstract class RouteRulePersistenceIT extends ManagementHttpIT {
     }
 
     @Test
-    void should_restore_route_rules_across_management_restart() throws Exception {
-        // 独立规则键（与用例 1 隔离），含兜底目标与两段权重双列
+    void should_keep_releases_and_rollback_across_management_restart() throws Exception {
+        // 独立规则键（与用例 1 隔离），含兜底目标；两段式：创建初始生效列 0
+        String base = "/admin/v1/route-rules/" + NAMESPACE + "/" + RESTART_SERVICE;
         String body = """
                 {"namespace":"%s","service":"%s","name":"keep","targets":[
-                {"selector":{"group":"beta"},"weight":30,"unreleasedWeight":70},
-                {"selector":{},"weight":70,"unreleasedWeight":30}]}
+                {"selector":{"group":"beta"},"unreleasedWeight":30},
+                {"selector":{},"unreleasedWeight":70}]}
                 """.formatted(NAMESPACE, RESTART_SERVICE);
         assertThat(post("/admin/v1/route-rules", body).statusCode()).isEqualTo(201);
+        JsonNode created = json(get(base + "/keep"));
+        assertThat(created.get("targets").get(0).get("weight").asInt()).isZero(); // 初始未发布
+
+        // 发布两次：30/70 → 100/0（rollback 源取第一次）
+        assertThat(post(base + "/keep/release", "").statusCode()).isEqualTo(200);
+        long firstReleaseId = json(get(base + "/keep/releases"))
+                .get("releases")
+                .get(0)
+                .get("id")
+                .asLong();
+        String secondEdit = """
+                {"namespace":"%s","service":"%s","name":"keep","targets":[
+                {"selector":{"group":"beta"},"unreleasedWeight":100},
+                {"selector":{},"unreleasedWeight":0}]}
+                """.formatted(NAMESPACE, RESTART_SERVICE);
+        assertThat(send(
+                                HttpRequest.newBuilder(uri(base + "/keep"))
+                                        .PUT(HttpRequest.BodyPublishers.ofString(secondEdit)),
+                                true)
+                        .statusCode())
+                .isEqualTo(200);
+        assertThat(post(base + "/keep/release", "").statusCode()).isEqualTo(200);
 
         try (ConfigurableApplicationContext restarted = new SpringApplicationBuilder(ArtemisManagementServer.class)
                 .properties(
@@ -101,24 +123,40 @@ abstract class RouteRulePersistenceIT extends ManagementHttpIT {
                 .run()) {
             int restartedPort =
                     ((WebServerApplicationContext) restarted).getWebServer().getPort();
+            String restartedBase =
+                    "http://localhost:" + restartedPort + "/admin/v1/route-rules/" + NAMESPACE + "/" + RESTART_SERVICE;
 
-            HttpResponse<String> response = send(
-                    HttpRequest.newBuilder(URI.create("http://localhost:" + restartedPort + "/admin/v1/route-rules/"
-                                    + NAMESPACE + "/" + RESTART_SERVICE + "/keep"))
+            // 规则跨重启保留（发布后生效列）
+            JsonNode rule = json(send(
+                    HttpRequest.newBuilder(URI.create(restartedBase + "/keep")).GET(), true));
+            assertThat(rule.get("targets").get(0).get("weight").asInt()).isEqualTo(100);
+            assertThat(rule.get("targets").get(1).get("weight").asInt()).isZero();
+            assertThat(rule.get("targets").get(1).get("selector").size()).isZero(); // 兜底目标保留
+
+            // 发布记录跨重启保留（id 降序，最新在前）
+            JsonNode releases = json(send(
+                    HttpRequest.newBuilder(URI.create(restartedBase + "/keep/releases"))
                             .GET(),
+                    true));
+            assertThat(releases.get("releases").size()).isEqualTo(2);
+            long latestId = releases.get("releases").get(0).get("id").asLong();
+            assertThat(latestId).isGreaterThan(firstReleaseId);
+
+            // 重启后按历史 releaseId 回滚仍生效（两列写回源快照）
+            HttpResponse<String> rollback = send(
+                    HttpRequest.newBuilder(URI.create(restartedBase + "/keep/rollback"))
+                            .POST(HttpRequest.BodyPublishers.ofString("{\"releaseId\":" + firstReleaseId + "}")),
                     true);
-            JsonNode rule = json(response);
-            assertThat(rule.get("status").asText()).isEqualTo("ACTIVE");
-            assertThat(rule.get("operator").asText()).isEqualTo("artemis");
-            assertThat(rule.get("targets").size()).isEqualTo(2);
-            assertThat(rule.get("targets").get(1).get("selector").size()).isZero(); // 兜底目标跨重启保留
-            assertThat(rule.get("targets").get(0).get("weight").asInt()).isEqualTo(30);
-            assertThat(rule.get("targets").get(0).get("unreleasedWeight").asInt())
-                    .isEqualTo(70);
+            assertThat(rollback.statusCode()).isEqualTo(200);
+            JsonNode restored = json(rollback);
+            assertThat(restored.get("targets").get(0).get("weight").asInt()).isEqualTo(30);
+            assertThat(restored.get("targets").get(1).get("weight").asInt()).isEqualTo(70);
+            assertThat(restored.get("targets").get(1).get("unreleasedWeight").asInt())
+                    .isEqualTo(70); // 两列都写回
         }
     }
 
-    private static String rule(String name, String status, String group, int weight, int unreleased) {
-        return RULE.formatted(NAMESPACE, SERVICE, name, status, group, weight, unreleased);
+    private static String rule(String name, String status, String group, int unreleased) {
+        return RULE.formatted(NAMESPACE, SERVICE, name, status, group, unreleased);
     }
 }

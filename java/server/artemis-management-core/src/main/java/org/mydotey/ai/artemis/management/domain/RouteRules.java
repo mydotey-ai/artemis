@@ -1,7 +1,9 @@
 package org.mydotey.ai.artemis.management.domain;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -45,9 +47,22 @@ public final class RouteRules {
         if (targets == null || targets.isEmpty() || targets.size() > MAX_TARGETS) {
             throw new IllegalArgumentException("targets must contain 1.." + MAX_TARGETS + " entries");
         }
+        Set<Map<String, String>> selectors = new HashSet<>();
         for (RouteRuleTarget target : targets) {
             validateTarget(target);
+            // 等值重复拒绝：selector 是目标身份（update 的生效权重继承按等值匹配，
+            // 重复目标会破坏继承唯一性；「不要求互斥」指命中集合可重叠，不涉等值）
+            if (!selectors.add(target.selector())) {
+                throw new IllegalArgumentException("duplicate target selector: " + target.selector());
+            }
         }
+    }
+
+    /** ACTIVE 规则集（规则流内容，phase-2；流上 INACTIVE 化由 deleted 事件表达）。 */
+    public static List<RouteRule> activeOf(List<RouteRule> rules) {
+        return rules.stream()
+                .filter(rule -> rule.status() == RouteRuleStatus.ACTIVE)
+                .toList();
     }
 
     private static void validateTarget(RouteRuleTarget target) {

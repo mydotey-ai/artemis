@@ -10,6 +10,9 @@ import org.mydotey.ai.artemis.management.domain.InstanceStatus;
 import org.mydotey.ai.artemis.management.domain.LeaseDetail;
 import org.mydotey.ai.artemis.management.domain.LeaseStatus;
 import org.mydotey.ai.artemis.management.domain.LogicalInstance;
+import org.mydotey.ai.artemis.management.domain.RouteRule;
+import org.mydotey.ai.artemis.management.domain.RouteRuleStatus;
+import org.mydotey.ai.artemis.management.domain.RouteRuleTarget;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStats;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
@@ -104,6 +107,60 @@ public final class ManagementProtoMapper {
             case GROUP -> org.mydotey.ai.artemis.proto.management.v1.EjectionScope.EJECTION_SCOPE_GROUP;
             default -> org.mydotey.ai.artemis.proto.management.v1.EjectionScope.EJECTION_SCOPE_INSTANCE;
         };
+    }
+
+    // ---- 路由规则流（management.v1，toProto 出站事件，phase-2；流内容 = ACTIVE 集）----
+
+    public org.mydotey.ai.artemis.proto.management.v1.RouteRulesEvent toRouteRulesSnapshotEvent(
+            List<RouteRule> rules, long version) {
+        var snapshot = org.mydotey.ai.artemis.proto.management.v1.RouteRulesSnapshot.newBuilder();
+        for (RouteRule rule : rules) {
+            snapshot.addRules(toProto(rule));
+        }
+        return org.mydotey.ai.artemis.proto.management.v1.RouteRulesEvent.newBuilder()
+                .setSnapshot(snapshot)
+                .setVersion(version)
+                .build();
+    }
+
+    public org.mydotey.ai.artemis.proto.management.v1.RouteRulesEvent toRouteRuleUpsertedEvent(
+            RouteRule rule, long version) {
+        return org.mydotey.ai.artemis.proto.management.v1.RouteRulesEvent.newBuilder()
+                .setUpserted(toProto(rule))
+                .setVersion(version)
+                .build();
+    }
+
+    public org.mydotey.ai.artemis.proto.management.v1.RouteRulesEvent toRouteRuleDeletedEvent(
+            ServiceKey service, String name, long version) {
+        return org.mydotey.ai.artemis.proto.management.v1.RouteRulesEvent.newBuilder()
+                .setDeleted(org.mydotey.ai.artemis.proto.management.v1.RouteRuleKey.newBuilder()
+                        .setService(toProto(service))
+                        .setName(name == null ? "" : name)
+                        .build())
+                .setVersion(version)
+                .build();
+    }
+
+    private org.mydotey.ai.artemis.proto.management.v1.RouteRule toProto(RouteRule rule) {
+        var builder = org.mydotey.ai.artemis.proto.management.v1.RouteRule.newBuilder()
+                .setService(toProto(rule.service()))
+                .setName(rule.name() == null ? "" : rule.name())
+                .setStatus(toProto(rule.status()));
+        for (RouteRuleTarget target : rule.targets()) {
+            builder.addTargets(org.mydotey.ai.artemis.proto.management.v1.RouteRuleTarget.newBuilder()
+                    .putAllSelector(target.selector())
+                    .setWeight(target.weight())
+                    .setUnreleasedWeight(target.unreleasedWeight())
+                    .build());
+        }
+        return builder.build();
+    }
+
+    private static org.mydotey.ai.artemis.proto.management.v1.RouteRuleStatus toProto(RouteRuleStatus status) {
+        return status == RouteRuleStatus.INACTIVE
+                ? org.mydotey.ai.artemis.proto.management.v1.RouteRuleStatus.ROUTE_RULE_STATUS_INACTIVE
+                : org.mydotey.ai.artemis.proto.management.v1.RouteRuleStatus.ROUTE_RULE_STATUS_ACTIVE;
     }
 
     // ---- 逻辑实例流（management.v1，toProto 出站事件，phase-4）----

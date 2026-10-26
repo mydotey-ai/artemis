@@ -1,6 +1,6 @@
 # management-service Admin 与状态 API
 
-版本: 1.12    更新时间: 2026-10-26
+版本: 1.13    更新时间: 2026-10-26
 
 > 本文定义 management-service 对外 HTTP API（管理面：实例管理 Admin API、账户 API 与 registry 状态排障面）。有效视图 = registry 只读事实 + management 摘除记录（ADR-016）；registry 不感知摘除。内部 gRPC 查询契约见 [registry-query-api.md](registry-query-api.md)。
 
@@ -194,7 +194,7 @@ Base path：`/admin/v1`
 
 ### 4.10 路由规则 CRUD `POST/GET/PUT/DELETE /admin/v1/route-rules`（v0.5 phase-1）
 
-资源导向 CRUD（分组路由 / canary / 两段发布的规则载体，架构 §5.2；分组以实例 metadata 表达，ADR-13）。请求体（创建；PUT 同构，`namespace`/`service`/`name` 必须与路径一致）：
+资源导向 CRUD（分组路由 / canary / 两段发布的规则载体，架构 §5.2；分组以实例 metadata 表达，ADR-13）。请求体（创建；PUT 同构，`namespace`/`service`/`name` 必须与路径一致）。**targets 只收编辑列 `unreleasedWeight`——生效列 `weight` 不在请求体**（两段式：create 初始生效列 0、update 按 selector 等值继承旧生效列、release/rollback 是生效列唯一写入口，见 §4.11）：
 
 ```json
 {
@@ -203,8 +203,8 @@ Base path：`/admin/v1`
   "name": "beta-release",
   "status": "ACTIVE",
   "targets": [
-    {"selector": {"group": "beta"}, "weight": 20, "unreleasedWeight": 80},
-    {"selector": {}, "weight": 0, "unreleasedWeight": 20}
+    {"selector": {"group": "beta"}, "unreleasedWeight": 80},
+    {"selector": {}, "unreleasedWeight": 20}
   ]
 }
 ```
@@ -217,10 +217,38 @@ Base path：`/admin/v1`
 | `PUT /admin/v1/route-rules/{namespace}/{service}/{name}` | 全量替换（createdAt 继承、updatedAt 刷新）；缺失 → 404；body 键与路径不一致 → 400 |
 | `DELETE /admin/v1/route-rules/{namespace}/{service}/{name}` | 删除，幂等 204（缺失 no-op，不审计） |
 
-- **模型**：目标 = metadata **等值选择器**（多键 AND；空 `selector` = 兜底目标，承接默认组语义）+ 双权重列——`weight` 生效 / `unreleasedWeight` 编辑中（两段式发布，release 拷贝动作 v0.5 phase-2）；`status` ACTIVE（缺省）/INACTIVE（discovery 不应用，执行语义 phase-3）。
-- **域约束（400）**：`name` ≤255 且 `[A-Za-z0-9._-]+`（URL 路径段安全）；`namespace`/`service` ≤255；`targets` 1–10 条；selector 键 1–8 个、键 ≤128、值非空 ≤512；权重 0–10000；targets 序列化 UTF-8 ≤ 60KB。目标间 selector 不要求互斥（消费侧语义）。
+- **模型**：目标 = metadata **等值选择器**（多键 AND；空 `selector` = 兜底目标，承接默认组语义）+ 双权重列——`weight` 生效 / `unreleasedWeight` 编辑中（两段式发布，§4.11 release 拷贝）；`status` ACTIVE（缺省）/INACTIVE（discovery 不应用，执行语义 phase-3）。
+- **域约束（400）**：`name` ≤255 且 `[A-Za-z0-9._-]+`（URL 路径段安全）；`namespace`/`service` ≤255；`targets` 1–10 条；selector 键 1–8 个、键 ≤128、值非空 ≤512；权重 0–10000；targets 序列化 UTF-8 ≤ 60KB。目标间 selector 命中集合可重叠（消费侧语义），**等值重复拒绝**（同规则内两 target selector 完全相等 → 400，保证 update 生效列继承的唯一匹配）。
 - 每条变更全量进审计表（operation = `CREATE_ROUTE_RULE` / `UPDATE_ROUTE_RULE` / `DELETE_ROUTE_RULE`，target = `route-rule:{ns}/{svc}/{name}`）。
-- **本 phase 只存储与透出**：规则流下发（经 v0.4 版本化规则流通道）与 discovery 过滤器消费归 phase-2/3——创建规则不影响发现结果。
+- 响应视图含双列权重（生效列 + 编辑列），`operator` 取认证用户名。
+
+### 4.11 两段式发布 `POST .../release` / `POST .../rollback` / `GET .../diff` / `GET .../releases`（v0.5 phase-2）
+
+发布语义（继承资产 §5-5，架构 §5.2 资源 `release`）：编辑写 `unreleasedWeight`，一个 release 调用完成一个运维意图（拷贝到 `weight` 生效）；回滚 = 指向历史版本的反向 release。
+
+| 端点 | 语义 |
+|---|---|
+| `POST /admin/v1/route-rules/{ns}/{svc}/{name}/release` | 发布：targets 逐项 `weight ← unreleasedWeight`，200 返回发布后完整视图（两列相等）；落 append-only 发布记录并推规则流 |
+| `POST /admin/v1/route-rules/{ns}/{svc}/{name}/rollback` | 一键回滚：body `{"releaseId": 5}`，`weight` 与 `unreleasedWeight` **两列写回**源记录快照（完全恢复该发布时刻状态）；200 返回回滚后视图 |
+| `GET /admin/v1/route-rules/{ns}/{svc}/{name}/diff?releaseId=` | 发布差异预览：基 = **发布快照生效列**（缺省取最新发布记录，从未发布 = 空基全量新增；带 `releaseId` 取该历史记录 = 回滚预览），next = 当前编辑列；selector 等值对齐并集——`currentWeight: null` = 新增、`nextWeight: null` = 将被移除 |
+| `GET /admin/v1/route-rules/{ns}/{svc}/{name}/releases?limit=` | 发布记录列表（回滚历史源）：`{id, type, rollbackTo, snapshot, operator, releasedAt}`，id 降序最新在前 |
+
+```json
+// diff 响应
+{
+  "namespace": "default", "service": "order-service", "name": "beta-release", "baseReleaseId": null,
+  "targets": [
+    {"selector": {"group": "beta"}, "currentWeight": 20, "nextWeight": 30},
+    {"selector": {"group": "canary"}, "currentWeight": null, "nextWeight": 10},
+    {"selector": {}, "currentWeight": 80, "nextWeight": null}
+  ]
+}
+```
+
+- 发布记录 `type` = `RELEASE` / `ROLLBACK`（`rollbackTo` 指向源记录 id）；记录 append-only：规则删除不级联删（审计语义），内存态与规则同清零、DB 态持久（重启后回滚仍可用）。
+- 两写边界：规则表生效优先于发布记录——append 失败（503）时规则已生效且流已通知，重试 release 幂等补录记录。
+- 审计：`RELEASE_ROUTE_RULE` / `ROLLBACK_ROUTE_RULE` 摘要行（detail 含发布后权重序列与 `releaseId`/`rollbackTo` 关联）。
+- 规则流下发（ACTIVE 集、版本化 + ack）与 discovery 生效水位见 §6.5；**discovery 执行（selector 过滤）归 phase-3**——当前规则不影响发现结果。
 
 ## 5. 账户 API（v0.4，ADR-021）
 
@@ -343,11 +371,19 @@ management 自身持久化运行形态（v0.4 phase-1 起，不透传 registry�
       "lastAckAt": "2026-10-26T10:00:00Z",
       "atLatest": true
     }
-  ]
+  ],
+  "routeRules": {
+    "currentVersion": 5,
+    "appliedLatestCount": 1,
+    "subscribers": [
+      {"subscriberId": "artemis-discovery@host-b-5e6f7a8b", "appliedVersion": 5, "lastAckAt": "2026-10-26T10:01:00Z", "atLatest": true}
+    ]
+  }
 }
 ```
 
-- `currentVersion`：当前规则集状态版本 = 最后一次生效态翻转的记录 sequence（查询时重放派生；无记录 = 0）。
+- `currentVersion`：当前摘除规则集状态版本 = 最后一次生效态翻转的记录 sequence（查询时重放派生；无记录 = 0）。
+- `routeRules`：路由规则流水位节（v0.5 phase-2，与外层同构；`currentVersion` = 该流 dispatcher tick——**独立版本域**，与摘除流数值不可比；release/rollback 与 ACTIVE 集变更均推进版本）。
 - `subscribers`：**活订阅**水位（断流即清除条目——断连节点生效态未知不冒充已生效）。`appliedVersion` 为 `null` = 已订阅尚未 ack（快照在途）；`atLatest` = 已应用当前版本。
 - `appliedLatestCount`：已应用当前版本的订阅方数（「多少节点已生效」）。
 - 水位为内存观测态不持久化：management 重启后经 discovery 重连快照 + 重新 ack 重建；内存态 management 重启版本归零（快照全量替换语义下无害）。
@@ -365,7 +401,8 @@ management 自身持久化运行形态（v0.4 phase-1 起，不透传 registry�
 | 400 | `INVALID_ARGUMENT` | 参数空白、scope 非法或字段组合不符、字段超长（`reason` > 1024 / `namespace`·`service` > 255 / `instanceId`·`value` > 512；逻辑实例 `instanceId` > 255、`host` > 255、metadata 值为 null 或序列化 > 16KB）、body 不可解析、参数类型错误、改密参数非法（old 不匹配 / newPassword < 8 字符） |
 | 401 | `UNAUTHORIZED` | Basic 缺失或错误 |
 | 404 | `NOT_FOUND` | 未知路径 |
-| 404 | `ROUTE_RULE_NOT_FOUND` | 路由规则查询/替换缺失（v0.5 phase-1） |
+| 404 | `ROUTE_RULE_NOT_FOUND` | 路由规则查询/替换/发布缺失（v0.5 phase-1） |
+| 404 | `ROUTE_RULE_RELEASE_NOT_FOUND` | 回滚源发布记录缺失或属于其它规则（v0.5 phase-2） |
 | 405 | `METHOD_NOT_ALLOWED` | 方法不支持 |
 | 409 | `NOT_SUPPORTED_IN_MEMORY_MODE` | 内存态调用改密端点（凭证事实源是配置，v0.4 ADR-021） |
 | 409 | `ROUTE_RULE_ALREADY_EXISTS` | 路由规则创建重名（v0.5 phase-1） |
@@ -381,7 +418,7 @@ management 启动不依赖 registry 可用；registry 故障时管理面仍可�
 
 ## 8. 已知限制
 
-- 摘除四级与审计已交付（v0.4 phase-3）；逻辑实例已交付（v0.4 phase-4，management 侧服务视图合并逻辑实例归 phase-6 console）；路由规则 CRUD 与持久化已交付（v0.5 phase-1），**规则流下发与 discovery 生效归 v0.5 phase-2/3**（当前创建规则不影响发现结果）；内存态（未配置 DB）仍重启丢失（期 1 设计内行为，配置 DB 即持久化——重启后经流快照重下发恢复）；审批流随 v1.x 按社区需求排期。
+- 摘除四级与审计已交付（v0.4 phase-3）；逻辑实例已交付（v0.4 phase-4，management 侧服务视图合并逻辑实例归 phase-6 console）；路由规则 CRUD 与持久化已交付（v0.5 phase-1）；两段式发布（release/rollback/diff/releases）与规则流下发 + ack 水位已交付（v0.5 phase-2），**discovery 执行（selector 过滤与视图扇出）归 v0.5 phase-3**（当前规则变化不影响发现结果）；内存态（未配置 DB）仍重启丢失（期 1 设计内行为，配置 DB 即持久化——重启后经流快照重下发恢复）；审批流随 v1.x 按社区需求排期。
 - RBAC 随 v1.0；内存态外部 HTTP 单账户凭证（DB 态为单管理员账户表，v0.4）。
 - registry 地址单值、无重试/熔断（v0.2 集群后引入地址列表与容灾）。
 - registry 查询无分页；客户端入站上限 16 MiB，超限返回 502。
@@ -390,6 +427,7 @@ management 启动不依赖 registry 可用；registry 故障时管理面仍可�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.13 | 2026-10-26 | v0.5 phase-2：§4.10 请求体删 weight（编辑通道收紧，等值重复 400）；新增 §4.11 两段式发布四端点（release/rollback/diff/releases）；§6.5 补 routeRules 水位节；错误表补 `ROUTE_RULE_RELEASE_NOT_FOUND`；§8 边界更新 |
 | 1.12 | 2026-10-26 | v0.5 phase-1：新增路由规则 CRUD（§4.10 五端点，等值选择器 + 两段双权重 + 域约束与审计语义）；错误表补 404/409/503 route-rule 三码；§8 限制补 phase-2/3 边界 |
 | 1.11 | 2026-10-26 | v0.4 phase-6：console 只读版——§4.1 服务列表增 `keyword`/`offset`/`limit` 与响应 `total`；§4.2 详情增实例分页（计数始终全量）；§1 登记 console 入口 |
 | 1.10 | 2026-10-26 | v0.4 phase-5：新增 §6.5 `GET /admin/v1/status/rules` 规则生效水位（当前版本 + 活订阅水位 + 已生效节点数） |

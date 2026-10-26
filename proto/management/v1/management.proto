@@ -261,3 +261,78 @@ service LogicalInstanceService {
   // 慢消费者/推送失败由服务端断流注销，消费方断流重连重新收快照全量覆盖自愈。
   rpc WatchLogicalInstances(LogicalInstancesRequest) returns (stream LogicalInstancesEvent);
 }
+
+// ---- 路由规则订阅流（management → discovery，v0.5 phase-2，架构 §2.2 通道① 同端口）----
+// 两段式权重发布的下发面（架构 §5.2 资源 route-rule / release）：流内容 = ACTIVE
+// 规则集（对齐摘除流「有效规则集」——INACTIVE 化发 deleted、ACTIVE 化发 upserted）；
+// 版本化 + ack 生效水位（v0.4 phase-5 形态复用，独立流不并入摘除流）。
+// selector 匹配执行（Group filter）归 phase-3 discovery 过滤器链，本流只承载规则视图。
+
+// 数据枚举（wire 规范）：缺省 ACTIVE 与资源 API 缺省一致；未知值由消费方按本地语义处理。
+enum RouteRuleStatus {
+  ROUTE_RULE_STATUS_ACTIVE = 0;
+  ROUTE_RULE_STATUS_INACTIVE = 1;
+}
+
+message RouteRuleTarget {
+  map<string, string> selector = 1;   // 等值匹配（多键 AND，ADR-13）；空 map = 兜底目标
+  int32 weight = 2;                   // 生效权重（release/rollback 唯一写入口，两段式）
+  int32 unreleased_weight = 3;        // 编辑中权重（release 拷贝到 weight 生效）
+}
+
+message RouteRule {
+  artemis.common.v1.ServiceKey service = 1;
+  string name = 2;                    // (namespace, service) 内唯一
+  RouteRuleStatus status = 3;
+  repeated RouteRuleTarget targets = 4;
+}
+
+message RouteRuleKey {
+  artemis.common.v1.ServiceKey service = 1;
+  string name = 2;
+}
+
+message RouteRulesRequest {
+  string subscriber_id = 1;           // 订阅方标识（排障用）
+}
+
+message RouteRulesSnapshot {
+  repeated RouteRule rules = 1;       // ACTIVE 规则集（可为空集）
+}
+
+// 流事件 envelope（message presence 区分快照与增量，对齐 EjectionRulesEvent 先例）：
+// 已设 snapshot = 全量快照（替换语义）；未设 = 增量（upserted 为 upsert 覆盖语义，
+// deleted 与 upserted 互斥）。version = 规则集状态版本（dispatcher 内存 tick，水位/
+// 观测语义非顺序协议——跳号合法、等号安全、management 重启归零后经重连快照重新对齐；
+// 正确性骨干为 at-most-once + 断流重连快照自愈）。
+message RouteRulesEvent {
+  RouteRulesSnapshot snapshot = 1;
+  RouteRule upserted = 2;
+  RouteRuleKey deleted = 3;
+  int64 version = 4;
+}
+
+service RouteRuleService {
+  // 订阅：首条快照（ACTIVE 集，含空集）→ 其后增量按产生序；gRPC 单流天然有序。
+  // at-most-once：慢消费者/推送失败由服务端断流注销，消费方断连重连重新收快照
+  // 全量覆盖自愈。management 内存态重启规则清零（重连空快照收敛）；DB 态规则与
+  // release 记录持久，重连快照恢复（版本计数域重启，重新 ack 后水位一致）。
+  rpc WatchRouteRules(RouteRulesRequest) returns (stream RouteRulesEvent);
+
+  // 生效 ack（discovery → management 上行，通道②水位半边）：语义同 AckEjections——
+  // 幂等、可重复上报（取 max）、未知 subscriber 忽略、失败由消费方容忍放弃
+  // （重连快照后重新 ack 收敛）。
+  rpc AckRouteRules(AckRouteRulesRequest) returns (AckRouteRulesResponse);
+}
+
+message AckRouteRulesRequest {
+  string subscriber_id = 1;           // 与 WatchRouteRules 同源订阅方标识
+  int64 applied_version = 2;          // 已应用（已产生效果）的规则集版本
+}
+
+message AckRouteRulesResponseData {}
+
+message AckRouteRulesResponse {
+  artemis.common.v1.ResponseStatus status = 1;
+  AckRouteRulesResponseData data = 2;
+}

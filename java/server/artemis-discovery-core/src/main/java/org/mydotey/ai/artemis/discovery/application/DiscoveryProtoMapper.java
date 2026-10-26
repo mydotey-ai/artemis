@@ -17,6 +17,8 @@ import org.mydotey.ai.artemis.discovery.domain.InstanceChange;
 import org.mydotey.ai.artemis.discovery.domain.InstanceStatus;
 import org.mydotey.ai.artemis.discovery.domain.QueryRequest;
 import org.mydotey.ai.artemis.discovery.domain.QueryResponse;
+import org.mydotey.ai.artemis.discovery.domain.RouteRule;
+import org.mydotey.ai.artemis.discovery.domain.RouteRuleKey;
 import org.mydotey.ai.artemis.discovery.domain.ServiceChange;
 import org.mydotey.ai.artemis.discovery.domain.ServiceChecksum;
 import org.mydotey.ai.artemis.discovery.domain.ServiceInstances;
@@ -234,6 +236,34 @@ public final class DiscoveryProtoMapper {
             case EJECTION_SCOPE_GROUP -> org.mydotey.ai.artemis.common.governance.EjectionScope.GROUP;
             default -> org.mydotey.ai.artemis.common.governance.EjectionScope.INSTANCE;
         };
+    }
+
+    // ---- 路由规则流（management.v1，toDomain 入站，phase-2；流内容 = ACTIVE 集，无 status）----
+
+    /** 快照事件判定（snapshot 已设，含空集；message presence 语义）。 */
+    public boolean isSnapshot(org.mydotey.ai.artemis.proto.management.v1.RouteRulesEvent event) {
+        return event.hasSnapshot();
+    }
+
+    public List<RouteRule> toDomain(org.mydotey.ai.artemis.proto.management.v1.RouteRulesSnapshot snapshot) {
+        List<RouteRule> rules = new ArrayList<>(snapshot.getRulesCount());
+        for (org.mydotey.ai.artemis.proto.management.v1.RouteRule rule : snapshot.getRulesList()) {
+            rules.add(toDomain(rule));
+        }
+        return rules;
+    }
+
+    public RouteRule toDomain(org.mydotey.ai.artemis.proto.management.v1.RouteRule rule) {
+        List<RouteRule.RouteRuleTarget> targets = new ArrayList<>(rule.getTargetsCount());
+        for (org.mydotey.ai.artemis.proto.management.v1.RouteRuleTarget target : rule.getTargetsList()) {
+            targets.add(new RouteRule.RouteRuleTarget(
+                    target.getSelectorMap(), target.getWeight(), target.getUnreleasedWeight()));
+        }
+        return new RouteRule(toDomain(rule.getService()), rule.getName(), targets);
+    }
+
+    public RouteRuleKey toDomain(org.mydotey.ai.artemis.proto.management.v1.RouteRuleKey key) {
+        return new RouteRuleKey(toDomain(key.getService()), key.getName());
     }
 
     // ---- 逻辑实例流（management.v1，toDomain 入站，phase-4）----

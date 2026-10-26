@@ -35,8 +35,9 @@ class DiscoveryAdminServiceTest {
     private final SubscriptionManager subscriptions = new SubscriptionManager(registry, chain);
     private final UpstreamStatuses upstreamStatuses = new UpstreamStatuses();
     private final ManagementStatus managementStatus = new ManagementStatus();
-    private final DiscoveryAdminService service =
-            new DiscoveryAdminService(subscriptions, registry, chain, upstreamStatuses, managementStatus);
+    private final ManagementStatus routeRuleStatus = new ManagementStatus();
+    private final DiscoveryAdminService service = new DiscoveryAdminService(
+            subscriptions, registry, chain, upstreamStatuses, managementStatus, routeRuleStatus);
 
     @Test
     void should_list_effective_service_view_when_instances_registered() {

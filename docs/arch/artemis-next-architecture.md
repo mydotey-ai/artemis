@@ -1,6 +1,6 @@
 # 新一代 Artemis 架构设计
 
-版本: 1.43    更新时间: 2026-10-26
+版本: 1.44    更新时间: 2026-10-27
 
 > 本文是新一代 Artemis（重设计产品）的架构设计基线：总体架构、核心机制、技术栈策略与关键决策记录。产品定位与版本切分见 [产品规划与路线图](../product/artemis-next-roadmap.md)；设计输入来自 [原产品能力基线](../legacy/legacy-product-analysis.md)（§5 可继承资产 / §6 局限清单）与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -70,7 +70,7 @@
 
 v0.1 端口落点：registry 外部 gRPC + 外部 HTTP（辅助通道）+ 管理 HTTP（actuator：health/readiness/metrics，默认仅绑本机）；management 外部 HTTP（Admin/状态 API）+ 管理 HTTP。v0.1 management → registry 的只读事实查询复用 registry 外部 gRPC 端口（受默认认证保护，ADR-016）。
 
-v0.3 端口落点：management 增设内部 gRPC 端口承载摘除规则流（`management.v1 EjectionRuleService`，discovery 消费）——配置 `artemis.management.grpc.port` 才启用（未配置不监听，management 可无 discovery 依赖独立运行），独立认证账户默认关闭（同 registry 内部端口哲学）；discovery 侧经 `artemis.discovery.management.endpoints` 配置订阅（0..1：未配置不过滤）。discovery 外部 HTTP 端口（`server.port`，默认 8090）承载只读发现管理 API `/admin/v1`（订阅关系/服务视图/上游新鲜度与规则源状态，phase-7）：复用 discovery 外部账户（`artemis.discovery.auth.*`，默认关闭），**不做 readiness 门控**（启动期可排障，未同步由状态字段自解释）——数据面 gRPC 的未就绪 UNAVAILABLE 语义不变。同一端口新增 SDK 前置寻址端点 `GET /cluster/nodes`（v0.3 phase-8，ADR-020）：返回 `discovery.v1 DiscoveryNodesResponse`（静态节点目录，无探测态），复用外部 Basic 认证，**readiness 门控**（未就绪 503——未就绪节点不作寻址应答者，与 `/admin/v1` 免门控排障面区分）。v0.4 phase-4 起同一内部端口增设逻辑实例订阅流（`management.v1 LogicalInstanceService.WatchLogicalInstances`，discovery 消费；快照 + 增量、at-most-once、无版本/ack——数据语义快照自愈，规则版本化归规则流 phase-5）。v0.4 phase-5 起摘除规则流升级版本化 + ack 闭环：`EjectionRulesEvent` 携带规则集状态版本（= 生效态翻转记录 sequence，水位语义非顺序协议）、同 service 增 `AckEjections` unary（discovery 应用后上报，management 记活订阅水位），生效水位出口 `GET /admin/v1/status/rules`（哪个版本、多少节点已生效，§5.2 落地）。
+v0.3 端口落点：management 增设内部 gRPC 端口承载摘除规则流（`management.v1 EjectionRuleService`，discovery 消费）——配置 `artemis.management.grpc.port` 才启用（未配置不监听，management 可无 discovery 依赖独立运行），独立认证账户默认关闭（同 registry 内部端口哲学）；discovery 侧经 `artemis.discovery.management.endpoints` 配置订阅（0..1：未配置不过滤）。discovery 外部 HTTP 端口（`server.port`，默认 8090）承载只读发现管理 API `/admin/v1`（订阅关系/服务视图/上游新鲜度与规则源状态，phase-7）：复用 discovery 外部账户（`artemis.discovery.auth.*`，默认关闭），**不做 readiness 门控**（启动期可排障，未同步由状态字段自解释）——数据面 gRPC 的未就绪 UNAVAILABLE 语义不变。同一端口新增 SDK 前置寻址端点 `GET /cluster/nodes`（v0.3 phase-8，ADR-020）：返回 `discovery.v1 DiscoveryNodesResponse`（静态节点目录，无探测态），复用外部 Basic 认证，**readiness 门控**（未就绪 503——未就绪节点不作寻址应答者，与 `/admin/v1` 免门控排障面区分）。v0.4 phase-4 起同一内部端口增设逻辑实例订阅流（`management.v1 LogicalInstanceService.WatchLogicalInstances`，discovery 消费；快照 + 增量、at-most-once、无版本/ack——数据语义快照自愈，规则版本化归规则流 phase-5）。v0.4 phase-5 起摘除规则流升级版本化 + ack 闭环：`EjectionRulesEvent` 携带规则集状态版本（= 生效态翻转记录 sequence，水位语义非顺序协议）、同 service 增 `AckEjections` unary（discovery 应用后上报，management 记活订阅水位），生效水位出口 `GET /admin/v1/status/rules`（哪个版本、多少节点已生效，§5.2 落地）。v0.5 phase-2 起同一内部端口增设路由规则订阅流（`management.v1 RouteRuleService.WatchRouteRules` + `AckRouteRules`，独立流不并入摘除流；流内容 = ACTIVE 规则集、版本 = dispatcher 内存 tick（重启归零经重连快照收敛）），生效水位经 `status/rules` 的 routeRules 节出口（独立版本域）；规则执行（discovery 过滤器）归 v0.5 phase-3。
 
 v0.2 端口落点：registry 起两个 gRPC 监听——外部端口承载 SDK（四操作/心跳）与**对外节点状态 API**（`replication.v1.NodeStatusService.GetNodeStatus`，返回成员对外端点与探测态；保留外部认证、按方法名豁免 readiness 以便观察 STARTING）；内部 peer 端口（`artemis.registry.internal.*`，端口固定默认 9093，地址无默认值、未配置时绑所有网卡以保证 peer 跨节点可达）承载 peer 复制/成员状态与 management 只读事实查询。内部端口使用独立认证账户且**默认关闭**（启用时须显式配置凭证），与外部账户互不通用；关闭认证的部署必须以网络策略隔离内部端口。只读查询保留 readiness 门控；内部 `GetNodeStatus` 在未就绪时仍可应答（供 peer 判定 UP），`Replicate`/`Bootstrap` 未就绪返回 UNAVAILABLE（未就绪节点不接收复制、也不充当数据源）。外部 HTTP 辅助端口新增 `GET /cluster/nodes`（SDK 前置寻址发现端点，phase-5）：**readiness 门控（未就绪 503）**——未就绪节点不作寻址应答者，SDK 按 url 列表重试其它地址（单地址=域名/LB 退避重试原址）；与 gRPC 观测 API 的 readiness 豁免（供 peer 探测/观察 STARTING）区分：豁免只属观测面，寻址数据面不豁免。
 
@@ -266,6 +266,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.44 | 2026-10-27 | v0.5 phase-2 落点：§2.2 补路由规则订阅流（RouteRuleService 独立流 + AckRouteRules + status/rules routeRules 节，版本 = dispatcher tick） |
 | 1.43 | 2026-10-26 | v0.4 phase-5 设计定案：§2.2 补规则流版本化 + ack 落点（envelope version + AckEjections + 水位 API，§5.2 机制落地） |
 | 1.42 | 2026-10-25 | v0.4 phase-4 设计定案：§2.2 内部端口补逻辑实例订阅流（LogicalInstanceService，无版本/ack）；§4.2 补逻辑实例以保留 cluster `logical` 进投影 union（不门控 readiness、保留名冲突 fail-fast）；§5.2 逻辑实例条目补下发机制 |
 | 1.41 | 2026-10-25 | v0.4 phase-3 设计定案：§5.3「全部治理操作进审计表」精化为摘除记录表自身即操作审计 + 审计表摘要行（无跨表事务，状态源唯一在记录表） |

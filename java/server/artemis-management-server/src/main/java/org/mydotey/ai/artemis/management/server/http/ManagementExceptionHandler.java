@@ -70,12 +70,12 @@ public final class ManagementExceptionHandler {
         return response(HttpStatus.SERVICE_UNAVAILABLE, e.code(), e.getMessage());
     }
 
-    /** 路由规则资源状态与存储不可用：已存在 409 / 缺失 404 / 存储 503（操作未落库可重试）。 */
+    /** 路由规则资源状态与存储不可用：已存在 409 / 规则或发布记录缺失 404 / 存储 503（操作未落库可重试）。 */
     @ExceptionHandler(RouteRuleException.class)
     public ResponseEntity<ErrorResponse> routeRule(RouteRuleException e) {
         HttpStatus status = switch (e.code()) {
             case RouteRuleException.ALREADY_EXISTS -> HttpStatus.CONFLICT;
-            case RouteRuleException.NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case RouteRuleException.NOT_FOUND, RouteRuleException.RELEASE_NOT_FOUND -> HttpStatus.NOT_FOUND;
             default -> HttpStatus.SERVICE_UNAVAILABLE;
         };
         if (status == HttpStatus.SERVICE_UNAVAILABLE) {

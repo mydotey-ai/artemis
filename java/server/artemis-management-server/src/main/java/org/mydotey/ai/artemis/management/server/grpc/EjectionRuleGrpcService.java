@@ -6,11 +6,11 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.extern.slf4j.Slf4j;
 import org.mydotey.ai.artemis.management.application.ManagementProtoMapper;
-import org.mydotey.ai.artemis.management.domain.EjectionAckRegistry;
 import org.mydotey.ai.artemis.management.domain.EjectionRecord;
 import org.mydotey.ai.artemis.management.domain.EjectionRuleSubscriber;
 import org.mydotey.ai.artemis.management.domain.EjectionRuleSubscriptions;
 import org.mydotey.ai.artemis.management.domain.EjectionTarget;
+import org.mydotey.ai.artemis.management.domain.RuleAckRegistry;
 import org.mydotey.ai.artemis.proto.common.v1.Ack;
 import org.mydotey.ai.artemis.proto.common.v1.ResponseStatus;
 import org.mydotey.ai.artemis.proto.management.v1.AckEjectionsRequest;
@@ -30,10 +30,10 @@ import org.mydotey.ai.artemis.proto.management.v1.EjectionRulesRequest;
 public final class EjectionRuleGrpcService extends EjectionRuleServiceGrpc.EjectionRuleServiceImplBase {
 
     private final EjectionRuleSubscriptions subscriptions;
-    private final EjectionAckRegistry acks;
+    private final RuleAckRegistry acks;
     private final ManagementProtoMapper mapper = ManagementProtoMapper.INSTANCE;
 
-    public EjectionRuleGrpcService(EjectionRuleSubscriptions subscriptions, EjectionAckRegistry acks) {
+    public EjectionRuleGrpcService(EjectionRuleSubscriptions subscriptions, RuleAckRegistry acks) {
         this.subscriptions = subscriptions;
         this.acks = acks;
     }
@@ -76,18 +76,18 @@ public final class EjectionRuleGrpcService extends EjectionRuleServiceGrpc.Eject
     private static final class RuleStreamSubscriber implements EjectionRuleSubscriber {
 
         private final String subscriberId;
-        private final EjectionAckRegistry.Subscription subscription;
+        private final RuleAckRegistry.Subscription subscription;
         private final ServerCallStreamObserver<EjectionRulesEvent> observer;
         private final ManagementProtoMapper mapper;
-        private final EjectionAckRegistry acks;
+        private final RuleAckRegistry acks;
         private final AtomicBoolean closed = new AtomicBoolean();
 
         private RuleStreamSubscriber(
                 String subscriberId,
-                EjectionAckRegistry.Subscription subscription,
+                RuleAckRegistry.Subscription subscription,
                 StreamObserver<EjectionRulesEvent> observer,
                 ManagementProtoMapper mapper,
-                EjectionAckRegistry acks) {
+                RuleAckRegistry acks) {
             this.subscriberId = subscriberId;
             this.subscription = subscription;
             this.observer = (ServerCallStreamObserver<EjectionRulesEvent>) observer;

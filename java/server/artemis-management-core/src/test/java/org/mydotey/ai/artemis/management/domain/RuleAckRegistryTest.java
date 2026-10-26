@@ -8,11 +8,11 @@ import java.time.ZoneOffset;
 import org.junit.jupiter.api.Test;
 
 /** 生效 ack 登记（phase-5）：水位只反映活订阅、取 max、未知订阅方忽略。 */
-class EjectionAckRegistryTest {
+class RuleAckRegistryTest {
 
     private static final Instant NOW = Instant.parse("2026-10-26T10:00:00Z");
 
-    private final EjectionAckRegistry acks = new EjectionAckRegistry(Clock.fixed(NOW, ZoneOffset.UTC));
+    private final RuleAckRegistry acks = new RuleAckRegistry(Clock.fixed(NOW, ZoneOffset.UTC));
 
     @Test
     void should_track_watermark_when_subscriber_acks() {
@@ -36,7 +36,7 @@ class EjectionAckRegistryTest {
 
     @Test
     void should_evict_watermark_when_subscriber_gone() {
-        EjectionAckRegistry.Subscription subscription = acks.register("sub-1");
+        RuleAckRegistry.Subscription subscription = acks.register("sub-1");
         acks.record("sub-1", 5);
         acks.evict("sub-1", subscription);
 
@@ -46,8 +46,8 @@ class EjectionAckRegistryTest {
     @Test
     void should_keep_new_generation_when_stale_subscription_evicts() {
         // 同 id 重连：新流先登记，旧流的迟到取消/断流注销不得误删新条目
-        EjectionAckRegistry.Subscription stale = acks.register("sub-1");
-        EjectionAckRegistry.Subscription current = acks.register("sub-1");
+        RuleAckRegistry.Subscription stale = acks.register("sub-1");
+        RuleAckRegistry.Subscription current = acks.register("sub-1");
         acks.record("sub-1", 5);
 
         acks.evict("sub-1", stale); // 旧代际注销：无效果
@@ -85,7 +85,7 @@ class EjectionAckRegistryTest {
         acks.record("sub-b", 1);
 
         assertThat(acks.entries())
-                .extracting(EjectionAckRegistry.AckEntry::subscriberId)
+                .extracting(RuleAckRegistry.AckEntry::subscriberId)
                 .containsExactly("sub-a", "sub-b");
     }
 }

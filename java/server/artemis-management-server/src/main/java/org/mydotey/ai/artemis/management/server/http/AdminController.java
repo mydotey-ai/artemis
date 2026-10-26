@@ -11,6 +11,7 @@ import java.util.Objects;
 import org.mydotey.ai.artemis.common.governance.EjectionScope;
 import org.mydotey.ai.artemis.management.application.EjectionView;
 import org.mydotey.ai.artemis.management.application.ManagementService;
+import org.mydotey.ai.artemis.management.application.ReleaseDiff;
 import org.mydotey.ai.artemis.management.application.ServiceDetail;
 import org.mydotey.ai.artemis.management.application.ServicePage;
 import org.mydotey.ai.artemis.management.application.ServiceView;
@@ -20,6 +21,7 @@ import org.mydotey.ai.artemis.management.domain.Instance;
 import org.mydotey.ai.artemis.management.domain.InstanceStatus;
 import org.mydotey.ai.artemis.management.domain.LogicalInstance;
 import org.mydotey.ai.artemis.management.domain.RouteRule;
+import org.mydotey.ai.artemis.management.domain.RouteRuleRelease;
 import org.mydotey.ai.artemis.management.domain.RouteRuleStatus;
 import org.mydotey.ai.artemis.management.domain.RouteRuleTarget;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
@@ -226,7 +228,59 @@ public final class AdminController {
         managementService.deleteRouteRule(key(namespace, service), name, operator(operator));
     }
 
-    /** 请求体 → 领域规则（域约束校验在用例层 RouteRules.validate，此处只组装与解析缺省值）。 */
+    // ---- 两段式发布（v0.5 phase-2：release / rollback / diff / 发布记录）----
+
+    /** 发布：一个 API 完成灰度运维意图（编辑列拷贝生效列，落 append-only 发布记录）。 */
+    @PostMapping("/route-rules/{namespace}/{service}/{name}/release")
+    public RouteRuleResponse releaseRouteRule(
+            @PathVariable("namespace") String namespace,
+            @PathVariable("service") String service,
+            @PathVariable("name") String name,
+            @RequestAttribute(value = HttpBasicAuthFilter.AUTH_USER_ATTRIBUTE, required = false) String operator) {
+        return toResponse(managementService.releaseRouteRule(key(namespace, service), name, operator(operator)));
+    }
+
+    /** 一键回滚：指向历史版本的反向 release（body 指定源发布记录 id）。 */
+    @PostMapping("/route-rules/{namespace}/{service}/{name}/rollback")
+    public RouteRuleResponse rollbackRouteRule(
+            @PathVariable("namespace") String namespace,
+            @PathVariable("service") String service,
+            @PathVariable("name") String name,
+            @RequestBody(required = false) RollbackRequest request,
+            @RequestAttribute(value = HttpBasicAuthFilter.AUTH_USER_ATTRIBUTE, required = false) String operator) {
+        if (request == null || request.releaseId() == null) {
+            throw new IllegalArgumentException("releaseId required");
+        }
+        return toResponse(managementService.rollbackRouteRule(
+                key(namespace, service), name, request.releaseId(), operator(operator)));
+    }
+
+    /** 发布差异预览：缺省 = 编辑列 vs 当前生效列；releaseId = 历史快照 vs 当前生效列（回滚预览）。 */
+    @GetMapping("/route-rules/{namespace}/{service}/{name}/diff")
+    public ReleaseDiffResponse routeRuleDiff(
+            @PathVariable("namespace") String namespace,
+            @PathVariable("service") String service,
+            @PathVariable("name") String name,
+            @RequestParam(name = "releaseId", required = false) Long releaseId) {
+        return toResponse(managementService.routeRuleDiff(key(namespace, service), name, releaseId));
+    }
+
+    /** 发布记录列表（回滚历史源，id 降序最新在前）。 */
+    @GetMapping("/route-rules/{namespace}/{service}/{name}/releases")
+    public ListReleasesResponse listReleases(
+            @PathVariable("namespace") String namespace,
+            @PathVariable("service") String service,
+            @PathVariable("name") String name,
+            @RequestParam(name = "limit", defaultValue = "" + DEFAULT_LIST_LIMIT) int limit) {
+        int bounded = Math.min(Math.max(1, limit), MAX_LIST_LIMIT);
+        return new ListReleasesResponse(managementService.listReleases(key(namespace, service), name, bounded).stream()
+                .map(AdminController::toResponse)
+                .toList());
+    }
+
+    /** 请求体 → 领域规则（域约束校验在用例层 RouteRules.validate，此处只组装与解析缺省值）。
+     * 两段式：编辑通道不收生效值（weight 恒 0 组装；create 初始归零、update 应用层按
+     * selector 等值继承）——生效列唯一写入口是 release / rollback。 */
     private static RouteRule toRouteRule(RouteRuleRequest request) {
         if (request == null) {
             throw new IllegalArgumentException("request body required");
@@ -241,9 +295,7 @@ public final class AdminController {
             }
             Map<String, String> selector = target.selector() == null ? Map.of() : target.selector(); // 空 map = 兜底目标
             targets.add(new RouteRuleTarget(
-                    selector,
-                    target.weight() == null ? 0 : target.weight(),
-                    target.unreleasedWeight() == null ? 0 : target.unreleasedWeight()));
+                    selector, 0, target.unreleasedWeight() == null ? 0 : target.unreleasedWeight()));
         }
         // 按 UTF-8 字节数设限：MySQL TEXT 列 65535 字节上限，字符计数会放行 4 字节字符溢出（503 而非 400）
         if (METADATA_JSON.toJson(targets).getBytes(StandardCharsets.UTF_8).length > MAX_TARGETS_JSON_BYTES) {
@@ -285,6 +337,34 @@ public final class AdminController {
                 rule.operator(),
                 rule.createdAt(),
                 rule.updatedAt());
+    }
+
+    private static ReleaseDiffResponse toResponse(ReleaseDiff diff) {
+        return new ReleaseDiffResponse(
+                diff.service().namespace(),
+                diff.service().service(),
+                diff.name(),
+                diff.baseReleaseId(),
+                diff.targets().stream()
+                        .map(target ->
+                                new TargetDiffResponse(target.selector(), target.currentWeight(), target.nextWeight()))
+                        .toList());
+    }
+
+    private static RouteRuleReleaseResponse toResponse(RouteRuleRelease release) {
+        return new RouteRuleReleaseResponse(
+                release.id(),
+                release.service().namespace(),
+                release.service().service(),
+                release.name(),
+                release.type().name(),
+                release.rollbackTo(),
+                release.snapshot().stream()
+                        .map(target -> new RouteRuleTargetResponse(
+                                target.selector(), target.weight(), target.unreleasedWeight()))
+                        .toList(),
+                release.operator(),
+                release.releasedAt());
     }
 
     private static LogicalInstance toLogicalInstance(LogicalInstanceRequest request) {
@@ -443,11 +523,34 @@ public final class AdminController {
 
     public record ListLogicalInstancesResponse(List<LogicalInstanceResponse> instances) {}
 
-    /** 路由规则创建/替换请求体（status 缺省 ACTIVE；selector 空 map = 兜底目标）。 */
+    /** 路由规则创建/替换请求体（status 缺省 ACTIVE；selector 空 map = 兜底目标；
+     * targets 只收编辑列——生效列经 release/rollback 变更，两段式）。 */
     public record RouteRuleRequest(
             String namespace, String service, String name, String status, List<RouteRuleTargetRequest> targets) {}
 
-    public record RouteRuleTargetRequest(Map<String, String> selector, Integer weight, Integer unreleasedWeight) {}
+    public record RouteRuleTargetRequest(Map<String, String> selector, Integer unreleasedWeight) {}
+
+    /** 回滚请求体：releaseId = 源发布记录 id（回滚历史源）。 */
+    public record RollbackRequest(Long releaseId) {}
+
+    /** 发布差异预览响应：currentWeight/nextWeight null = 该侧无此目标（移除/新增）。 */
+    public record ReleaseDiffResponse(
+            String namespace, String service, String name, Long baseReleaseId, List<TargetDiffResponse> targets) {}
+
+    public record TargetDiffResponse(Map<String, String> selector, Integer currentWeight, Integer nextWeight) {}
+
+    public record RouteRuleReleaseResponse(
+            long id,
+            String namespace,
+            String service,
+            String name,
+            String type,
+            Long rollbackTo,
+            List<RouteRuleTargetResponse> snapshot,
+            String operator,
+            Instant releasedAt) {}
+
+    public record ListReleasesResponse(List<RouteRuleReleaseResponse> releases) {}
 
     public record RouteRuleResponse(
             String namespace,

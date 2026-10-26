@@ -2,18 +2,21 @@ package org.mydotey.ai.artemis.management.application;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.mydotey.ai.artemis.common.governance.EjectionScope;
 import org.mydotey.ai.artemis.management.domain.AuditLog;
 import org.mydotey.ai.artemis.management.domain.AuditLogStore;
 import org.mydotey.ai.artemis.management.domain.ConfigProperty;
-import org.mydotey.ai.artemis.management.domain.EjectionAckRegistry;
 import org.mydotey.ai.artemis.management.domain.EjectionAction;
 import org.mydotey.ai.artemis.management.domain.EjectionRecord;
 import org.mydotey.ai.artemis.management.domain.EjectionRecords;
@@ -27,10 +30,16 @@ import org.mydotey.ai.artemis.management.domain.LogicalInstance;
 import org.mydotey.ai.artemis.management.domain.LogicalInstancePublisher;
 import org.mydotey.ai.artemis.management.domain.LogicalInstanceStore;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryPort;
+import org.mydotey.ai.artemis.management.domain.ReleaseType;
 import org.mydotey.ai.artemis.management.domain.RouteRule;
 import org.mydotey.ai.artemis.management.domain.RouteRuleException;
+import org.mydotey.ai.artemis.management.domain.RouteRulePublisher;
+import org.mydotey.ai.artemis.management.domain.RouteRuleRelease;
+import org.mydotey.ai.artemis.management.domain.RouteRuleReleaseStore;
 import org.mydotey.ai.artemis.management.domain.RouteRuleStore;
+import org.mydotey.ai.artemis.management.domain.RouteRuleTarget;
 import org.mydotey.ai.artemis.management.domain.RouteRules;
+import org.mydotey.ai.artemis.management.domain.RuleAckRegistry;
 import org.mydotey.ai.artemis.management.domain.RuleStatus;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
@@ -56,6 +65,9 @@ public final class ManagementServiceImpl implements ManagementService {
     /** 逻辑实例读-判-写互斥（并发 upsert/delete 与推送成对串行，防流上乱序，ejectionLock 先例）。 */
     private final Object logicalInstanceLock = new Object();
 
+    /** 路由规则读-判-写（update 权重继承 / release 拷贝）与推送成对串行，防流上乱序（同先例）。 */
+    private final Object routeRuleLock = new Object();
+
     private static final Comparator<LogicalInstance> LOGICAL_ORDER = Comparator.comparing(
                     LogicalInstance::service, SERVICE_ORDER)
             .thenComparing(instance -> instance.instance().instanceId());
@@ -67,10 +79,13 @@ public final class ManagementServiceImpl implements ManagementService {
     private final EjectionStore ejections;
     private final AuditLogStore auditLogs;
     private final EjectionRulePublisher publisher;
-    private final EjectionAckRegistry acks;
+    private final RuleAckRegistry acks;
     private final LogicalInstanceStore logicalInstances;
     private final LogicalInstancePublisher logicalPublisher;
     private final RouteRuleStore routeRules;
+    private final RouteRuleReleaseStore releases;
+    private final RouteRulePublisher routeRulePublisher;
+    private final RuleAckRegistry routeRuleAcks;
     private final Clock clock;
 
     public ManagementServiceImpl(
@@ -78,10 +93,13 @@ public final class ManagementServiceImpl implements ManagementService {
             EjectionStore ejections,
             AuditLogStore auditLogs,
             EjectionRulePublisher publisher,
-            EjectionAckRegistry acks,
+            RuleAckRegistry acks,
             LogicalInstanceStore logicalInstances,
             LogicalInstancePublisher logicalPublisher,
             RouteRuleStore routeRules,
+            RouteRuleReleaseStore releases,
+            RouteRulePublisher routeRulePublisher,
+            RuleAckRegistry routeRuleAcks,
             Clock clock) {
         this.registry = registry;
         this.ejections = ejections;
@@ -91,6 +109,9 @@ public final class ManagementServiceImpl implements ManagementService {
         this.logicalInstances = logicalInstances;
         this.logicalPublisher = logicalPublisher;
         this.routeRules = routeRules;
+        this.releases = releases;
+        this.routeRulePublisher = routeRulePublisher;
+        this.routeRuleAcks = routeRuleAcks;
         this.clock = clock;
     }
 
@@ -248,11 +269,24 @@ public final class ManagementServiceImpl implements ManagementService {
     public RouteRule createRouteRule(RouteRule rule, String operator) {
         RouteRules.validate(rule);
         Instant now = clock.instant();
-        RouteRule stored =
-                new RouteRule(rule.service(), rule.name(), rule.status(), rule.targets(), operator, now, now);
-        if (!routeRules.insert(stored)) {
-            throw new RouteRuleException(
-                    RouteRuleException.ALREADY_EXISTS, "route rule exists: " + describe(rule.service(), rule.name()));
+        // 两段式不变量：生效值列初始归零（创建 = 定义结构，release 才生效）
+        RouteRule stored = new RouteRule(
+                rule.service(),
+                rule.name(),
+                rule.status(),
+                rule.targets().stream()
+                        .map(target -> new RouteRuleTarget(target.selector(), 0, target.unreleasedWeight()))
+                        .toList(),
+                operator,
+                now,
+                now);
+        synchronized (routeRuleLock) {
+            if (!routeRules.insert(stored)) {
+                throw new RouteRuleException(
+                        RouteRuleException.ALREADY_EXISTS,
+                        "route rule exists: " + describe(rule.service(), rule.name()));
+            }
+            notifyRuleChanged(stored);
         }
         audit("CREATE_ROUTE_RULE", routeRuleTarget(rule.service(), rule.name()), operator, targetsSummary(stored));
         return stored;
@@ -261,21 +295,27 @@ public final class ManagementServiceImpl implements ManagementService {
     @Override
     public RouteRule updateRouteRule(RouteRule rule, String operator) {
         RouteRules.validate(rule);
-        RouteRule current = routeRules.find(rule.service(), rule.name());
-        if (current == null) {
-            throw notFound(rule.service(), rule.name());
-        }
-        // createdAt 继承原值（创建事实不随替换漂移）；updatedAt 刷新
-        RouteRule stored = new RouteRule(
-                rule.service(),
-                rule.name(),
-                rule.status(),
-                rule.targets(),
-                operator,
-                current.createdAt(),
-                clock.instant());
-        if (!routeRules.update(stored)) {
-            throw notFound(rule.service(), rule.name()); // find 后被并发删除
+        RouteRule stored;
+        synchronized (routeRuleLock) {
+            RouteRule current = routeRules.find(rule.service(), rule.name());
+            if (current == null) {
+                throw notFound(rule.service(), rule.name());
+            }
+            // createdAt 继承原值（创建事实不随替换漂移）；updatedAt 刷新；
+            // 生效权重按 selector 等值继承——编辑通道不触碰生效值列（两段式不变量）
+            RouteRule replacement = new RouteRule(
+                    rule.service(),
+                    rule.name(),
+                    rule.status(),
+                    inheritWeights(current.targets(), rule.targets()),
+                    operator,
+                    current.createdAt(),
+                    clock.instant());
+            if (!routeRules.update(replacement)) {
+                throw notFound(rule.service(), rule.name()); // find 后被并发删除
+            }
+            stored = replacement;
+            notifyRuleChanged(stored);
         }
         audit("UPDATE_ROUTE_RULE", routeRuleTarget(rule.service(), rule.name()), operator, targetsSummary(stored));
         return stored;
@@ -283,10 +323,147 @@ public final class ManagementServiceImpl implements ManagementService {
 
     @Override
     public void deleteRouteRule(ServiceKey service, String name, String operator) {
-        if (!routeRules.delete(service, name)) {
-            return; // 缺失幂等 no-op（不删除不审计）
+        synchronized (routeRuleLock) {
+            if (!routeRules.delete(service, name)) {
+                return; // 缺失幂等 no-op（不删除不审计）
+            }
+            routeRulePublisher.onDeleted(service, name);
         }
         audit("DELETE_ROUTE_RULE", routeRuleTarget(service, name), operator, null);
+    }
+
+    @Override
+    public RouteRule releaseRouteRule(ServiceKey service, String name, String operator) {
+        Instant now = clock.instant();
+        RouteRule released;
+        RouteRuleRelease record;
+        synchronized (routeRuleLock) {
+            RouteRule current = routeRules.find(service, name);
+            if (current == null) {
+                throw notFound(service, name);
+            }
+            // 拷贝语义：逐 target weight ← unreleasedWeight（两列已相等照常落记录——显式动作，审计需要）
+            List<RouteRuleTarget> copied = current.targets().stream()
+                    .map(target -> new RouteRuleTarget(
+                            target.selector(), target.unreleasedWeight(), target.unreleasedWeight()))
+                    .toList();
+            released = new RouteRule(service, name, current.status(), copied, operator, current.createdAt(), now);
+            if (!routeRules.update(released)) {
+                throw notFound(service, name); // find 后被并发删除
+            }
+            // 生效优先：流与存储一致先于发布记录（append 失败 → 503，重试 release 幂等补录记录，
+            // 重试再推一次 upserted 消费方覆盖语义幂等无害；§8 两写边界）
+            notifyRuleChanged(released);
+            record = releases.append(
+                    new RouteRuleRelease(0, service, name, ReleaseType.RELEASE, copied, null, operator, now));
+        }
+        audit(
+                "RELEASE_ROUTE_RULE",
+                routeRuleTarget(service, name),
+                operator,
+                targetsSummary(released) + " releaseId=" + record.id());
+        return released;
+    }
+
+    @Override
+    public RouteRule rollbackRouteRule(ServiceKey service, String name, long releaseId, String operator) {
+        Instant now = clock.instant();
+        RouteRule restored;
+        synchronized (routeRuleLock) {
+            RouteRule current = routeRules.find(service, name);
+            if (current == null) {
+                throw notFound(service, name);
+            }
+            RouteRuleRelease source = releases.find(service, name, releaseId);
+            if (source == null) {
+                throw new RouteRuleException(
+                        RouteRuleException.RELEASE_NOT_FOUND,
+                        "release not found: " + describe(service, name) + "/" + releaseId);
+            }
+            // 反向 release：weight 与 unreleasedWeight 两列写回源快照（完全恢复源发布时刻状态）
+            restored = new RouteRule(
+                    service, name, current.status(), source.snapshot(), operator, current.createdAt(), now);
+            if (!routeRules.update(restored)) {
+                throw notFound(service, name);
+            }
+            notifyRuleChanged(restored); // 生效优先（同 release 写序）
+            releases.append(new RouteRuleRelease(
+                    0, service, name, ReleaseType.ROLLBACK, source.snapshot(), releaseId, operator, now));
+        }
+        audit(
+                "ROLLBACK_ROUTE_RULE",
+                routeRuleTarget(service, name),
+                operator,
+                "rollbackTo=" + releaseId + " " + targetsSummary(restored));
+        return restored;
+    }
+
+    @Override
+    public ReleaseDiff routeRuleDiff(ServiceKey service, String name, Long baseReleaseId) {
+        RouteRule rule = routeRules.find(service, name);
+        if (rule == null) {
+            throw notFound(service, name);
+        }
+        // 基 = 发布快照生效列：缺省取最新发布记录（未发布过 = 空基，全量新增）；
+        // 指定 releaseId 取该记录（回滚预览）。next = 当前编辑列（结构 + 权重全量变更）。
+        RouteRuleRelease base;
+        if (baseReleaseId == null) {
+            List<RouteRuleRelease> latest = releases.list(service, name, 1);
+            base = latest.isEmpty() ? null : latest.get(0);
+        } else {
+            base = releases.find(service, name, baseReleaseId);
+            if (base == null) {
+                throw new RouteRuleException(
+                        RouteRuleException.RELEASE_NOT_FOUND,
+                        "release not found: " + describe(service, name) + "/" + baseReleaseId);
+            }
+        }
+        List<RouteRuleTarget> baseTargets = base == null ? List.of() : base.snapshot();
+        return new ReleaseDiff(service, name, baseReleaseId, diffTargets(baseTargets, rule.targets()));
+    }
+
+    @Override
+    public List<RouteRuleRelease> listReleases(ServiceKey service, String name, int limit) {
+        return releases.list(service, name, Math.max(1, limit));
+    }
+
+    /** 生效权重按 selector 等值继承（重复 selector 已被域校验拒绝，匹配唯一）。 */
+    private static List<RouteRuleTarget> inheritWeights(List<RouteRuleTarget> current, List<RouteRuleTarget> next) {
+        Map<Map<String, String>, Integer> weights = new HashMap<>();
+        for (RouteRuleTarget target : current) {
+            weights.put(target.selector(), target.weight());
+        }
+        return next.stream()
+                .map(target -> new RouteRuleTarget(
+                        target.selector(), weights.getOrDefault(target.selector(), 0), target.unreleasedWeight()))
+                .toList();
+    }
+
+    /** diff 并集对齐（selector 等值）：基 = 发布快照生效列、next = 当前编辑列；
+     * 编辑序为主、基独有（将被移除）追加尾部。 */
+    private static List<ReleaseDiff.TargetDiff> diffTargets(List<RouteRuleTarget> base, List<RouteRuleTarget> next) {
+        Map<Map<String, String>, Integer> baseWeights = new HashMap<>();
+        for (RouteRuleTarget target : base) {
+            baseWeights.put(target.selector(), target.weight());
+        }
+        List<ReleaseDiff.TargetDiff> diffs = new ArrayList<>(next.size());
+        Set<Map<String, String>> nextSelectors = new HashSet<>(next.size());
+        for (RouteRuleTarget target : next) {
+            diffs.add(new ReleaseDiff.TargetDiff(
+                    target.selector(), baseWeights.get(target.selector()), target.unreleasedWeight()));
+            nextSelectors.add(target.selector());
+        }
+        for (RouteRuleTarget target : base) {
+            if (!nextSelectors.contains(target.selector())) {
+                diffs.add(new ReleaseDiff.TargetDiff(target.selector(), target.weight(), null));
+            }
+        }
+        return diffs;
+    }
+
+    /** 规则变更通知（流内容 = ACTIVE 集的判定收敛在 dispatcher 单点，见 RouteRuleDispatcher）。 */
+    private void notifyRuleChanged(RouteRule rule) {
+        routeRulePublisher.onUpserted(rule);
     }
 
     @Override
@@ -347,17 +524,31 @@ public final class ManagementServiceImpl implements ManagementService {
     @Override
     public RuleStatus ruleStatus() {
         long currentVersion = EjectionRecords.lastFlipSequence(ejections.findAll());
-        List<RuleStatus.SubscriberWatermark> subscribers = acks.entries().stream()
+        List<RuleStatus.SubscriberWatermark> subscribers = watermarks(acks, currentVersion);
+        return new RuleStatus(currentVersion, subscribers, appliedLatestCount(subscribers), routeRulesStatus());
+    }
+
+    /** 路由规则流水位节（phase-2，与摘除流同构、独立版本域：currentVersion = dispatcher tick）。 */
+    private RuleStatus.RouteRulesStatus routeRulesStatus() {
+        long currentVersion = routeRulePublisher.version();
+        List<RuleStatus.SubscriberWatermark> subscribers = watermarks(routeRuleAcks, currentVersion);
+        return new RuleStatus.RouteRulesStatus(currentVersion, subscribers, appliedLatestCount(subscribers));
+    }
+
+    private static List<RuleStatus.SubscriberWatermark> watermarks(RuleAckRegistry acks, long currentVersion) {
+        return acks.entries().stream()
                 .map(entry -> new RuleStatus.SubscriberWatermark(
                         entry.subscriberId(),
                         entry.appliedVersion(),
                         entry.lastAckAt(),
                         Objects.equals(entry.appliedVersion(), currentVersion)))
                 .toList();
-        int appliedLatestCount = (int) subscribers.stream()
+    }
+
+    private static int appliedLatestCount(List<RuleStatus.SubscriberWatermark> subscribers) {
+        return (int) subscribers.stream()
                 .filter(RuleStatus.SubscriberWatermark::atLatest)
                 .count();
-        return new RuleStatus(currentVersion, subscribers, appliedLatestCount);
     }
 
     /** 审计摘要行：尽力而为（失败不阻塞治理操作，仅记录；状态源唯一在业务存储）。 */

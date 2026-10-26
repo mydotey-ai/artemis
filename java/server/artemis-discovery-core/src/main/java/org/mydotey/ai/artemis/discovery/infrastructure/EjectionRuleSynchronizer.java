@@ -9,7 +9,6 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import lombok.extern.slf4j.Slf4j;
-import org.mydotey.ai.artemis.common.config.ScfProperties;
 import org.mydotey.ai.artemis.discovery.domain.ChangeType;
 import org.mydotey.ai.artemis.discovery.domain.EjectionFilter;
 import org.mydotey.ai.artemis.discovery.domain.EjectionRule;
@@ -26,8 +25,6 @@ import org.mydotey.ai.artemis.discovery.domain.ServiceChange;
 import org.mydotey.ai.artemis.discovery.domain.ServiceInstances;
 import org.mydotey.ai.artemis.discovery.domain.ServiceKey;
 import org.mydotey.ai.artemis.discovery.domain.SubscriptionManager;
-import org.mydotey.scf.Property;
-import org.mydotey.scf.facade.StringProperties;
 
 /**
  * 摘除规则同步引擎（D-E3/D-E6/D-E7）：单同步线程循环 + per-round 有界事件队列
@@ -50,14 +47,6 @@ import org.mydotey.scf.facade.StringProperties;
 @Slf4j
 public final class EjectionRuleSynchronizer implements AutoCloseable {
 
-    static final String KEY_QUEUE_CAPACITY = "artemis.discovery.management.queueCapacity";
-    static final String KEY_BACKOFF_MIN_MS = "artemis.discovery.management.reconnectBackoffMinMs";
-    static final String KEY_BACKOFF_MAX_MS = "artemis.discovery.management.reconnectBackoffMaxMs";
-
-    private static final int DEFAULT_QUEUE_CAPACITY = 1_024;
-    private static final long DEFAULT_BACKOFF_MIN_MS = 1_000;
-    private static final long DEFAULT_BACKOFF_MAX_MS = 10_000;
-
     private final EjectionRuleSource source;
     private final EjectionFilter filter;
     private final ProjectionRegistry registry;
@@ -74,7 +63,7 @@ public final class EjectionRuleSynchronizer implements AutoCloseable {
     private boolean everSynced; // worker 线程独占（断连判定，同 ProjectionSynchronizer）
 
     public EjectionRuleSynchronizer(
-            StringProperties properties,
+            ManagementSyncProperties sync,
             EjectionRuleSource source,
             EjectionFilter filter,
             ProjectionRegistry registry,
@@ -85,18 +74,9 @@ public final class EjectionRuleSynchronizer implements AutoCloseable {
         this.registry = registry;
         this.subscriptionManager = subscriptionManager;
         this.managementStatus = managementStatus;
-        this.queueCapacity = ScfProperties.staticInt(
-                        properties,
-                        KEY_QUEUE_CAPACITY,
-                        DEFAULT_QUEUE_CAPACITY,
-                        16,
-                        1_048_576,
-                        "ejection rule event queue capacity (static)")
-                .getValue();
-        this.backoffMinMs = staticLong(properties, KEY_BACKOFF_MIN_MS, DEFAULT_BACKOFF_MIN_MS)
-                .getValue();
-        this.backoffMaxMs = staticLong(properties, KEY_BACKOFF_MAX_MS, DEFAULT_BACKOFF_MAX_MS)
-                .getValue();
+        this.queueCapacity = sync.queueCapacity;
+        this.backoffMinMs = sync.backoffMinMs;
+        this.backoffMaxMs = sync.backoffMaxMs;
         this.worker =
                 Thread.ofPlatform().name("artemis-discovery-ejection-sync").unstarted(this::run);
     }
@@ -252,10 +232,6 @@ public final class EjectionRuleSynchronizer implements AutoCloseable {
 
     private void sleepJittered(long base) throws InterruptedException {
         TimeUnit.MILLISECONDS.sleep(ThreadLocalRandom.current().nextLong(base) + 1);
-    }
-
-    private static Property<String, Long> staticLong(StringProperties properties, String key, long defaultValue) {
-        return ScfProperties.staticLong(properties, key, defaultValue, 100, 600_000, key + " (static)");
     }
 
     @Override

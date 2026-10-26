@@ -9,17 +9,20 @@ import org.mydotey.ai.artemis.management.application.ManagementServiceImpl;
 import org.mydotey.ai.artemis.management.application.PersistenceInfo;
 import org.mydotey.ai.artemis.management.domain.AccountStore;
 import org.mydotey.ai.artemis.management.domain.AuditLogStore;
-import org.mydotey.ai.artemis.management.domain.EjectionAckRegistry;
 import org.mydotey.ai.artemis.management.domain.EjectionStore;
 import org.mydotey.ai.artemis.management.domain.LogicalInstanceStore;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryPort;
+import org.mydotey.ai.artemis.management.domain.RouteRuleReleaseStore;
 import org.mydotey.ai.artemis.management.domain.RouteRuleStore;
+import org.mydotey.ai.artemis.management.domain.RuleAckRegistry;
 import org.mydotey.ai.artemis.management.infrastructure.EjectionRuleDispatcher;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryAuditLogStore;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryEjectionStore;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryLogicalInstanceStore;
+import org.mydotey.ai.artemis.management.infrastructure.InMemoryRouteRuleReleaseStore;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryRouteRuleStore;
 import org.mydotey.ai.artemis.management.infrastructure.LogicalInstanceDispatcher;
+import org.mydotey.ai.artemis.management.infrastructure.RouteRuleDispatcher;
 import org.mydotey.ai.artemis.management.server.auth.ConfigAccountAuthService;
 import org.mydotey.ai.artemis.management.server.auth.ManagementAuthConfig;
 import org.mydotey.ai.artemis.management.server.config.ManagementConfigurationSources;
@@ -35,10 +38,13 @@ import org.mydotey.ai.artemis.management.server.repository.EjectionStoreImpl;
 import org.mydotey.ai.artemis.management.server.repository.LogicalInstanceMapper;
 import org.mydotey.ai.artemis.management.server.repository.LogicalInstanceStoreImpl;
 import org.mydotey.ai.artemis.management.server.repository.RouteRuleMapper;
+import org.mydotey.ai.artemis.management.server.repository.RouteRuleReleaseMapper;
+import org.mydotey.ai.artemis.management.server.repository.RouteRuleReleaseStoreImpl;
 import org.mydotey.ai.artemis.management.server.repository.RouteRuleStoreImpl;
 import org.mydotey.scf.ConfigurationManager;
 import org.mydotey.scf.facade.StringProperties;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
@@ -95,6 +101,13 @@ public class ManagementConfiguration {
         return mapper == null ? new InMemoryRouteRuleStore() : new RouteRuleStoreImpl(mapper);
     }
 
+    /** 发布记录存储双轨（phase-2，同判据；append-only，id 由实现分配）。 */
+    @Bean
+    RouteRuleReleaseStore routeRuleReleaseStore(ObjectProvider<RouteRuleReleaseMapper> mapperProvider) {
+        RouteRuleReleaseMapper mapper = mapperProvider.getIfAvailable();
+        return mapper == null ? new InMemoryRouteRuleReleaseStore() : new RouteRuleReleaseStoreImpl(mapper);
+    }
+
     /** 审计存储双轨（同判据；内存态重启丢失为既有语义）。 */
     @Bean
     AuditLogStore auditLogStore(ObjectProvider<AuditLogMapper> mapperProvider) {
@@ -110,8 +123,20 @@ public class ManagementConfiguration {
 
     /** 生效 ack 登记无条件装配（phase-5；内存观测态，无订阅者零条目）。 */
     @Bean
-    EjectionAckRegistry ejectionAckRegistry(Clock clock) {
-        return new EjectionAckRegistry(clock);
+    RuleAckRegistry ejectionAckRegistry(Clock clock) {
+        return new RuleAckRegistry(clock);
+    }
+
+    /** 路由规则流分发无条件装配（phase-2，同模式；无 gRPC 端口时零订阅者，通知为空操作）。 */
+    @Bean(destroyMethod = "close")
+    RouteRuleDispatcher routeRuleDispatcher(RouteRuleStore routeRuleStore) {
+        return new RouteRuleDispatcher(routeRuleStore);
+    }
+
+    /** 路由规则流生效 ack 登记无条件装配（phase-2，ejection 实例独立——水位 per 流）。 */
+    @Bean
+    RuleAckRegistry routeRuleAckRegistry(Clock clock) {
+        return new RuleAckRegistry(clock);
     }
 
     /** 逻辑实例流分发无条件装配（无 gRPC 端口时零订阅者，通知为空操作）。 */
@@ -174,10 +199,13 @@ public class ManagementConfiguration {
             EjectionStore ejectionStore,
             AuditLogStore auditLogStore,
             EjectionRuleDispatcher ejectionRuleDispatcher,
-            EjectionAckRegistry ejectionAckRegistry,
+            @Qualifier("ejectionAckRegistry") RuleAckRegistry ejectionAckRegistry,
             LogicalInstanceStore logicalInstanceStore,
             LogicalInstanceDispatcher logicalInstanceDispatcher,
             RouteRuleStore routeRuleStore,
+            RouteRuleReleaseStore routeRuleReleaseStore,
+            RouteRuleDispatcher routeRuleDispatcher,
+            @Qualifier("routeRuleAckRegistry") RuleAckRegistry routeRuleAckRegistry,
             Clock clock) {
         return new ManagementServiceImpl(
                 registryQueryPort,
@@ -188,6 +216,9 @@ public class ManagementConfiguration {
                 logicalInstanceStore,
                 logicalInstanceDispatcher,
                 routeRuleStore,
+                routeRuleReleaseStore,
+                routeRuleDispatcher,
+                routeRuleAckRegistry,
                 clock);
     }
 

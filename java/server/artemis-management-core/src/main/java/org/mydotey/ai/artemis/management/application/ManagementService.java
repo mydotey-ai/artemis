@@ -8,6 +8,7 @@ import org.mydotey.ai.artemis.management.domain.EjectionTarget;
 import org.mydotey.ai.artemis.management.domain.LeaseStatus;
 import org.mydotey.ai.artemis.management.domain.LogicalInstance;
 import org.mydotey.ai.artemis.management.domain.RouteRule;
+import org.mydotey.ai.artemis.management.domain.RouteRuleRelease;
 import org.mydotey.ai.artemis.management.domain.RuleStatus;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
@@ -48,14 +49,26 @@ public interface ManagementService {
     /** 逻辑实例列表（(namespace, service) 过滤可选，键升序，limit 截断）。 */
     List<LogicalInstance> listLogicalInstances(String namespace, String service, int limit);
 
-    /** 创建路由规则（insert-if-absent，时间戳此处填写）；同名已存在 → ALREADY_EXISTS。 */
+    /** 创建路由规则（insert-if-absent，时间戳此处填写；生效权重归零——两段式初始未发布）；同名已存在 → ALREADY_EXISTS。 */
     RouteRule createRouteRule(RouteRule rule, String operator);
 
-    /** 全量替换（createdAt 继承原值）；缺失 → NOT_FOUND。 */
+    /** 全量替换（createdAt 继承原值；生效权重按 selector 等值继承，编辑通道不触碰生效列）；缺失 → NOT_FOUND。 */
     RouteRule updateRouteRule(RouteRule rule, String operator);
 
     /** 删除；缺失幂等 no-op（不审计）。 */
     void deleteRouteRule(ServiceKey service, String name, String operator);
+
+    /** 发布（一个 API 完成灰度意图）：targets 逐项 weight ← unreleasedWeight，落 append-only 发布记录并推规则流。 */
+    RouteRule releaseRouteRule(ServiceKey service, String name, String operator);
+
+    /** 一键回滚（指向历史版本的反向 release）：weight 与 unreleasedWeight 两列写回源快照，落 ROLLBACK 记录；源缺失/异规则 → RELEASE_NOT_FOUND。 */
+    RouteRule rollbackRouteRule(ServiceKey service, String name, long releaseId, String operator);
+
+    /** 发布差异预览：基 = 最新发布快照生效列（baseReleaseId null，未发布过 = 空基）或指定历史快照（回滚预览）；next = 当前编辑列（结构 + 权重全量变更）。 */
+    ReleaseDiff routeRuleDiff(ServiceKey service, String name, Long baseReleaseId);
+
+    /** 发布记录列表（(service, name) 内 id 降序，limit 截断）。 */
+    List<RouteRuleRelease> listReleases(ServiceKey service, String name, int limit);
 
     /** 单条查询；缺失 → NOT_FOUND。 */
     RouteRule getRouteRule(ServiceKey service, String name);

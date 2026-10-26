@@ -11,8 +11,8 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import org.junit.jupiter.api.Test;
-import org.mydotey.ai.artemis.management.domain.EjectionAckRegistry;
 import org.mydotey.ai.artemis.management.domain.EjectionStore;
+import org.mydotey.ai.artemis.management.domain.RuleAckRegistry;
 import org.mydotey.ai.artemis.management.infrastructure.EjectionRuleDispatcher;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryEjectionStore;
 import org.mydotey.ai.artemis.proto.management.v1.EjectionRulesEvent;
@@ -26,7 +26,7 @@ class EjectionRuleGrpcServiceTest {
         EjectionStore store = new InMemoryEjectionStore();
         EjectionRuleDispatcher dispatcher = new EjectionRuleDispatcher(store);
         EjectionRuleGrpcService service =
-                new EjectionRuleGrpcService(dispatcher, new EjectionAckRegistry(Clock.systemUTC()));
+                new EjectionRuleGrpcService(dispatcher, new RuleAckRegistry(Clock.systemUTC()));
 
         @SuppressWarnings("unchecked")
         ServerCallStreamObserver<EjectionRulesEvent> observer = mock(ServerCallStreamObserver.class);
@@ -44,7 +44,7 @@ class EjectionRuleGrpcServiceTest {
     void should_evict_watermark_when_server_disconnects_subscriber() {
         EjectionStore store = new InMemoryEjectionStore();
         EjectionRuleDispatcher dispatcher = new EjectionRuleDispatcher(store);
-        EjectionAckRegistry acks = new EjectionAckRegistry(Clock.fixed(Instant.EPOCH, ZoneOffset.UTC));
+        RuleAckRegistry acks = new RuleAckRegistry(Clock.fixed(Instant.EPOCH, ZoneOffset.UTC));
         EjectionRuleGrpcService service = new EjectionRuleGrpcService(dispatcher, acks);
 
         @SuppressWarnings("unchecked")

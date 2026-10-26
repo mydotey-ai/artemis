@@ -55,7 +55,12 @@ public final class AdminController {
         var view = adminService.upstreams();
         return new UpstreamsResponse(
                 view.upstreams(),
-                new ManagementView(view.managementEnabled(), view.managementState(), view.managementAppliedVersion()));
+                new ManagementView(
+                        view.managementEnabled(),
+                        view.managementState(),
+                        view.managementAppliedVersion(),
+                        new RouteRuleSyncView(
+                                view.routeRules().state(), view.routeRules().appliedVersion())));
     }
 
     /** 契约输出形态（D-A3）：选择器拍平为 services/labels/clusters，集合稳定排序。 */
@@ -89,5 +94,9 @@ public final class AdminController {
     public record UpstreamsResponse(List<UpstreamStatus> upstreams, ManagementView management) {}
 
     /** appliedVersion：本节点已应用规则集版本（-1 = 尚未应用；phase-5 排障对照）。 */
-    public record ManagementView(boolean enabled, ManagementState state, long appliedVersion) {}
+    public record ManagementView(
+            boolean enabled, ManagementState state, long appliedVersion, RouteRuleSyncView routeRules) {}
+
+    /** 路由规则流对照（phase-2；独立状态与版本域，与摘除流对齐的排障口径）。 */
+    public record RouteRuleSyncView(ManagementState state, long appliedVersion) {}
 }

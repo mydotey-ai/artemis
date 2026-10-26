@@ -7,7 +7,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 摘除规则生效 ack 登记（phase-5，内存观测态，不持久化——重启经订阅方重连快照 +
+ * 规则流生效 ack 登记（ejection / route-rule 各一实例；phase-5 引入，phase-2 泛化。
+ * 内存观测态，不持久化——重启经订阅方重连快照 +
  * 重新 ack 重建）。**水位只反映活订阅**：随订阅登记/断流清除条目——断连节点生效态
  * 未知不冒充已生效，同时免无界滞留；未登记订阅方的 ack 忽略。
  *
@@ -15,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * ——同 id 重连（新流先登记、旧流取消/close 迟到）不会误删新条目。已知限界：旧流在途
  * 的 ack 无代际凭证，可能落入新条目短暂失真观测面（首次真实 ack 后自愈，不做协议扩展）。
  */
-public final class EjectionAckRegistry {
+public final class RuleAckRegistry {
 
     /** 单订阅方水位：appliedVersion null = 已订阅尚未 ack（快照在途）。 */
     public record AckEntry(String subscriberId, Long appliedVersion, Instant lastAckAt) {}
@@ -32,7 +33,7 @@ public final class EjectionAckRegistry {
     private final Clock clock;
     private final ConcurrentHashMap<String, State> subscribers = new ConcurrentHashMap<>();
 
-    public EjectionAckRegistry(Clock clock) {
+    public RuleAckRegistry(Clock clock) {
         this.clock = clock;
     }
 

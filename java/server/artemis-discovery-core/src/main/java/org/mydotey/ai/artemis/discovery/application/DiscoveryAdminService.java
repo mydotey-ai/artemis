@@ -37,18 +37,21 @@ public final class DiscoveryAdminService {
     private final DiscoveryFilterChain chain;
     private final UpstreamStatuses upstreamStatuses;
     private final ManagementStatus managementStatus;
+    private final ManagementStatus routeRuleStatus;
 
     public DiscoveryAdminService(
             SubscriptionManager subscriptions,
             ProjectionRegistry registry,
             DiscoveryFilterChain chain,
             UpstreamStatuses upstreamStatuses,
-            ManagementStatus managementStatus) {
+            ManagementStatus managementStatus,
+            ManagementStatus routeRuleStatus) {
         this.subscriptions = subscriptions;
         this.registry = registry;
         this.chain = chain;
         this.upstreamStatuses = upstreamStatuses;
         this.managementStatus = managementStatus;
+        this.routeRuleStatus = routeRuleStatus;
     }
 
     /** 活跃订阅快照（调用方视角，D-A3）。 */
@@ -101,7 +104,11 @@ public final class DiscoveryAdminService {
         upstreams.sort(Comparator.comparing(UpstreamStatus::cluster));
         ManagementState management = managementStatus.state();
         return new UpstreamsView(
-                upstreams, management != ManagementState.DISABLED, management, managementStatus.appliedVersion());
+                upstreams,
+                management != ManagementState.DISABLED,
+                management,
+                managementStatus.appliedVersion(),
+                new UpstreamsView.RouteRuleSync(routeRuleStatus.state(), routeRuleStatus.appliedVersion()));
     }
 
     private static void requireNonBlank(String value, String name) {
