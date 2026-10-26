@@ -64,7 +64,7 @@ class ManagementServiceImplTest {
         registry.instances.put(SERVICE, List.of(instance("i1"), instance("i2")));
         service.eject(target("i1"), "maintenance", OPERATOR);
 
-        ServiceDetail detail = service.getService(SERVICE, false);
+        ServiceDetail detail = service.getService(SERVICE, false, 0, 0);
 
         assertThat(detail.instanceCount()).isEqualTo(2);
         assertThat(detail.ejectedCount()).isEqualTo(1);
@@ -80,7 +80,7 @@ class ManagementServiceImplTest {
         registry.instances.put(SERVICE, List.of(instance("i1"), instance("i2")));
         service.eject(target("i1"), "maintenance", OPERATOR);
 
-        ServiceDetail detail = service.getService(SERVICE, true);
+        ServiceDetail detail = service.getService(SERVICE, true, 0, 0);
 
         assertThat(detail.instances()).hasSize(2);
         assertThat(detail.instances().get(0).ejected()).isTrue();
@@ -91,7 +91,7 @@ class ManagementServiceImplTest {
 
     @Test
     void should_return_zero_counts_when_service_not_registered() {
-        ServiceDetail detail = service.getService(SERVICE, false);
+        ServiceDetail detail = service.getService(SERVICE, false, 0, 0);
 
         assertThat(detail.instanceCount()).isZero();
         assertThat(detail.ejectedCount()).isZero();
@@ -105,7 +105,7 @@ class ManagementServiceImplTest {
         service.eject(target("i1"), "r1", OPERATOR);
         service.eject(target("stale"), "r2", OPERATOR);
 
-        ServiceDetail detail = service.getService(SERVICE, false);
+        ServiceDetail detail = service.getService(SERVICE, false, 0, 0);
 
         assertThat(detail.ejectedCount()).isEqualTo(1);
         assertThat(detail.effectiveInstanceCount()).isZero();
@@ -117,7 +117,7 @@ class ManagementServiceImplTest {
         registry.services.add(new ServiceSummary(new ServiceKey("ns", "another"), 1));
         service.eject(target("i1"), "r1", OPERATOR);
 
-        List<ServiceView> views = service.listServices("ns");
+        List<ServiceView> views = service.listServices("ns", null, 0, 0).services();
 
         assertThat(views)
                 .extracting(ServiceView::key, ServiceView::instanceCount, ServiceView::ejectedCount)
@@ -132,7 +132,104 @@ class ManagementServiceImplTest {
         // selector 级摘除不折算进服务列表计数（列表无实例明细，精确视图走详情）
         service.eject(EjectionTarget.selector(EjectionScope.ZONE, "dc-2"), "zone down", OPERATOR);
 
-        assertThat(service.listServices("ns").get(0).ejectedCount()).isZero();
+        assertThat(service.listServices("ns", null, 0, 0).services().get(0).ejectedCount())
+                .isZero();
+    }
+
+    // ---- console 只读版：搜索 + 分页（v0.4 phase-6）----
+
+    @Test
+    void should_filter_services_when_keyword_matched_case_insensitive() {
+        registry.services.add(new ServiceSummary(SERVICE, 1)); // ns/svc
+        registry.services.add(new ServiceSummary(new ServiceKey("prod", "Order-Service"), 1));
+        registry.services.add(new ServiceSummary(new ServiceKey("prod", "user-service"), 1));
+
+        ServicePage byService = service.listServices(null, "ORDER", 0, 0);
+
+        // 命中 service 名（大小写不敏感），未命中的排除
+        assertThat(byService.services())
+                .extracting(view -> view.key().namespace() + "/" + view.key().service())
+                .containsExactly("prod/Order-Service");
+        assertThat(byService.total()).isEqualTo(1);
+
+        ServicePage byNamespace = service.listServices(null, "PROD", 0, 0);
+
+        // 命中 namespace：两服务均保留且按 SERVICE_ORDER 排序
+        assertThat(byNamespace.services())
+                .extracting(view -> view.key().namespace() + "/" + view.key().service())
+                .containsExactly("prod/Order-Service", "prod/user-service");
+        assertThat(byNamespace.total()).isEqualTo(2);
+    }
+
+    @Test
+    void should_keep_full_list_when_no_keyword_and_no_limit() {
+        registry.services.add(new ServiceSummary(SERVICE, 1));
+        registry.services.add(new ServiceSummary(new ServiceKey("ns", "another"), 1));
+
+        ServicePage page = service.listServices("ns", null, 0, 0);
+
+        assertThat(page.services()).hasSize(2); // 既有全量行为不变（additive 兼容）
+        assertThat(page.total()).isEqualTo(2);
+    }
+
+    @Test
+    void should_page_services_with_total_when_offset_limit_given() {
+        for (int i = 1; i <= 5; i++) {
+            registry.services.add(new ServiceSummary(new ServiceKey("ns", "svc-" + i), i));
+        }
+
+        ServicePage first = service.listServices(null, "svc-", 0, 2);
+        ServicePage second = service.listServices(null, "svc-", 2, 2);
+        ServicePage last = service.listServices(null, "svc-", 4, 2);
+
+        assertThat(first.services()).extracting(view -> view.key().service()).containsExactly("svc-1", "svc-2");
+        assertThat(second.services()).extracting(view -> view.key().service()).containsExactly("svc-3", "svc-4");
+        assertThat(last.services()).extracting(view -> view.key().service()).containsExactly("svc-5");
+        assertThat(first.total()).isEqualTo(5); // total = 过滤后总数，页间不重不漏
+        assertThat(second.total()).isEqualTo(5);
+        assertThat(last.total()).isEqualTo(5);
+    }
+
+    @Test
+    void should_return_empty_page_when_offset_beyond_total() {
+        registry.services.add(new ServiceSummary(SERVICE, 1));
+
+        ServicePage page = service.listServices(null, null, 10, 10);
+
+        assertThat(page.services()).isEmpty();
+        assertThat(page.total()).isEqualTo(1);
+    }
+
+    @Test
+    void should_bound_page_size_when_large_service_set_constructed() {
+        for (int i = 0; i < 5000; i++) {
+            registry.services.add(new ServiceSummary(new ServiceKey("ns", "svc-" + String.format("%04d", i)), 1));
+        }
+
+        ServicePage page = service.listServices(null, null, 4995, 10);
+
+        assertThat(page.services()).hasSize(5); // 尾页只含剩余项
+        assertThat(page.total()).isEqualTo(5000);
+    }
+
+    @Test
+    void should_page_instance_views_when_detail_offset_limit_given() {
+        registry.instances.put(SERVICE, List.of(instance("i1"), instance("i2"), instance("i3")));
+        service.eject(target("i1"), "r", OPERATOR);
+
+        ServiceDetail detail = service.getService(SERVICE, true, 1, 1);
+
+        // counts 始终全量，instances 切片（includeEjected 先过滤后切片）
+        assertThat(detail.instanceCount()).isEqualTo(3);
+        assertThat(detail.ejectedCount()).isEqualTo(1);
+        assertThat(detail.instances())
+                .singleElement()
+                .extracting(InstanceView::instanceId)
+                .isEqualTo("i2");
+        assertThat(service.getService(SERVICE, false, 0, 1).instances())
+                .singleElement()
+                .extracting(InstanceView::instanceId)
+                .isEqualTo("i2"); // 摘除过滤后首片
     }
 
     // ---- 四级级联命中 ----
@@ -143,7 +240,7 @@ class ManagementServiceImplTest {
                 SERVICE, List.of(instance("i1", Map.of("zone", "dc-2")), instance("i2", Map.of("zone", "dc-1"))));
         service.eject(EjectionTarget.selector(EjectionScope.ZONE, "dc-2"), "zone down", OPERATOR);
 
-        ServiceDetail detail = service.getService(SERVICE, true);
+        ServiceDetail detail = service.getService(SERVICE, true, 0, 0);
 
         assertThat(detail.instances())
                 .extracting(InstanceView::instanceId, InstanceView::ejected)
@@ -161,8 +258,8 @@ class ManagementServiceImplTest {
         registry.instances.put(other, List.of(instance("x1", Map.of("server", "10.1.1.1"))));
         service.eject(EjectionTarget.selector(EjectionScope.SERVER, "10.1.1.1"), "host down", OPERATOR);
 
-        assertThat(service.getService(SERVICE, true).ejectedCount()).isEqualTo(1);
-        assertThat(service.getService(other, true).ejectedCount()).isEqualTo(1);
+        assertThat(service.getService(SERVICE, true, 0, 0).ejectedCount()).isEqualTo(1);
+        assertThat(service.getService(other, true, 0, 0).ejectedCount()).isEqualTo(1);
     }
 
     @Test
@@ -173,7 +270,7 @@ class ManagementServiceImplTest {
         service.eject(target("i1"), "instance down", OPERATOR);
 
         // 命中标注取最深一级（INSTANCE > SERVER > ZONE > GROUP）
-        InstanceView view = service.getService(SERVICE, true).instances().get(0);
+        InstanceView view = service.getService(SERVICE, true, 0, 0).instances().get(0);
         assertThat(view.ejected()).isTrue();
         assertThat(view.reason()).isEqualTo("instance down");
     }
@@ -216,7 +313,7 @@ class ManagementServiceImplTest {
         service.eject(target("i1"), "r", OPERATOR);
         service.recover(target("i1"), OPERATOR);
 
-        assertThat(service.getService(SERVICE, false).instances()).hasSize(1);
+        assertThat(service.getService(SERVICE, false, 0, 0).instances()).hasSize(1);
     }
 
     @Test
@@ -252,9 +349,9 @@ class ManagementServiceImplTest {
         dispatcher.subscribe(new ThrowingSubscriber());
 
         assertThat(service.eject(target("i1"), "r", OPERATOR)).isNotNull();
-        assertThat(service.getService(SERVICE, true).ejectedCount()).isEqualTo(1);
+        assertThat(service.getService(SERVICE, true, 0, 0).ejectedCount()).isEqualTo(1);
         service.recover(target("i1"), OPERATOR);
-        assertThat(service.getService(SERVICE, true).ejectedCount()).isZero();
+        assertThat(service.getService(SERVICE, true, 0, 0).ejectedCount()).isZero();
     }
 
     @Test

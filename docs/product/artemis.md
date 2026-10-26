@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.29    更新时间: 2026-10-26
+版本: 1.30    更新时间: 2026-10-26
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -290,10 +290,18 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **discovery 本地对照**：`/admin/v1/upstreams` 增 `management.appliedVersion`（本节点已应用版本，-1 = 尚未应用）。
 - **工程形态**：`lastFlipSequence` 纯函数与 AckRegistry（代际令牌）单测 + 同步器 ack 行为单测；`EjectionRuleStreamIT`（版本 + ack 水位契约）+ `DiscoveryRuleAckLoopIT`（三服务端到端：水位可见 / management 重启重连重新 ack / 双 discovery 节点生效计数）+ 双方言 `EjectionPersistenceIT` 增版本跨重启延续断言。见 [ejection-rule-stream-api.md](../api/ejection-rule-stream-api.md)。
 
+**v0.4 phase-6（console 只读版）已交付**：
+
+- **console 页面**：management 内嵌**原生单文件**静态 SPA（`static/index.html`，零依赖零构建、无独立前端部署单元，架构 §5.3），入口 = 外部端口根路径 `http://<host>:8081/`；认证与 Admin API 同源（ADR-021 单管理员 DB 账户，Basic 挑战，eval 关闭认证时直接可达）。
+- **页面能力**：服务列表（keyword 模糊搜索 + 分页，每页 20）、服务详情（注册/有效/摘除计数 + 实例表——地址/status/weight/metadata/摘除标注与原因、`includeEjected` 切换、实例分页）；hash 路由可刷新可分享。操作面（发布/摘除操作、订阅关系视图、审计流、自我保护态展示）随 v0.5 console 管理版。
+- **API 扩展（additive）**：`GET /admin/v1/services` 增 `keyword`（大小写不敏感 substring，命中 namespace/service 任一）/`offset`/`limit`（clamp 1..1000，缺省全量），响应增 `total`（过滤后总数）；`GET /admin/v1/services/{ns}/{svc}` 增 `offset`/`limit` 作用于实例视图（计数始终全量）——响应体 ∝ 页大小而非总量（10 万实例语义）。见 [admin-api.md](../api/admin-api.md)。
+- **工程形态**：过滤/切片/total 单测（含 5000 服务构造的分页上界）+ `ManagementConsoleIT`（同 JVM registry + management：页面可达与 401、搜索分页、实例分页端到端）；IT 基建抽取共用（`RegistryFixture` 顶层化、`ManagementHttpIT` 基类）。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.30 | 2026-10-26 | v0.4 phase-6 交付：console 只读版——内嵌原生单文件 SPA（根路径入口、与 Admin API 同认证）+ 服务列表 keyword 模糊/分页/total + 详情实例分页 |
 | 1.29 | 2026-10-26 | v0.4 phase-5 交付：规则下发闭环——版本化规则流（版本 = 翻转记录 sequence）+ discovery ack 上行 + 生效水位 API（`GET /admin/v1/status/rules`）+ discovery 本地应用版本对照；phase-6 节「无版本/ack」表述修正 |
 | 1.28 | 2026-10-25 | v0.4 phase-4 交付：逻辑实例（静态实例）——模型/CRUD/V4 双方言持久化 + 专属下发流 + discovery 保留 cluster `logical` 统一发现视图（union/摘除生效/fail-open） |
 | 1.27 | 2026-10-25 | v0.4 phase-3 交付：四级摘除（metadata selector 实时匹配）+ 操作记录即状态（叠加/反向对消）+ V3 双方言持久化与审计 + 统一 ejection API + 跨重启重下发恢复 |

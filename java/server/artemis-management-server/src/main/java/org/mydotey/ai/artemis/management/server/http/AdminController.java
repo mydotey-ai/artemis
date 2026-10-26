@@ -8,6 +8,7 @@ import org.mydotey.ai.artemis.common.governance.EjectionScope;
 import org.mydotey.ai.artemis.management.application.EjectionView;
 import org.mydotey.ai.artemis.management.application.ManagementService;
 import org.mydotey.ai.artemis.management.application.ServiceDetail;
+import org.mydotey.ai.artemis.management.application.ServicePage;
 import org.mydotey.ai.artemis.management.application.ServiceView;
 import org.mydotey.ai.artemis.management.domain.AuditLog;
 import org.mydotey.ai.artemis.management.domain.EjectionTarget;
@@ -59,17 +60,27 @@ public final class AdminController {
 
     // ---- 服务视图 ----
 
+    /** console 只读版：keyword 模糊 + 分页；offset 归零负数，limit 显式传入时 clamp 1..上界（缺省 0 = 全量，既有行为）。 */
     @GetMapping("/services")
-    public ListServicesResponse listServices(@RequestParam(name = "namespace", required = false) String namespace) {
-        return new ListServicesResponse(managementService.listServices(namespace));
+    public ListServicesResponse listServices(
+            @RequestParam(name = "namespace", required = false) String namespace,
+            @RequestParam(name = "keyword", required = false) String keyword,
+            @RequestParam(name = "offset", defaultValue = "0") int offset,
+            @RequestParam(name = "limit", defaultValue = "0") int limit) {
+        ServicePage page = managementService.listServices(
+                blankToNull(namespace), blankToNull(keyword), Math.max(offset, 0), boundLimit(limit));
+        return new ListServicesResponse(page.services(), page.total());
     }
 
     @GetMapping("/services/{namespace}/{service}")
     public ServiceDetail getService(
             @PathVariable("namespace") String namespace,
             @PathVariable("service") String service,
-            @RequestParam(name = "includeEjected", defaultValue = "false") boolean includeEjected) {
-        return managementService.getService(key(namespace, service), includeEjected);
+            @RequestParam(name = "includeEjected", defaultValue = "false") boolean includeEjected,
+            @RequestParam(name = "offset", defaultValue = "0") int offset,
+            @RequestParam(name = "limit", defaultValue = "0") int limit) {
+        return managementService.getService(
+                key(namespace, service), includeEjected, Math.max(offset, 0), boundLimit(limit));
     }
 
     // ---- 四级摘除（资源导向统一端点，v0.4 phase-3）----
@@ -212,6 +223,11 @@ public final class AdminController {
         return value == null || value.isBlank() ? null : value;
     }
 
+    /** 0/缺省 = 全量；显式传入 clamp 1..MAX_LIST_LIMIT。 */
+    private static int boundLimit(int limit) {
+        return limit <= 0 ? 0 : Math.min(Math.max(1, limit), MAX_LIST_LIMIT);
+    }
+
     // ---- 目标解析与校验 ----
 
     private static EjectionTarget toTarget(EjectRequest request) {
@@ -267,8 +283,8 @@ public final class AdminController {
         return operator == null ? "anonymous" : operator;
     }
 
-    /** HTTP 请求/响应包装。 */
-    public record ListServicesResponse(List<ServiceView> services) {}
+    /** HTTP 请求/响应包装。total = keyword 过滤后总数（v0.4 phase-6 起，additive）。 */
+    public record ListServicesResponse(List<ServiceView> services, int total) {}
 
     /** 摘除/恢复请求体（四级一套：INSTANCE 级填 namespace/service/instanceId，selector 级填 value）。 */
     public record EjectRequest(

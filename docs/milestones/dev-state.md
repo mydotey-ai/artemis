@@ -27,17 +27,17 @@
 
 | 步骤 | 状态 | 备注 |
 |---|---|---|
-| worktree 开工 | done | 清理 15 个已完工 worktree/分支后新建 |
-| 上下文加载 | done | 已读：roadmap §3 v0.4、架构 §2/§4.2/§5、tech-java.md、guidelines 全文、proto-contract、legacy §3.3/§5#7/§6#8；现状代码：EjectionRuleDispatcher/Synchronizer/GrpcService/GrpcEjectionRuleSource、EjectionRecords、V3 migration、DiscoveryEjectionFilterIT |
+| worktree 开工 | done | main fcb3176 起点新建 |
+| 上下文加载 | done | 已读：roadmap §3 v0.4、架构 §5.2/§5.3、tech-java.md（全文）、guidelines §7、legacy-product-analysis.md §6（无 console/无分页无模糊）、admin-api.md、ManagementService(Impl)/AdminController/HttpBasicAuthFilter/ManagementConfiguration/ManagementAdminIT |
 | 设计 | done | review 通过（2026-10-26） |
-| 实现 | done | proto 版本字段 + AckEjections unary；management：lastFlipSequence/Dispatcher 版本/EjectionAckRegistry/StatusController /rules；discovery：listener/source 版本 + ack、ManagementStatus appliedVersion、admin API 对照；单测新增/修订全绿 |
-| 测试 | done | dev-test.sh all 全绿（r4；r1–r3 修复：spotless 格式、EjectionRuleStreamIT 断言收窄、AckLoopIT classpath 隔离）；DB IT 后补验 20/20 全绿（Docker Desktop user 级服务启动） |
-| code-review | done | 内置 code-review skill（max）：5 findings（2 确认 + 3 似合理） |
-| fix | done | F1 代际令牌防重连误删、F2 删冗余 snapshot.version 字段、F3 ack 走 watch 端点、F4 接受限界（javadoc）、F5 收尾统一 |
-| 回归测试 | done | dev-test.sh all（r5）全绿 |
-| 验证 | done | 自动化全部通过（all 两轮 + DB IT 补验 20/20）；用户人工验证通过（2026-10-26） |
-| 文档同步 | done | 产品文档 1.29（phase-5 交付段）、架构 1.43（§2.2 落点）、api 三份（ejection-rule-stream 1.2 / admin 1.10 / discovery-admin 1.1）；索引与 CLAUDE.md 无变更 |
-| 完工 | done | squash merge 回 main（45ea383 基线）并 push | |
+| 实现 | done | |
+| 测试 | done | dev-test.sh all 全绿（r3：第 1 轮 registry-server SelfProtectionClusterIT 负载时序 flake 单独重跑通过；第 2 轮新单测断言笔误修正后全绿） |
+| code-review | done | skill max 内联完成，4 findings：①IT 用例顺序脆弱（同 namespace 跨用例数据）②console route() decode 异常未捕获 ③slice 全量路径整表复制 ④IT HTTP/gRPC 辅助重复约 40 行；7 候选驳回 |
+| fix | done | 4/4 修复：IT namespace 按用例隔离 / route() 入 try / slice 全量零复制 / 抽 ManagementHttpIT 基类 |
+| 回归测试 | done | dev-test.sh all 第 5 轮全绿（r4：DiscoveryAdminIT 端口 bind 竞态 flake，单独重跑 6/6 通过；与 r1 registry 时序 flake 均为未触碰模块的环境级问题） |
+| 验证 | done | 自动化（dev-test.sh all 全绿 + flake 复验）+ 人工验证通过（2026-10-26） |
+| 文档同步 | done | 产品文档 1.30（phase-6 交付块）+ admin-api.md 1.11（§4.1/§4.2/§1）；无 ADR/架构变更 |
+| 完工 | in-progress | 待用户发起 commit（worktree 分支） | |
 
 步骤状态枚举：pending | in-progress | done | skipped。
 
@@ -50,5 +50,5 @@
 | phase-3-ejection-persistence | done |
 | phase-4-logical-instance | done |
 | phase-5-rule-ack-loop | done |
-| phase-6-console-readonly | planned |
+| phase-6-console-readonly | done |
 | phase-7-all-in-one-full | planned |

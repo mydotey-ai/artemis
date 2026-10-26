@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Artemis Console</title>
+<style>
+  :root { --line: #d9dee5; --muted: #6b7280; --accent: #2563eb; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif; color: #1f2937; background: #f7f8fa; }
+  header { display: flex; align-items: baseline; gap: 12px; padding: 14px 24px; background: #fff; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 17px; margin: 0; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  main { max-width: 1080px; margin: 0 auto; padding: 20px 24px 48px; }
+  .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+  .toolbar input[type="search"] { width: 260px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 4px; }
+  button { padding: 6px 12px; border: 1px solid var(--line); border-radius: 4px; background: #fff; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .45; cursor: default; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid var(--line); border-radius: 4px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: #f3f4f6; font-weight: 600; white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .tag { display: inline-block; padding: 0 6px; border-radius: 3px; font-size: 12px; }
+  .tag.up { background: #e7f6ec; color: #15803d; }
+  .tag.down, .tag.ejected { background: #fdecec; color: #b91c1c; }
+  .meta { color: var(--muted); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .counts { display: flex; gap: 24px; margin-bottom: 12px; color: var(--muted); }
+  .counts b { color: #1f2937; font-size: 16px; }
+  .pager { display: flex; gap: 8px; align-items: center; margin-top: 12px; color: var(--muted); }
+  .error { padding: 12px; background: #fdecec; color: #b91c1c; border-radius: 4px; }
+  a { color: var(--accent); text-decoration: none; }
+  .crumb { margin-bottom: 8px; color: var(--muted); }
+  label.switch { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Artemis Console</h1>
+  <span class="sub">management 只读视图（v0.4；操作面随 v0.5 管理版交付）</span>
+</header>
+<main id="app"><div class="error">加载中…</div></main>
+<script>
+'use strict';
+
+const PAGE_SIZE = 20;
+
+const app = document.getElementById('app');
+
+function api(path) {
+  return fetch(path, {headers: {Accept: 'application/json'}}).then(r => {
+    if (!r.ok) throw new Error('HTTP ' + r.status + (r.status === 401 ? '（认证失败或未登录，请以管理账户刷新页面）' : ''));
+    return r.json();
+  });
+}
+
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+}
+
+// hash 路由：#/（列表，?keyword=&offset=）、#/s/{namespace}/{service}（详情，?includeEjected=&offset=）
+function route() {
+  const hash = location.hash.replace(/^#/, '') || '/';
+  const [path, query] = hash.split('?');
+  const params = new URLSearchParams(query || '');
+  const marker = '/s/';
+  if (path.startsWith(marker) && path.length > marker.length) {
+    const rest = path.slice(marker.length);
+    const sep = rest.indexOf('/');
+    if (sep > 0) {
+      return {view: 'detail', namespace: decodeURIComponent(rest.slice(0, sep)), service: decodeURIComponent(rest.slice(sep + 1)), params};
+    }
+  }
+  return {view: 'list', params};
+}
+
+function nav(hash) { location.hash = hash; }
+
+window.addEventListener('hashchange', render);
+
+async function render() {
+  try {
+    const r = route();
+    if (r.view === 'detail') await renderDetail(r.namespace, r.service, r.params);
+    else await renderList(r.params);
+  } catch (e) {
+    app.innerHTML = '<div class="error">' + esc(e.message) + '</div>';
+  }
+}
+
+// ---- 列表视图：搜索 + 分页 ----
+
+async function renderList(params) {
+  const keyword = params.get('keyword') || '';
+  const offset = Math.max(parseInt(params.get('offset') || '0', 10) || 0, 0);
+  const query = new URLSearchParams({offset, limit: PAGE_SIZE});
+  if (keyword) query.set('keyword', keyword);
+  const page = await api('/admin/v1/services?' + query);
+  const totalPages = Math.max(Math.ceil(page.total / PAGE_SIZE), 1);
+  const current = Math.floor(offset / PAGE_SIZE) + 1;
+
+  const rows = page.services.map(s =>
+    '<tr><td>' + esc(s.key.namespace) + '</td>' +
+    '<td>' + esc(s.key.service) + '</td>' +
+    '<td class="num">' + s.instanceCount + '</td>' +
+    '<td class="num">' + (s.ejectedCount > 0 ? '<span class="tag ejected">' + s.ejectedCount + '</span>' : '0') + '</td>' +
+    '<td><a href="#/s/' + encodeURIComponent(s.key.namespace) + '/' + encodeURIComponent(s.key.service) + '">详情</a></td></tr>'
+  ).join('');
+
+  app.innerHTML =
+    '<div class="toolbar">' +
+      '<form id="search"><input type="search" placeholder="按 namespace / service 模糊搜索" value="' + esc(keyword) + '" name="keyword">' +
+      '<button class="primary" type="submit">搜索</button>' +
+      (keyword ? '<button type="button" id="clear">清除</button>' : '') + '</form>' +
+    '</div>' +
+    (rows ? '<table><thead><tr><th>namespace</th><th>service</th><th>实例数</th><th>摘除数</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+          : '<div class="error">无匹配服务</div>') +
+    '<div class="pager">' +
+      '<button id="prev"' + (offset <= 0 ? ' disabled' : '') + '>&#8592; 上一页</button>' +
+      '<span>第 ' + current + ' / ' + totalPages + ' 页，共 ' + page.total + ' 个服务</span>' +
+      '<button id="next"' + (offset + PAGE_SIZE >= page.total ? ' disabled' : '') + '>下一页 &#8594;</button>' +
+    '</div>';
+
+  const search = document.getElementById('search');
+  search.addEventListener('submit', e => {
+    e.preventDefault();
+    const value = search.keyword.value.trim();
+    nav('#/?' + (value ? 'keyword=' + encodeURIComponent(value) + '&' : '') + 'offset=0');
+  });
+  const clear = document.getElementById('clear');
+  if (clear) clear.addEventListener('click', () => nav('#/?offset=0'));
+  bindPager(offset, page.total, o => '#/?' + (keyword ? 'keyword=' + encodeURIComponent(keyword) + '&' : '') + 'offset=' + o);
+}
+
+function bindPager(offset, total, urlOf) {
+  const prev = document.getElementById('prev');
+  const next = document.getElementById('next');
+  if (prev && offset > 0) prev.addEventListener('click', () => nav(urlOf(Math.max(offset - PAGE_SIZE, 0))));
+  if (next && offset + PAGE_SIZE < total) next.addEventListener('click', () => nav(urlOf(offset + PAGE_SIZE)));
+}
+
+// ---- 详情视图：实例表 + 摘除标注 ----
+
+async function renderDetail(namespace, service, params) {
+  const includeEjected = params.get('includeEjected') === 'true';
+  const offset = Math.max(parseInt(params.get('offset') || '0', 10) || 0, 0);
+  const query = new URLSearchParams({includeEjected, offset, limit: PAGE_SIZE});
+  const detail = await api('/admin/v1/services/' + encodeURIComponent(namespace) + '/' + encodeURIComponent(service) + '?' + query);
+  const visibleTotal = includeEjected ? detail.instanceCount : detail.effectiveInstanceCount;
+
+  const rows = detail.instances.map(i => {
+    const meta = JSON.stringify(i.metadata || {});
+    const ejection = i.ejected ? '<span class="tag ejected" title="' + esc(i.reason || '') + ' | ' + esc(i.ejectedAt || '') + '">已摘除</span>' : '—';
+    return '<tr><td>' + esc(i.instanceId) + '</td>' +
+      '<td>' + esc(i.host) + ':' + i.port + '</td>' +
+      '<td><span class="tag ' + String(i.status).toLowerCase() + '">' + esc(i.status) + '</span></td>' +
+      '<td class="num">' + i.weight + '</td>' +
+      '<td class="meta" title="' + esc(meta) + '">' + esc(meta) + '</td>' +
+      '<td>' + ejection + '</td></tr>';
+  }).join('');
+
+  const urlOf = o => '#/s/' + encodeURIComponent(namespace) + '/' + encodeURIComponent(service) +
+    '?includeEjected=' + includeEjected + '&offset=' + o;
+
+  app.innerHTML =
+    '<div class="crumb"><a href="#/?offset=0">&#8592; 服务列表</a> / ' + esc(namespace) + ' / ' + esc(service) + '</div>' +
+    '<div class="counts">' +
+      '<span>注册实例 <b>' + detail.instanceCount + '</b></span>' +
+      '<span>有效 <b>' + detail.effectiveInstanceCount + '</b></span>' +
+      '<span>摘除 <b>' + detail.ejectedCount + '</b></span>' +
+    '</div>' +
+    '<div class="toolbar">' +
+      '<label class="switch"><input type="checkbox" id="showEjected"' + (includeEjected ? ' checked' : '') + '> 显示已摘除实例</label>' +
+    '</div>' +
+    (rows ? '<table><thead><tr><th>instanceId</th><th>地址</th><th>状态</th><th>weight</th><th>metadata</th><th>摘除</th></tr></thead><tbody>' + rows + '</tbody></table>'
+          : '<div class="error">无可见实例</div>') +
+    '<div class="pager">' +
+      '<button id="prev"' + (offset <= 0 ? ' disabled' : '') + '>&#8592; 上一页</button>' +
+      '<span>第 ' + (Math.floor(offset / PAGE_SIZE) + 1) + ' / ' + Math.max(Math.ceil(visibleTotal / PAGE_SIZE), 1) + ' 页</span>' +
+      '<button id="next"' + (offset + PAGE_SIZE >= visibleTotal ? ' disabled' : '') + '>下一页 &#8594;</button>' +
+    '</div>';
+
+  document.getElementById('showEjected').addEventListener('change', e =>
+    nav('#/s/' + encodeURIComponent(namespace) + '/' + encodeURIComponent(service) + '?includeEjected=' + e.target.checked + '&offset=0'));
+  bindPager(offset, visibleTotal, urlOf);
+}
+
+render();
+</script>
+</body>
+</html>

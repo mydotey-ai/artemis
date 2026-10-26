@@ -3,6 +3,7 @@ package org.mydotey.ai.artemis.management.application;
 import java.time.Clock;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import lombok.extern.slf4j.Slf4j;
@@ -82,21 +83,28 @@ public final class ManagementServiceImpl implements ManagementService {
     }
 
     @Override
-    public List<ServiceView> listServices(String namespace) {
+    public ServicePage listServices(String namespace, String keyword, int offset, int limit) {
         // INSTANCE 级有效计数（selector 级不折算：列表无实例明细，精确视图走详情）
         Map<ServiceKey, Long> counts =
                 EjectionRecords.activeInstanceCountByService(EjectionRecords.activeOf(ejections.findAll()));
-        return registry.listServices(namespace).stream()
+        List<ServiceView> views = registry.listServices(namespace).stream()
                 .sorted(Comparator.comparing(ServiceSummary::key, SERVICE_ORDER))
                 .map(summary -> new ServiceView(
                         summary.key(),
                         summary.instanceCount(),
                         counts.getOrDefault(summary.key(), 0L).intValue()))
                 .toList();
+        // 排序确定 → 过滤 → total → 切片，分页页间稳定
+        List<ServiceView> filtered = keyword == null || keyword.isBlank()
+                ? views
+                : views.stream()
+                        .filter(view -> matchesKeyword(view.key(), keyword))
+                        .toList();
+        return new ServicePage(slice(filtered, offset, limit), filtered.size());
     }
 
     @Override
-    public ServiceDetail getService(ServiceKey key, boolean includeEjected) {
+    public ServiceDetail getService(ServiceKey key, boolean includeEjected, int offset, int limit) {
         List<Instance> instances = registry.getInstances(key);
         List<EjectionRecord> active = EjectionRecords.activeOf(ejections.findAll());
 
@@ -109,7 +117,21 @@ public final class ManagementServiceImpl implements ManagementService {
                 ? views
                 : views.stream().filter(view -> !view.ejected()).toList();
 
-        return new ServiceDetail(key, instances.size(), ejectedCount, instances.size() - ejectedCount, visible);
+        return new ServiceDetail(
+                key, instances.size(), ejectedCount, instances.size() - ejectedCount, slice(visible, offset, limit));
+    }
+
+    private static boolean matchesKeyword(ServiceKey key, String keyword) {
+        String needle = keyword.toLowerCase(Locale.ROOT);
+        return key.namespace().toLowerCase(Locale.ROOT).contains(needle)
+                || key.service().toLowerCase(Locale.ROOT).contains(needle);
+    }
+
+    /** limit ≤ 0 = 全量；offset 负数归零，越界为空页。全量路径零复制（调用方入参均为不可变列表）。 */
+    private static <T> List<T> slice(List<T> list, int offset, int limit) {
+        int from = Math.min(Math.max(offset, 0), list.size());
+        int to = limit <= 0 ? list.size() : Math.min(from + limit, list.size());
+        return from == 0 && to == list.size() ? list : List.copyOf(list.subList(from, to));
     }
 
     @Override

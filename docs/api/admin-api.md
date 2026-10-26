@@ -1,6 +1,6 @@
 # management-service Admin 与状态 API
 
-版本: 1.10    更新时间: 2026-10-26
+版本: 1.11    更新时间: 2026-10-26
 
 > 本文定义 management-service 对外 HTTP API（管理面：实例管理 Admin API、账户 API 与 registry 状态排障面）。有效视图 = registry 只读事实 + management 摘除记录（ADR-016）；registry 不感知摘除。内部 gRPC 查询契约见 [registry-query-api.md](registry-query-api.md)。
 
@@ -13,6 +13,7 @@
 | 认证（内存态） | 默认开启 HTTP Basic 单账户（默认 `artemis`/`artemis`，生产必须修改）；凭证取自配置，支持运行期轮换 |
 | 认证（DB 态，v0.4） | **账户表唯一源**（ADR-021）：PBKDF2 哈希验证；DB 态首启将配置凭证一次性 seed 物化进表，此后配置凭证失效、表非空永不覆盖 |
 | 关闭认证 | `artemis.management.auth.enabled=false`（仅 eval） |
+| console（v0.4） | 外部端口根路径 `/`——内嵌静态 SPA（只读版：服务列表/搜索/分页 + 实例视图），与 Admin API 同一认证；写操作面随 v0.5 管理版 |
 | 上游 | registry 只读查询 gRPC（registry 内部 peer 端口；端点**无默认值**，未配置时调用返回 REGISTRY_UNAVAILABLE；内部认证默认关闭，配置了 username 才附加 Basic 认证） |
 | 账户后端不可用 | 认证裁决 fail-closed：401 拒绝（账户 API 503，见 §7 错误语义） |
 
@@ -50,12 +51,19 @@
 
 Base path：`/admin/v1`
 
-### 4.1 服务列表 `GET /admin/v1/services?namespace={ns}`
+### 4.1 服务列表 `GET /admin/v1/services?namespace={ns}&keyword={kw}&offset={n}&limit={n}`
 
-`namespace` 可选；缺省/空白 = 全部。
+`namespace` 可选；缺省/空白 = 全部。`keyword`/`offset`/`limit` 可选（v0.4 phase-6，console 只读版）：
+
+| 参数 | 语义 |
+|---|---|
+| `keyword` | 大小写不敏感 substring，命中 `namespace` 或 `service` 任一即保留；缺省/空白 = 不过滤 |
+| `offset` | ≥ 0，缺省 0；越界返回空页（不报错） |
+| `limit` | 显式传入 clamp 1..1000；缺省/0 = 全量（既有行为不变） |
 
 ```json
 {
+  "total": 1,
   "services": [
     {
       "key": {"namespace": "default", "service": "order-service"},
@@ -66,12 +74,13 @@ Base path：`/admin/v1`
 }
 ```
 
+- `total`（v0.4 phase-6 新增）= keyword 过滤后总数；页内容按 `(namespace, service)` 升序排序后过滤再切片，页间稳定不重不漏。
 - `instanceCount`：registry 事实计数。
 - `ejectedCount`：该 service 当前摘除记录数（原样计数，可能含当前未注册实例）；精确有效计数见详情。
 
-### 4.2 服务详情 `GET /admin/v1/services/{namespace}/{service}?includeEjected={bool}`
+### 4.2 服务详情 `GET /admin/v1/services/{namespace}/{service}?includeEjected={bool}&offset={n}&limit={n}`
 
-`includeEjected` 默认 `false`。
+`includeEjected` 默认 `false`。`offset`/`limit` 可选（v0.4 phase-6）：作用于**过滤后可见实例集**（摘除过滤先于切片；`limit` 显式传入 clamp 1..1000、缺省/0 = 全量，`offset` 越界为空列表）；`instanceCount`/`ejectedCount`/`effectiveInstanceCount` 始终为全量计数。
 
 ```json
 {
@@ -348,8 +357,8 @@ management 启动不依赖 registry 可用；registry 故障时管理面仍可�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.11 | 2026-10-26 | v0.4 phase-6：console 只读版——§4.1 服务列表增 `keyword`/`offset`/`limit` 与响应 `total`；§4.2 详情增实例分页（计数始终全量）；§1 登记 console 入口 |
 | 1.10 | 2026-10-26 | v0.4 phase-5：新增 §6.5 `GET /admin/v1/status/rules` 规则生效水位（当前版本 + 活订阅水位 + 已生效节点数） |
-| ------ | ------ | ------ |
 | 1.9 | 2026-10-25 | v0.4 phase-4：新增逻辑实例 API（§4.7–4.9 upsert/delete/list，幂等语义与 255 校验上限）；错误表补 `LOGICAL_INSTANCE_STORE_UNAVAILABLE` |
 | 1.8 | 2026-10-25 | v0.4 phase-3：统一四级 ejection API（替换 v0.1 实例级端点）、记录/审计查询、双轨持久化与操作记录即状态语义、503 `EJECTION_STORE_UNAVAILABLE` |
 | 1.7 | 2026-10-25 | v0.4 phase-2：新增账户 API（§5 改密端点，DB 态闭环）；§1 认证双态语义（DB 态账户表唯一源 + seed 物化，ADR-021）；错误表补 409/账户 503；状态 API 重编号为 §6 |

@@ -17,9 +17,14 @@ import org.mydotey.ai.artemis.management.domain.ServiceKey;
  */
 public interface ManagementService {
 
-    List<ServiceView> listServices(String namespace);
+    /**
+     * 服务列表（console 只读版）：keyword 大小写不敏感 substring 命中 namespace 或 service 任一，
+     * 排序（namespace/service 升序）后过滤再切片；total = 过滤后总数；limit ≤ 0 = 全量。
+     */
+    ServicePage listServices(String namespace, String keyword, int offset, int limit);
 
-    ServiceDetail getService(ServiceKey key, boolean includeEjected);
+    /** 服务详情：计数始终全量；offset/limit 只作用于可见实例集（includeEjected 先过滤后切片）。 */
+    ServiceDetail getService(ServiceKey key, boolean includeEjected, int offset, int limit);
 
     /** 摘除（追加 EJECT，可叠加）；仅目标生效态翻转入 active 时推规则流增量。 */
     EjectionView eject(EjectionTarget target, String reason, String operator);

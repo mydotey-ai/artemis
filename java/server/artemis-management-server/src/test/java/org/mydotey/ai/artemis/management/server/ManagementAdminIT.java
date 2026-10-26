@@ -7,12 +7,6 @@ import io.grpc.ManagedChannelBuilder;
 import io.grpc.Metadata;
 import io.grpc.stub.MetadataUtils;
 import io.grpc.stub.StreamObserver;
-import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.nio.file.Files;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.StreamSupport;
@@ -35,35 +29,20 @@ import org.mydotey.ai.artemis.proto.registry.v1.HeartbeatRequest;
 import org.mydotey.ai.artemis.proto.registry.v1.HeartbeatResponse;
 import org.mydotey.ai.artemis.proto.registry.v1.RegisterRequest;
 import org.mydotey.ai.artemis.proto.registry.v1.RegistryServiceGrpc;
-import org.mydotey.ai.artemis.registry.server.ArtemisRegistryServer;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.context.ConfigurableApplicationContext;
-import org.springframework.grpc.server.lifecycle.GrpcServerLifecycle;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
 
 /**
  * 服务级集成测试：同 JVM 起真实 registry-server（随机端口）+ 真实 management-server（随机 HTTP 端口），
  * 经真实 gRPC 注册/查询与真实 HTTP + Basic 认证驱动管理面有效视图与状态 API。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = "management.server.port=0")
-class ManagementAdminIT {
+class ManagementAdminIT extends ManagementHttpIT {
 
     private static final String NAMESPACE = "mgmt-it";
     private static final String SERVICE = "order-service";
-    private static final String AUTH = BasicAuth.headerValue("artemis", "artemis");
-    private static final HttpClient HTTP = HttpClient.newHttpClient();
-
-    @LocalServerPort
-    private int httpPort;
-
-    @Autowired
-    private ObjectMapper objectMapper;
 
     private ManagedChannel externalChannel;
     private ManagedChannel internalChannel;
@@ -349,36 +328,6 @@ class ManagementAdminIT {
         assertThat(acked.await(5, TimeUnit.SECONDS)).isTrue();
     }
 
-    private HttpResponse<String> get(String path, boolean authenticated) throws Exception {
-        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path)).GET();
-        return send(builder, authenticated);
-    }
-
-    private HttpResponse<String> post(String path, String body) throws Exception {
-        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path))
-                .POST(body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body));
-        return send(builder, true);
-    }
-
-    private HttpResponse<String> send(HttpRequest.Builder builder, boolean authenticated) throws Exception {
-        if (authenticated) {
-            builder.header("Authorization", AUTH);
-        }
-        builder.header("Content-Type", "application/json");
-        return HTTP.send(builder.build(), HttpResponse.BodyHandlers.ofString());
-    }
-
-    private URI uri(String path) {
-        return URI.create("http://localhost:" + httpPort + path);
-    }
-
-    private JsonNode json(HttpResponse<String> response) throws IOException {
-        assertThat(response.statusCode())
-                .as("response body: %s", response.body())
-                .isBetween(200, 299);
-        return objectMapper.readTree(response.body());
-    }
-
     private static String detailPath() {
         return "/admin/v1/services/" + NAMESPACE + "/" + SERVICE;
     }
@@ -410,83 +359,5 @@ class ManagementAdminIT {
                 .setService(serviceKey())
                 .setInstanceId(instanceId)
                 .build();
-    }
-
-    /** registry fixture：惰性启动（DynamicPropertySource 求值时），外部/内部端口均随机。 */
-    static final class RegistryFixture {
-
-        private static ConfigurableApplicationContext context;
-        private static int externalPort;
-        private static int internalPort;
-
-        private RegistryFixture() {}
-
-        static synchronized int externalPort() {
-            start();
-            return externalPort;
-        }
-
-        static synchronized int internalPort() {
-            start();
-            return internalPort;
-        }
-
-        private static void start() {
-            if (context != null) {
-                return;
-            }
-            try {
-                internalPort = freePort();
-                String snapshotPath = Files.createTempDirectory("artemis-registry-it")
-                        .resolve("snapshot.bin")
-                        .toString();
-                // 测试 classpath 上 management-server 的 application.properties 会先于 registry 的
-                // 同名资源被加载；用显式参数钉住 registry 相关配置（端口/应用名/readiness 组）
-                context = new SpringApplicationBuilder(ArtemisRegistryServer.class)
-                        .run(
-                                "--spring.application.name=artemis-registry",
-                                "--spring.grpc.server.port=0",
-                                "--server.port=0",
-                                "--management.server.port=0",
-                                "--artemis.registry.internal.port=" + internalPort,
-                                "--management.endpoint.health.group.readiness.include=readinessState,registryReadiness",
-                                "--artemis.registry.shutdown.drainMs=0", // 测试关闭不等待排水
-                                "--artemis.registry.snapshot.path=" + snapshotPath);
-                // 主 server lifecycle 名随传输实现而定（netty/shaded），按名称排除内部 peer 后取
-                externalPort = context.getBeansOfType(GrpcServerLifecycle.class).entrySet().stream()
-                        .filter(entry -> !entry.getKey().equals("peerGrpcServerLifecycle"))
-                        .findFirst()
-                        .orElseThrow()
-                        .getValue()
-                        .getPort();
-                // 内部端口为固定预分配值；这里仅校验实际绑定与配置一致
-                int bound = context.getBeansOfType(GrpcServerLifecycle.class)
-                        .get("peerGrpcServerLifecycle")
-                        .getPort();
-                if (bound != internalPort) {
-                    throw new IllegalStateException(
-                            "peer port mismatch: configured " + internalPort + ", bound " + bound);
-                }
-            } catch (IOException e) {
-                throw new IllegalStateException("cannot start registry fixture", e);
-            }
-        }
-
-        private static int freePort() {
-            try (java.net.ServerSocket socket = new java.net.ServerSocket(0)) {
-                return socket.getLocalPort();
-            } catch (IOException e) {
-                throw new IllegalStateException("cannot allocate free port", e);
-            }
-        }
-
-        static synchronized void stop() {
-            if (context != null) {
-                context.close();
-                context = null;
-                externalPort = 0;
-                internalPort = 0;
-            }
-        }
     }
 }

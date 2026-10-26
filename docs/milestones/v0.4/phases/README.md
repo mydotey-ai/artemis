@@ -7,3 +7,4 @@
 | phase-3-ejection-persistence | [phase-3-ejection-persistence.md](phase-3-ejection-persistence.md) | [phase-3-ejection-persistence-test.md](phase-3-ejection-persistence-test.md) |
 | phase-4-logical-instance | [phase-4-logical-instance.md](phase-4-logical-instance.md) | [phase-4-logical-instance-test.md](phase-4-logical-instance-test.md) |
 | phase-5-rule-ack-loop | [phase-5-rule-ack-loop.md](phase-5-rule-ack-loop.md) | [phase-5-rule-ack-loop-test.md](phase-5-rule-ack-loop-test.md) |
+| phase-6-console-readonly | [phase-6-console-readonly.md](phase-6-console-readonly.md) | [phase-6-console-readonly-test.md](phase-6-console-readonly-test.md) |
