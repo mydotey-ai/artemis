@@ -60,9 +60,12 @@ public final class DefaultDiscoveryClient implements DiscoveryClient {
 
         FailoverAddressProvider addressProvider = new FailoverAddressProvider(
                 properties, registry, clientId, FailoverAddressProvider.DISCOVERY_ADDRESS_PREFIX, true);
-        this.grpcClient = new GrpcDiscoveryClient(addressProvider, properties);
-        HttpNodeListFetcher fetcher =
-                new HttpNodeListFetcher(properties, HttpNodeListFetcher.KEY_DISCOVERY_ADDRESSES, discoveryDecoder());
+        this.grpcClient = new GrpcDiscoveryClient(addressProvider, properties, ClientTls.from(properties));
+        HttpNodeListFetcher fetcher = new HttpNodeListFetcher(
+                properties,
+                HttpNodeListFetcher.KEY_DISCOVERY_ADDRESSES,
+                discoveryDecoder(),
+                ClientTls.from(properties));
         this.nodeListRefresher = new NodeListRefresher(
                 fetcher,
                 addressProvider,

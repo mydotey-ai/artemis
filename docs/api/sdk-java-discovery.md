@@ -1,6 +1,6 @@
 # Artemis Java SDK（发现侧）
 
-版本: 1.1    更新时间: 2026-10-24
+版本: 1.2    更新时间: 2026-10-27
 
 > `artemis-client` 中的消费方发现 SDK（v0.3 phase-8）：订阅推送 + 本地视图 + 磁盘快照 + 兜底拉取 + discovery 专属地址容灾。协议契约见 [discovery-query-api.md](discovery-query-api.md) / [discovery-subscription-api.md](discovery-subscription-api.md) / [discovery-reconciliation-api.md](discovery-reconciliation-api.md)；节点目录端点见 [discovery-nodes-api.md](discovery-nodes-api.md)。注册侧 SDK 见 [sdk-java.md](sdk-java.md)。
 
@@ -113,6 +113,7 @@ HTTP 引导地址（discovery.addresses）
 
 | 键 | 默认 | 说明 |
 |---|---|---|
+| `artemis.client.tls.*` | `false` / 空 | 出站 TLS（与注册侧 SDK 共用一组键，语义见 [sdk-java.md](sdk-java.md) §3：`enabled` + `trustCaPath`，gRPC 与 https 前置寻址同锚） |
 | `artemis.client.clientId` | `default` | 静态；指标 `client` 标签与快照目录隔离键。同 JVM 多 client 必须配置不同值；仅允许 `[A-Za-z0-9._-]` 且不得为 `.`/`..` |
 | `artemis.client.discovery.addresses` | **必配** | 逗号分隔 HTTP(S) 引导地址（`http(s)://host[:port]`，拒绝 query/fragment）；创建时校验失败即 `IllegalArgumentException` |
 | `artemis.client.discovery.address.refreshIntervalMs` | 300000 | 节点目录稳态刷新周期（1000–3600000ms） |
@@ -181,5 +182,6 @@ Subscription subscription = client.subscribe(selector);   // 订阅时机归宿�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.2 | 2026-10-27 | v1.0 phase-1：键表补共享 TLS 键组引用（语义见 sdk-java.md §3） |
 | 1.1 | 2026-10-24 | v0.3 phase-9：新增 §9 Spring Boot 自动装配（与注册侧共用 starter，按 discovery.addresses 条件装配、不代建订阅） |
 | 1.0 | 2026-10-24 | v0.3 phase-8 初版：发现侧 SDK 公开 API、配置、同步语义、磁盘快照、地址容灾与指标 |

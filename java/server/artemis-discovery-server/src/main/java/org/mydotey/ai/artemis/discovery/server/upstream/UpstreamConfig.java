@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.mydotey.ai.artemis.common.config.ScfProperties;
+import org.mydotey.ai.artemis.common.tls.TlsClientSettings;
+import org.mydotey.ai.artemis.common.tls.TlsSettings;
 import org.mydotey.scf.Property;
 import org.mydotey.scf.facade.StringProperties;
 
@@ -17,13 +19,16 @@ import org.mydotey.scf.facade.StringProperties;
 public final class UpstreamConfig {
 
     static final String KEY_CLUSTERS = "artemis.discovery.registry.clusters";
+    static final String KEY_TLS_PREFIX = "artemis.discovery.registry.tls";
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static final Class<Map<String, List<String>>> CLUSTERS_TYPE = (Class) Map.class; // 泛型擦除
 
     private final List<Upstream> upstreams;
+    private final TlsClientSettings tls;
 
     public UpstreamConfig(StringProperties properties) {
+        this.tls = TlsSettings.client(properties, KEY_TLS_PREFIX);
         Property<String, Map<String, List<String>>> clusters = ScfProperties.staticProperty(
                 properties,
                 KEY_CLUSTERS,
@@ -44,7 +49,12 @@ public final class UpstreamConfig {
         return upstreams;
     }
 
-    private static List<Upstream> parse(Map<String, List<String>> clusters) {
+    /** 出站 TLS（静态）：投影订阅/bootstrap channel 装配。 */
+    public TlsClientSettings tls() {
+        return tls;
+    }
+
+    private List<Upstream> parse(Map<String, List<String>> clusters) {
         List<Upstream> result = new ArrayList<>(clusters.size());
         for (Map.Entry<String, List<String>> entry : clusters.entrySet()) {
             String clusterId = entry.getKey();

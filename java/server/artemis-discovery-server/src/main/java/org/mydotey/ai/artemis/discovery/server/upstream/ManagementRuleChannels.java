@@ -2,7 +2,6 @@ package org.mydotey.ai.artemis.discovery.server.upstream;
 
 import io.grpc.ClientInterceptors;
 import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
 import io.grpc.Metadata;
 import io.grpc.stub.MetadataUtils;
 import java.util.List;
@@ -10,6 +9,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.mydotey.ai.artemis.common.auth.BasicAuth;
+import org.mydotey.ai.artemis.common.tls.GrpcTlsContexts;
 
 /**
  * 管理规则流 gRPC 公共设施（phase-3 #10 收口）：channel 池（per endpoint 惰性建、
@@ -58,8 +58,7 @@ final class ManagementRuleChannels implements AutoCloseable {
     io.grpc.Channel channel(UpstreamConfig.Endpoint endpoint) {
         ManagedChannel channel = channels.computeIfAbsent(
                 endpoint,
-                ignored -> ManagedChannelBuilder.forAddress(endpoint.host(), endpoint.port())
-                        .usePlaintext()
+                ignored -> GrpcTlsContexts.channelForAddress(endpoint.host(), endpoint.port(), config.tls())
                         .maxInboundMessageSize(config.maxInboundMessageBytes())
                         // 规则流是被动长流：keepalive ping 检测半开连接（参数同投影上游）
                         .keepAliveTime(310, TimeUnit.SECONDS)

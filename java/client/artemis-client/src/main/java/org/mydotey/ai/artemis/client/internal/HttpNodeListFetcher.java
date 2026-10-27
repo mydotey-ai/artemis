@@ -7,6 +7,7 @@ import java.net.HttpURLConnection;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
+import javax.net.ssl.HttpsURLConnection;
 import org.mydotey.ai.artemis.proto.replication.v1.ClusterMember;
 import org.mydotey.ai.artemis.proto.replication.v1.GetNodeStatusResponse;
 import org.mydotey.ai.artemis.proto.replication.v1.NodeState;
@@ -46,14 +47,16 @@ final class HttpNodeListFetcher implements NodeListFetcher {
     private final Property<String, List<String>> addresses;
     private final Property<String, String> username;
     private final Property<String, String> password;
+    private final ClientTls tls;
     private final ResponseDecoder decoder;
 
-    HttpNodeListFetcher(StringProperties properties) {
-        this(properties, KEY_REGISTRY_ADDRESSES, registryDecoder());
+    HttpNodeListFetcher(StringProperties properties, ClientTls tls) {
+        this(properties, KEY_REGISTRY_ADDRESSES, registryDecoder(), tls);
     }
 
-    HttpNodeListFetcher(StringProperties properties, String addressesKey, ResponseDecoder decoder) {
+    HttpNodeListFetcher(StringProperties properties, String addressesKey, ResponseDecoder decoder, ClientTls tls) {
         this.addressesKey = addressesKey;
+        this.tls = tls;
         this.addresses = addressesProperty(properties, addressesKey);
         this.username = ClientProperties.authUsername(properties);
         this.password = ClientProperties.authPassword(properties);
@@ -113,6 +116,9 @@ final class HttpNodeListFetcher implements NodeListFetcher {
     private List<NodeEndpoint> fetchFrom(String url) throws Exception {
         HttpURLConnection connection =
                 (HttpURLConnection) URI.create(nodesUrl(url)).toURL().openConnection();
+        if (connection instanceof HttpsURLConnection) {
+            ClientTls.apply((HttpsURLConnection) connection, tls);
+        }
         connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
         connection.setReadTimeout(READ_TIMEOUT_MS);
         String usernameValue = username.getValue();

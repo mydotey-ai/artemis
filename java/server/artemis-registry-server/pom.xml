@@ -41,6 +41,14 @@
       <scope>test</scope>
     </dependency>
     <dependency>
+      <!-- TLS IT 证书设施（TestCertificates，keytool 自签 + PEM 导出）-->
+      <groupId>org.mydotey.ai.artemis</groupId>
+      <artifactId>artemis-common</artifactId>
+      <version>${revision}</version>
+      <type>test-jar</type>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter</artifactId>
     </dependency>

@@ -68,7 +68,7 @@ public final class DefaultRegistryClient implements RegistryClient {
     private final AtomicReference<State> state = new AtomicReference<>(State.NEW);
 
     public DefaultRegistryClient(StringProperties properties, MeterRegistry meterRegistry) {
-        this(properties, meterRegistry, new HttpNodeListFetcher(properties));
+        this(properties, meterRegistry, new HttpNodeListFetcher(properties, ClientTls.from(properties)));
     }
 
     /** 测试注入寻址传输端口（fake fetcher 驱动端到端 SDK 行为）。 */
@@ -80,7 +80,7 @@ public final class DefaultRegistryClient implements RegistryClient {
         this.retryIntervalMs = properties.getLongProperty(
                 KEY_RETRY_INTERVAL_MS, new RangeValueConfig<>(DEFAULT_RETRY_INTERVAL_MS, 100L, 10_000L));
         FailoverAddressProvider addressProvider = new FailoverAddressProvider(properties, this.registry, clientId);
-        this.grpcClient = new GrpcRegistryClient(addressProvider, properties);
+        this.grpcClient = new GrpcRegistryClient(addressProvider, properties, ClientTls.from(properties));
         this.heartbeat = new HeartbeatChannel(
                 grpcClient,
                 new HeartbeatChannel.Supplier() {

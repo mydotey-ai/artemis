@@ -1,6 +1,6 @@
 # Artemis Java SDK（注册侧）
 
-版本: 1.5    更新时间: 2026-10-24
+版本: 1.6    更新时间: 2026-10-27
 
 > `artemis-client` 的注册侧 Java 8 SDK（v0.3 phase-8 起类型更名 `ArtemisClient` → `RegistryClient`）：本地实例集为唯一事实源，显式操作 + 心跳全量上报。协议契约（`registry.v1`）见[proto 契约规范](../dev/proto-contract.md)，内部只读查询契约见 [registry-query-api.md](registry-query-api.md)。**发现侧（消费方）SDK 见 [sdk-java-discovery.md](sdk-java-discovery.md)**——两者共用同一 artifact。
 
@@ -94,6 +94,8 @@ client.register(instance);
 | `artemis.client.clientId` | `default` | 静态；指标 `client` 标签与发现侧快照目录隔离键。同 JVM 多 client 必须配置不同值；仅允许 `[A-Za-z0-9._-]` 且不得为 `.`/`..` |
 | `artemis.client.registry.addresses` | **必配** | 逗号分隔前置寻址 `http(s)://host[:port]` url（拒绝 query/fragment）；创建时校验失败即抛 `IllegalArgumentException`。生产实际配一个域名地址（域名/LB/DNS 天然多活） |
 | `artemis.client.auth.username` / `auth.password` | 空 | 两者都配置才发送 Basic 认证头（gRPC 与寻址 HTTP 同凭证）；未配置不发（认证裁决归服务端）；只配一项时 WARN 且不发 |
+| `artemis.client.tls.enabled` | `false` | 静态；出站 TLS（registry/discovery gRPC 通道与 https 前置寻址共用一组）。`false` 保持明文（eval 零依赖）；与认证正交 |
+| `artemis.client.tls.trustCaPath` | 空 | 静态；自定义信任锚 PEM 路径（支持多证书 CA bundle），gRPC 与 https 同锚；空 = JVM 默认信任库（公网 CA）。enabled 且路径不可读/非合法 PEM 时创建即 fail-fast；证书轮换 = 换文件重建 client（静态语义） |
 | `artemis.client.operation.retryTimes` | 2 | 瞬态失败（UNAVAILABLE/DEADLINE_EXCEEDED）重试次数，0–10 |
 | `artemis.client.operation.retryIntervalMs` | 500 | 重试间隔（100–10000ms） |
 | `artemis.client.heartbeat.intervalMs` | 5000 | 心跳周期（500–60000ms），动态 |
@@ -165,6 +167,7 @@ client.register(instance);
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.6 | 2026-10-27 | v1.0 phase-1：配置键表补 `artemis.client.tls.*`（enabled + trustCaPath，gRPC 与 https 前置寻址同锚、支持多证书 bundle、创建即 fail-fast） |
 | 1.5 | 2026-10-24 | v0.3 phase-9：starter 双用途条件装配（缺地址不再 fail-fast，非法仍 fail-fast）、配置桥 `artemisClientStringProperties` 同名让位/异名共存按名绑定、关闭监听只关 starter 自建 bean |
 | 1.4 | 2026-10-24 | v0.3 phase-8：`ArtemisClient` → `RegistryClient`、`newClient` → `newRegistryClient`；新增 `artemis.client.clientId`；`InstanceStatus` 增 UNSPECIFIED/UNKNOWN；链接发现侧 SDK 文档；自动配置类名保持不变 |
 | 1.3 | 2026-10-23 | v0.2 phase-6：starter 关闭改由 `ContextClosedEvent` 第一时机触发 `close()`（注销提前到程序可用时），destroyMethod 为幂等兜底 |

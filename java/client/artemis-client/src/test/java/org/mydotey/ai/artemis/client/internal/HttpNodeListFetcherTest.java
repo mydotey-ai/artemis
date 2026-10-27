@@ -186,7 +186,10 @@ class HttpNodeListFetcherTest {
             source.setPropertyValue(ClientProperties.KEY_AUTH_USERNAME, username);
             source.setPropertyValue(ClientProperties.KEY_AUTH_PASSWORD, password);
         }
-        return new HttpNodeListFetcher(new StringProperties(ConfigurationManagers.newManager(
-                "test-fetcher-" + System.nanoTime(), java.util.Collections.singletonMap(1, source))));
+        return new HttpNodeListFetcher(
+                new StringProperties(ConfigurationManagers.newManager(
+                        "test-fetcher-" + System.nanoTime(), java.util.Collections.singletonMap(1, source))),
+                ClientTls.from(new StringProperties(ConfigurationManagers.newManager(
+                        "test-fetcher-tls-" + System.nanoTime(), java.util.Collections.singletonMap(1, source)))));
     }
 }

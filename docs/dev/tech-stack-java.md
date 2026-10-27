@@ -1,6 +1,6 @@
 # Java 技术选型
 
-版本: 1.28    更新时间: 2026-10-26
+版本: 1.29    更新时间: 2026-10-27
 
 > 本文是新一代 Artemis Java 实现的技术选型基线：语言与运行时、工程结构、全量技术组件清单与依赖冲突策略。设计依据为[架构设计](../arch/artemis-next-architecture.md)（§3 技术栈策略、§7 关键决策 D8），开发规范见[Java 开发规范](coding-guidelines-java.md)。Rust 实现（v1.x 混合集群）直接消费仓库顶层 `proto/` 契约目录（见[proto 契约规范](proto-contract.md)），不受本文 Java 组件约束。
 
@@ -94,7 +94,7 @@ Java 各消费模块从仓库顶层 `proto/`（组织与治理见[proto 契约�
 | 5 | 构建 | 依赖治理 | maven-enforcer-plugin + flatten-maven-plugin | java/ reactor | enforcer：Java/Maven 版本、依赖上界（requireUpperBoundDeps）、core 禁 Spring 与 client 禁服务端模块（§2.3）；flatten：服务端 `${revision}` 落库（§2.3；client 线为字面版本不经 flatten 处理） |
 | 6 | 构建 | proto 生成 | protobuf-maven-plugin（**ascopes**）+ protoc + grpc-java 插件 | 各消费模块 | xolstice 已于 2025-04 archived，其 README 推荐 ascopes 为后继；`sourceDirectories` 相对路径，按 §2.2 生成矩阵 |
 | 7 | 框架 | 应用框架 | Spring Boot 4.1.x | 仅各 server 模块 | DI、配置绑定、MVC、actuator；不出现在 core/client classpath |
-| 8 | 通信 | RPC 框架 | grpc-java 1.84.x（reactor 窄版本线锁 1.84.2，parent dm 先声明优先） | 服务端 grpc-netty；client grpc-netty-shaded | 五通道全 gRPC；client shaded 隔离宿主 netty；grpc 线内 guava flavor 混排由 parent dm 统一 jre（33.6.0-jre），grpc 升级时同步 |
+| 8 | 通信 | RPC 框架 | grpc-java 1.84.x（reactor 窄版本线锁 1.84.2，parent dm 先声明优先） | 服务端 grpc-netty（含 artemis-common：TLS 装配 GrpcSslContexts/NettyChannelBuilder，v1.0 phase-1）；client grpc-netty-shaded | 五通道全 gRPC；client shaded 隔离宿主 netty；grpc 线内 guava flavor 混排由 parent dm 统一 jre（33.6.0-jre），grpc 升级时同步 |
 | 9 | 通信 | 序列化（服务端） | protobuf-java 4.x | 服务端 proto 消息 + 服务端快照文件格式 | 快照 = proto 二进制 + 版本头，不自研格式 |
 | 10 | 通信 | 序列化（client） | protobuf-java **3.25.x**（protoc 3.25 生成） | artemis-client | 宿主 runtime 窗口 3.25.x–4.x，见 §5 |
 | 11 | HTTP | HTTP 辅助通道 | Spring MVC（SB 内置） | server 模块 | 外部 HTTP 辅助端点 + console REST；不引 WebFlux |
@@ -189,6 +189,7 @@ shaded 版将 netty 重打包进 `io.grpc.netty.shaded.*` 命名空间，与宿�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.29 | 2026-10-27 | v1.0 phase-1：#8 用途补 artemis-common 直接依赖 grpc-netty（common.tls TLS 装配） |
 | 1.27 | 2026-10-25 | v0.4 phase-2 设计定案：#13 ORM 决断落定（MyBatis-Plus 3.5.17 boot4-starter，实测验证 + JdbcTemplate 回退预案），§6 待定项移除 |
 | 1.26 | 2026-10-25 | v0.4 phase-1 交付：#21 Testcontainers 补 2.0 版本线与模块/包名变化、无 Docker 跳过形态 |
 | 1.25 | 2026-10-24 | v0.4 phase-1 设计定案：§6 待定项 #13 决断时机细化至 phase-2（首个业务表）；#21 Testcontainers 首次启用（DB 双方言 IT） |

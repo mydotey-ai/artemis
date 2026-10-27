@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.36    更新时间: 2026-10-27
+版本: 1.37    更新时间: 2026-10-27
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -342,10 +342,18 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **all-in-one 组合注入**：launcher 注入 `artemis.management.discovery.endpoints`（同进程 discovery HTTP 端口，0/随机不注入）——eval 单包形态订阅视图开箱可用。
 - **工程形态**：proto / discovery 产品代码零变更；code-review 8 findings 全修（高优 1：编辑表单丢 status 静默激活 INACTIVE 规则；含编码边界、all-in-one 端口守卫、executor 命名纪律）；1 单测（组合隔离/排序）+ `ManagementConsoleOpsIT` 5 用例（console 操作闭环）+ `DiscoveryConsoleSubscriptionsIT` 2 用例（三服务端到端：真实订阅可见/断流移除/坏源隔离）。
 
+**v1.0 phase-1（TLS 传输安全）已交付**：
+
+- **总原则**：显式启用、默认明文（与默认认证哲学一致——eval 零依赖路径不变）；仅 server-auth TLS（加密 + 服务端身份校验，mTLS 客户端证书校验随 RBAC 后置 phase-2）；证书 = PEM 文件路径（X.509 链 + PKCS#8 私钥），轮换 = 换文件重启生效。
+- **配置分界**：外部端口（registry/discovery/management 的 gRPC 与 HTTP）经 **Spring SSL bundle** 框架键启用（`spring.ssl.bundle.pem.*` + `spring.grpc.server.ssl.bundle` / `server.ssl.bundle`，零代码）；程序化通道经 **SCF 静态键**——内部 peer `artemis.registry.internal.tls.*`（入站证书 + 出站信任同组对称）、discovery 上游 `artemis.discovery.registry.tls.*` / `artemis.discovery.management.tls.*`、management 出站查询 `artemis.management.registry.tls.*`、SDK `artemis.client.tls.*`（registry/discovery gRPC 与 https 前置寻址共用一组，键表见 [sdk-java.md](../api/sdk-java.md) §3）。坏配置（enabled 但路径缺失/不可读/非合法 PEM）启动即 fail-fast。
+- **行为**：未启用通道与既有明文行为逐位一致；客户端自定义 trustCa 时 gRPC 与 HTTP 同锚（支持多证书 CA bundle），未配置用 JVM 默认信任库（公网 CA）；不提供跳过校验开关——证书须带 SAN 覆盖目标地址；actuator 管理端口不做 TLS（本机绑定 + 网络策略隔离）；all-in-one 跨服务 loopback 通道启用 TLS 需证书含 localhost SAN。
+- **工程形态**：`artemis-common` 新增 `tls` 设施（`TlsSettings` 绑定 + `GrpcTlsContexts` 装配，入站经 spring-grpc factory 构造参数 KeyManagerFactory 接入——安全设置冻结约束的实现期定案）；code-review 7 findings 处理（6 修 1 归文档：含 SDK https 多证书 bundle 解析崩溃修复、坏 CA 绕过启动校验修复）；common/client 单测 16 + `RegistryTlsIT` 3（SDK over TLS + 双节点 peer TLS 复制 + 明文/无信任锚拒绝）+ `DiscoveryTlsIT` 1（三服务全 TLS：投影/规则流/console https）。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.37 | 2026-10-27 | v1.0 phase-1 交付：TLS 传输安全（内外通道可启、Spring bundle/SCF 键分界、SDK gRPC+https 同锚、默认明文不变） |
 | 1.36 | 2026-10-27 | v0.5 phase-5 交付：console 管理版（操作面零新端点 + 订阅关系组合视图 + 审计/保护态页面 + all-in-one 订阅源注入）；v0.4 phase-6 操作面状态句更新 |
 | 1.35 | 2026-10-27 | v0.5 phase-4 交付：canary 一键用法（selector + weight 派生保留名规则 + 发布 + 下发，DELETE 结束）、weight 运维语义、保留名 canary 定稿、零 proto/discovery 变更 |
 | ------ | ------ | ------ |

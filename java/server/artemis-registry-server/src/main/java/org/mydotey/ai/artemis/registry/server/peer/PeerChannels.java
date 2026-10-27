@@ -1,12 +1,13 @@
 package org.mydotey.ai.artemis.registry.server.peer;
 
 import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
 import io.grpc.Metadata;
 import io.grpc.stub.MetadataUtils;
 import java.util.concurrent.ConcurrentHashMap;
 import org.mydotey.ai.artemis.common.auth.BasicAuth;
 import org.mydotey.ai.artemis.common.config.ScfProperties;
+import org.mydotey.ai.artemis.common.tls.GrpcTlsContexts;
+import org.mydotey.ai.artemis.common.tls.TlsClientSettings;
 import org.mydotey.ai.artemis.proto.replication.v1.ReplicationServiceGrpc;
 import org.mydotey.ai.artemis.registry.domain.ClusterMember;
 import org.mydotey.ai.artemis.registry.server.auth.PeerAuthConfig;
@@ -17,7 +18,8 @@ import org.mydotey.scf.facade.StringProperties;
  * per-peer gRPC channel 池（复制投递与 bootstrap 探测/拉取共用）：惰性建、按 node-id 复用、
  * 全生命周期持有；认证头每次调用现取（动态配置、运行期可轮换）。
  *
- * <p>bootstrap 分片可能接近 16 MiB，channel 显式提升接收上限。
+ * <p>TLS 由 {@code artemis.registry.internal.tls}（client 侧：enabled + 可选 trustCa）控制，
+ * 与 peer 服务端证书配对（静态，重启生效）；bootstrap 分片可能接近 16 MiB，channel 显式提升接收上限。
  */
 public final class PeerChannels implements AutoCloseable {
 
@@ -26,11 +28,13 @@ public final class PeerChannels implements AutoCloseable {
     private static final int DEFAULT_MAX_INBOUND_MESSAGE_BYTES = 16 * 1024 * 1024;
 
     private final PeerAuthConfig auth;
+    private final TlsClientSettings tls;
     private final int maxInboundMessageBytes;
     private final ConcurrentHashMap<String, ManagedChannel> channels = new ConcurrentHashMap<>();
 
-    PeerChannels(StringProperties properties, PeerAuthConfig auth) {
+    PeerChannels(StringProperties properties, PeerAuthConfig auth, TlsClientSettings tls) {
         this.auth = auth;
+        this.tls = tls;
         Property<String, Integer> maxInbound = ScfProperties.staticInt(
                 properties,
                 KEY_MAX_INBOUND_MESSAGE_BYTES,
@@ -61,9 +65,8 @@ public final class PeerChannels implements AutoCloseable {
     private ManagedChannel channel(ClusterMember peer) {
         return channels.computeIfAbsent(
                 peer.nodeId(),
-                ignored -> ManagedChannelBuilder.forAddress(
-                                peer.peer().host(), peer.peer().port())
-                        .usePlaintext()
+                ignored -> GrpcTlsContexts.channelForAddress(
+                                peer.peer().host(), peer.peer().port(), tls)
                         .maxInboundMessageSize(maxInboundMessageBytes)
                         .build());
     }

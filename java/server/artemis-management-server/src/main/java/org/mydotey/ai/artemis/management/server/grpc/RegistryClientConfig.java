@@ -1,5 +1,7 @@
 package org.mydotey.ai.artemis.management.server.grpc;
 
+import org.mydotey.ai.artemis.common.tls.TlsClientSettings;
+import org.mydotey.ai.artemis.common.tls.TlsSettings;
 import org.mydotey.scf.Property;
 import org.mydotey.scf.facade.StringProperties;
 import org.mydotey.scf.filter.RangeValueConfig;
@@ -18,6 +20,7 @@ public final class RegistryClientConfig {
     static final String KEY_USERNAME = "artemis.management.registry.username";
     static final String KEY_PASSWORD = "artemis.management.registry.password";
     static final String KEY_TIMEOUT_MS = "artemis.management.registry.timeoutMs";
+    static final String KEY_TLS_PREFIX = "artemis.management.registry.tls";
 
     private static final String DEFAULT_ENDPOINT = "";
     private static final String DEFAULT_USERNAME = "";
@@ -28,6 +31,7 @@ public final class RegistryClientConfig {
     private final Property<String, String> username;
     private final Property<String, String> password;
     private final Property<String, Long> timeoutMs;
+    private final TlsClientSettings tls;
 
     public RegistryClientConfig(StringProperties properties) {
         this.endpoint = properties.getStringProperty(KEY_ENDPOINT, DEFAULT_ENDPOINT);
@@ -35,6 +39,13 @@ public final class RegistryClientConfig {
         this.password = properties.getStringProperty(KEY_PASSWORD, DEFAULT_PASSWORD);
         this.timeoutMs =
                 properties.getLongProperty(KEY_TIMEOUT_MS, new RangeValueConfig<>(DEFAULT_TIMEOUT_MS, 1L, 60_000L));
+        // TLS 静态分型（channel 构建期一次性装配）；上游为 registry 内部 peer 端口，与 peer 服务端 TLS 配对
+        this.tls = TlsSettings.client(properties, KEY_TLS_PREFIX);
+    }
+
+    /** 出站 TLS（静态）：enabled 时以自定义 CA（可选）连 registry peer 端口。 */
+    public TlsClientSettings tls() {
+        return tls;
     }
 
     public boolean isConfigured() {

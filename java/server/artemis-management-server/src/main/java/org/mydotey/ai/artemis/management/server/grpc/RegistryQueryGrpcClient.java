@@ -1,7 +1,6 @@
 package org.mydotey.ai.artemis.management.server.grpc;
 
 import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
 import io.grpc.Metadata;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
@@ -10,6 +9,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import org.mydotey.ai.artemis.common.auth.BasicAuth;
+import org.mydotey.ai.artemis.common.tls.GrpcTlsContexts;
 import org.mydotey.ai.artemis.management.application.ManagementProtoMapper;
 import org.mydotey.ai.artemis.management.domain.ConfigProperty;
 import org.mydotey.ai.artemis.management.domain.Instance;
@@ -52,8 +52,7 @@ public final class RegistryQueryGrpcClient implements RegistryQueryPort, AutoClo
             this.stub = null;
             return;
         }
-        this.channel = ManagedChannelBuilder.forTarget(config.endpoint())
-                .usePlaintext()
+        this.channel = GrpcTlsContexts.channelForTarget(config.endpoint(), config.tls())
                 .maxInboundMessageSize(MAX_INBOUND_MESSAGE_BYTES)
                 .build();
         this.stub = RegistryQueryServiceGrpc.newBlockingStub(channel);

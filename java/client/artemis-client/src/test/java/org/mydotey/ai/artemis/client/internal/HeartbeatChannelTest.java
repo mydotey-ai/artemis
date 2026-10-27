@@ -50,7 +50,8 @@ class HeartbeatChannelTest {
     }
 
     private HeartbeatChannel startChannel() {
-        GrpcRegistryClient grpc = new GrpcRegistryClient(addressProvider, systemProperties());
+        GrpcRegistryClient grpc =
+                new GrpcRegistryClient(addressProvider, systemProperties(), ClientTls.from(systemProperties()));
         channel = new HeartbeatChannel(
                 grpc,
                 new HeartbeatChannel.Supplier() {

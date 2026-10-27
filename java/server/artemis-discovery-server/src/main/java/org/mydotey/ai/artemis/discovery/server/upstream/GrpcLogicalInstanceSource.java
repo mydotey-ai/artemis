@@ -4,7 +4,6 @@ import io.grpc.CallOptions;
 import io.grpc.ClientCall;
 import io.grpc.ClientInterceptors;
 import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
 import io.grpc.Metadata;
 import io.grpc.stub.ClientCalls;
 import io.grpc.stub.MetadataUtils;
@@ -18,6 +17,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import lombok.extern.slf4j.Slf4j;
 import org.mydotey.ai.artemis.common.auth.BasicAuth;
+import org.mydotey.ai.artemis.common.tls.GrpcTlsContexts;
 import org.mydotey.ai.artemis.discovery.application.DiscoveryProtoMapper;
 import org.mydotey.ai.artemis.discovery.domain.ProjectionListener;
 import org.mydotey.ai.artemis.discovery.domain.ProjectionSession;
@@ -64,8 +64,7 @@ public final class GrpcLogicalInstanceSource implements ProjectionSource, AutoCl
     private io.grpc.Channel upstreamChannel(UpstreamConfig.Endpoint endpoint) {
         ManagedChannel channel = channels.computeIfAbsent(
                 endpoint,
-                ignored -> ManagedChannelBuilder.forAddress(endpoint.host(), endpoint.port())
-                        .usePlaintext()
+                ignored -> GrpcTlsContexts.channelForAddress(endpoint.host(), endpoint.port(), config.tls())
                         .maxInboundMessageSize(config.maxInboundMessageBytes())
                         // 被动长流：keepalive ping 检测半开连接（参数同规则流/投影上游）
                         .keepAliveTime(310, TimeUnit.SECONDS)

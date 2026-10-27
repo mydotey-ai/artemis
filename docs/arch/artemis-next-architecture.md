@@ -1,6 +1,6 @@
 # 新一代 Artemis 架构设计
 
-版本: 1.45    更新时间: 2026-10-27
+版本: 1.46    更新时间: 2026-10-27
 
 > 本文是新一代 Artemis（重设计产品）的架构设计基线：总体架构、核心机制、技术栈策略与关键决策记录。产品定位与版本切分见 [产品规划与路线图](../product/artemis-next-roadmap.md)；设计输入来自 [原产品能力基线](../legacy/legacy-product-analysis.md)（§5 可继承资产 / §6 局限清单）与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -196,7 +196,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 | 项 | 决策 |
 |---|---|
 | 认证 | v0.1 起默认开启（各服务本地单账户），吸取 Nacos 3.0 才默认鉴权的教训；显式配置方可关闭（eval 场景）；v0.4 management 单管理员 DB 账户接管管理访问面（[ADR-021](../decisions/adr-021-management-account-takeover.md)，各服务本地账户保留为服务凭证） |
-| TLS | v1.0 支持（内外通道均可启），内网部署可配明文 |
+| TLS | v1.0 支持（内外通道均可启），内网部署可配明文；仅 server-auth TLS（mTLS 客户端证书校验随 RBAC 后置）。外部端口（gRPC/HTTP）经 Spring SSL bundle（框架自有键，零代码）；程序化通道（内部 peer、discovery/management 上游、SDK gRPC 与 https 寻址）经 SCF 静态键 `artemis.*.tls.*`（enabled + 服务端 certChain/privateKey + 客户端可选 trustCa，坏配置启动 fail-fast）；证书 = PEM 文件路径，轮换重启生效，证书须带 SAN 覆盖目标地址（不提供跳过校验开关） |
 | RBAC | v1.0 |
 | metrics | Micrometer + Prometheus 格式，v0.1 第一天起按版本递补：心跳/租约/节点级保护态 v0.1；复制 v0.2（`batches.sent/failed/rejected/dropped`、`batches.received`、`applied.changes`）+ bootstrap（`attempts/failures/synced.instances`）+ 节点探测（`cluster.probe.rounds/failures`、`cluster.peers.up`）+ 保护态 2.0（节点级 gauge 保留；`service.protection{namespace,service}` 仅保护中注册、`service.protection.count`、`service.protection.transitions{to}`）；推送 v0.3 |
 | 告警 | 走 Prometheus + Alertmanager 生态（不自建），关键告警规则（保护态触发、节点失联）随 v1.0 提供示例配置 |
@@ -267,6 +267,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.46 | 2026-10-27 | §6 TLS 行落地细化：Spring bundle / SCF 键分界、仅 server-auth、SAN 要求（v1.0 phase-1） |
 | 1.45 | 2026-10-27 | v0.5 phase-5 设计定案：§2.2 端口表补 management → discovery 只读发现管理查询通道（HTTP、复用 discovery 外部端口、订阅关系组合）——§2.1 依赖矩阵既有 0..N 依赖的首条落地 |
 | 1.44 | 2026-10-27 | v0.5 phase-2 落点：§2.2 补路由规则订阅流（RouteRuleService 独立流 + AckRouteRules + status/rules routeRules 节，版本 = dispatcher tick） |
 | 1.43 | 2026-10-26 | v0.4 phase-5 设计定案：§2.2 补规则流版本化 + ack 落点（envelope version + AckEjections + 水位 API，§5.2 机制落地） |

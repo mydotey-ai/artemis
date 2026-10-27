@@ -3,6 +3,8 @@ package org.mydotey.ai.artemis.discovery.server.upstream;
 import java.util.ArrayList;
 import java.util.List;
 import org.mydotey.ai.artemis.common.config.ScfProperties;
+import org.mydotey.ai.artemis.common.tls.TlsClientSettings;
+import org.mydotey.ai.artemis.common.tls.TlsSettings;
 import org.mydotey.scf.facade.StringProperties;
 
 /**
@@ -15,11 +17,13 @@ public final class ManagementConfig {
 
     static final String KEY_ENDPOINTS = "artemis.discovery.management.endpoints";
     static final String KEY_MAX_INBOUND_MESSAGE_BYTES = "artemis.discovery.management.maxInboundMessageBytes";
+    static final String KEY_TLS_PREFIX = "artemis.discovery.management.tls";
 
     private static final int DEFAULT_MAX_INBOUND_MESSAGE_BYTES = 16 * 1024 * 1024;
 
     private final List<UpstreamConfig.Endpoint> endpoints;
     private final int maxInboundMessageBytes;
+    private final TlsClientSettings tls;
 
     public ManagementConfig(StringProperties properties) {
         String raw = properties.getStringProperty(KEY_ENDPOINTS, "").getValue();
@@ -32,6 +36,13 @@ public final class ManagementConfig {
                         64 * 1024 * 1024,
                         "max inbound message bytes for management channels (static)")
                 .getValue();
+        // TLS 静态分型（规则流 + 逻辑实例流共享，同组单点定义）：与 management 端 spring.grpc.server.ssl 配对
+        this.tls = TlsSettings.client(properties, KEY_TLS_PREFIX);
+    }
+
+    /** 出站 TLS（静态）：规则流/逻辑实例流 channel 装配。 */
+    public TlsClientSettings tls() {
+        return tls;
     }
 
     /** 通道接收上限（规则流 + 逻辑实例流共享，单一 PropertyConfig）。 */

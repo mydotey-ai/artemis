@@ -52,7 +52,7 @@ public final class UpstreamSynchronizers implements AutoCloseable {
                         + "' is reserved for logical instances");
             }
             // ponytail: 全部集群共享同一 UpstreamAuthConfig，per-cluster 凭证按真实部署需求再加
-            GrpcProjectionSource source = new GrpcProjectionSource(properties, upstream, auth);
+            GrpcProjectionSource source = new GrpcProjectionSource(properties, upstream, auth, upstreamConfig.tls());
             sources.add(source);
             synchronizers.add(new ProjectionSynchronizer(
                     properties,

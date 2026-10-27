@@ -2,7 +2,6 @@ package org.mydotey.ai.artemis.client.internal;
 
 import io.grpc.ClientInterceptor;
 import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
 import io.grpc.stub.StreamObserver;
 import java.util.List;
@@ -54,6 +53,7 @@ final class GrpcRegistryClient {
     private static final long DEADLINE_MS = 5_000;
 
     private final ServerAddressProvider addressProvider;
+    private final ClientTls tls;
     private final ClientInterceptor authInterceptor;
 
     private volatile ManagedChannel channel;
@@ -63,8 +63,9 @@ final class GrpcRegistryClient {
 
     private volatile boolean closed;
 
-    GrpcRegistryClient(ServerAddressProvider addressProvider, StringProperties properties) {
+    GrpcRegistryClient(ServerAddressProvider addressProvider, StringProperties properties, ClientTls tls) {
         this.addressProvider = addressProvider;
+        this.tls = tls;
         // 凭证默认空：未配置不发认证头，认证裁决归服务端（显式配置方可认证，与服务端对称）；
         // 每次请求重读（变更运行时生效）；半配置 WARN 由共用 AuthInterceptor 统一发出
         this.authInterceptor = new AuthInterceptor(
@@ -100,8 +101,7 @@ final class GrpcRegistryClient {
                     // keepAlive：半开连接（NAT 静默丢包）由 TCP keepalive 探测兜底；
                     // ack 看门狗（HeartbeatChannel）是应用层的第一道检测
                     replaced = current;
-                    current = ManagedChannelBuilder.forTarget(address)
-                            .usePlaintext()
+                    current = tls.newChannelBuilder(address)
                             .keepAliveTime(30, TimeUnit.SECONDS)
                             .keepAliveTimeout(10, TimeUnit.SECONDS)
                             .keepAliveWithoutCalls(true)

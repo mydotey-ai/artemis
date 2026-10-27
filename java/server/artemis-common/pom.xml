@@ -27,6 +27,11 @@
       <groupId>io.grpc</groupId>
       <artifactId>grpc-protobuf</artifactId>
     </dependency>
+    <!-- TLS 装配（common.tls）：GrpcSslContexts/NettyChannelBuilder 所在（组件总表 #8 服务端 grpc-netty） -->
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-netty</artifactId>
+    </dependency>
     <!-- 静态配置项通用工具（各使用类传入自己的键/默认值/范围） -->
     <dependency>
       <groupId>org.mydotey.scf</groupId>
@@ -62,6 +67,19 @@
           <execution>
             <goals>
               <goal>generate</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- 测试证书设施 test-jar（TestCertificates，keytool 自签 + PEM 导出）供各 server IT 复用 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>attach-test-jar</id>
+            <goals>
+              <goal>test-jar</goal>
             </goals>
           </execution>
         </executions>

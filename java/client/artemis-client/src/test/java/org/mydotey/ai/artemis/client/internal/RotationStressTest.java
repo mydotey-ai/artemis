@@ -57,7 +57,8 @@ class RotationStressTest {
 
     @Test
     void should_keepHeartbeatsFlowing_when_rotatingRepeatedly() throws Exception {
-        GrpcRegistryClient grpc = new GrpcRegistryClient(addressProvider, systemProperties());
+        GrpcRegistryClient grpc =
+                new GrpcRegistryClient(addressProvider, systemProperties(), ClientTls.from(systemProperties()));
         this.grpc = grpc;
         channel = new HeartbeatChannel(
                 grpc,

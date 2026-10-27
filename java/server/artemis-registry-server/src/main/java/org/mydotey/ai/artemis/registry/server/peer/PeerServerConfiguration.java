@@ -11,6 +11,10 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.mydotey.ai.artemis.common.auth.BasicAuth;
+import org.mydotey.ai.artemis.common.tls.GrpcTlsContexts;
+import org.mydotey.ai.artemis.common.tls.TlsClientSettings;
+import org.mydotey.ai.artemis.common.tls.TlsServerSettings;
+import org.mydotey.ai.artemis.common.tls.TlsSettings;
 import org.mydotey.ai.artemis.registry.domain.ClusterMembers;
 import org.mydotey.ai.artemis.registry.server.auth.PeerAuthConfig;
 import org.mydotey.ai.artemis.registry.server.grpc.BasicAuthServerInterceptor;
@@ -78,10 +82,22 @@ public class PeerServerConfiguration {
         return new PeerAuthConfig(properties);
     }
 
+    /** peer 端口 TLS（静态）：入站证书 + 出站信任同组键 {@code artemis.registry.internal.tls}。 */
+    @Bean
+    TlsServerSettings peerTlsServerSettings(StringProperties properties) {
+        return TlsSettings.server(properties, "artemis.registry.internal.tls");
+    }
+
+    @Bean
+    TlsClientSettings peerTlsClientSettings(StringProperties properties) {
+        return TlsSettings.client(properties, "artemis.registry.internal.tls");
+    }
+
     /** per-peer channel 池：复制投递与 bootstrap 探测/拉取共用，关闭随 context 释放。 */
     @Bean(destroyMethod = "close")
-    PeerChannels peerChannels(StringProperties properties, PeerAuthConfig peerAuthConfig) {
-        return new PeerChannels(properties, peerAuthConfig);
+    PeerChannels peerChannels(
+            StringProperties properties, PeerAuthConfig peerAuthConfig, TlsClientSettings peerTlsClientSettings) {
+        return new PeerChannels(properties, peerAuthConfig, peerTlsClientSettings);
     }
 
     /** 出站 peer 复制传输（领域端口实现）。 */
@@ -108,6 +124,7 @@ public class PeerServerConfiguration {
     GrpcServerLifecycle peerGrpcServerLifecycle(
             PeerServerConfig config,
             PeerAuthConfig auth,
+            TlsServerSettings tls,
             @Qualifier("peerGrpcExecutor") ExecutorService executor,
             ReplicationGrpcService replicationService,
             ProjectionGrpcService projectionService,
@@ -118,9 +135,15 @@ public class PeerServerConfiguration {
             ApplicationEventPublisher publisher) {
         List<ServerBuilderCustomizer<NettyServerBuilder>> customizers =
                 List.of(builder -> builder.executor(executor).maxInboundMessageSize(config.maxInboundMessageBytes()));
-        // TLS 随 v1.0 内外通道统一接入（架构 §6）；当前为明文内网通道
-        NettyGrpcServerFactory factory =
-                new NettyGrpcServerFactory(config.bindAddress(), customizers, null, null, null);
+        // TLS（artemis.registry.internal.tls，静态）：经 factory 构造参数接入——factory 内部以
+        // ServerCredentials 构 builder，安全设置被冻结，customizer 挂 sslContext 会抛
+        // "Cannot change security"（GrpcTlsContexts 类注释）；默认明文（架构 §6 内网可配明文）
+        NettyGrpcServerFactory factory = new NettyGrpcServerFactory(
+                config.bindAddress(),
+                customizers,
+                tls.enabled() ? GrpcTlsContexts.serverKeyManagers(tls) : null,
+                null,
+                null);
 
         BasicAuthServerInterceptor internalAuth = new BasicAuthServerInterceptor(
                 auth::enabled, () -> BasicAuth.headerValueOrNull(auth.username(), auth.password()), Set.of());

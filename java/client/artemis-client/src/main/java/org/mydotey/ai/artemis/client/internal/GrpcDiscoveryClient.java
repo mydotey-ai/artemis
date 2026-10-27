@@ -2,7 +2,6 @@ package org.mydotey.ai.artemis.client.internal;
 
 import io.grpc.ClientInterceptor;
 import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
 import io.grpc.stub.ClientCallStreamObserver;
 import io.grpc.stub.ClientResponseObserver;
 import io.grpc.stub.StreamObserver;
@@ -39,6 +38,7 @@ final class GrpcDiscoveryClient {
     private static final long DEADLINE_MS = 10_000;
 
     private final ServerAddressProvider addressProvider;
+    private final ClientTls tls;
     private final ClientInterceptor authInterceptor;
 
     private volatile ManagedChannel channel;
@@ -48,8 +48,9 @@ final class GrpcDiscoveryClient {
 
     private volatile boolean closed;
 
-    GrpcDiscoveryClient(ServerAddressProvider addressProvider, StringProperties properties) {
+    GrpcDiscoveryClient(ServerAddressProvider addressProvider, StringProperties properties, ClientTls tls) {
         this.addressProvider = addressProvider;
+        this.tls = tls;
         this.authInterceptor = new AuthInterceptor(
                 ClientProperties.authUsername(properties), ClientProperties.authPassword(properties));
     }
@@ -80,8 +81,7 @@ final class GrpcDiscoveryClient {
                     }
                     replaced = current;
                     // keepAlive：半开连接（NAT 静默丢包）由 TCP keepalive 探测兜底
-                    current = ManagedChannelBuilder.forTarget(address)
-                            .usePlaintext()
+                    current = tls.newChannelBuilder(address)
                             .keepAliveTime(30, TimeUnit.SECONDS)
                             .keepAliveTimeout(10, TimeUnit.SECONDS)
                             .keepAliveWithoutCalls(true)

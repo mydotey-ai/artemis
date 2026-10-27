@@ -90,6 +90,14 @@
       <version>${revision}</version>
       <scope>test</scope>
     </dependency>
+    <dependency>
+      <!-- TLS IT 证书设施（TestCertificates，keytool 自签 + PEM 导出）-->
+      <groupId>org.mydotey.ai.artemis</groupId>
+      <artifactId>artemis-common</artifactId>
+      <version>${revision}</version>
+      <type>test-jar</type>
+      <scope>test</scope>
+    </dependency>
     <!-- IT fixture：同 JVM 起真实 management-server（规则流端口，phase-6） -->
     <dependency>
       <groupId>org.mydotey.ai.artemis</groupId>

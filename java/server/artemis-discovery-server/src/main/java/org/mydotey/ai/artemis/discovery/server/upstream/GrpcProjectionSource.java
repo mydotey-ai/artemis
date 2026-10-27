@@ -3,7 +3,6 @@ package org.mydotey.ai.artemis.discovery.server.upstream;
 import io.grpc.CallOptions;
 import io.grpc.ClientInterceptors;
 import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
 import io.grpc.Metadata;
 import io.grpc.stub.MetadataUtils;
 import io.grpc.stub.StreamObserver;
@@ -16,6 +15,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.mydotey.ai.artemis.common.auth.BasicAuth;
 import org.mydotey.ai.artemis.common.config.ScfProperties;
+import org.mydotey.ai.artemis.common.tls.GrpcTlsContexts;
+import org.mydotey.ai.artemis.common.tls.TlsClientSettings;
 import org.mydotey.ai.artemis.discovery.application.DiscoveryProtoMapper;
 import org.mydotey.ai.artemis.discovery.domain.ProjectionListener;
 import org.mydotey.ai.artemis.discovery.domain.ProjectionSession;
@@ -50,6 +51,7 @@ public final class GrpcProjectionSource implements ProjectionSource, AutoCloseab
 
     private final UpstreamConfig.Upstream upstream;
     private final UpstreamAuthConfig auth;
+    private final TlsClientSettings tls;
     private final Property<String, Long> bootstrapTimeoutMs;
     private final int maxInboundMessageBytes;
     private final AtomicInteger nextEndpoint = new AtomicInteger();
@@ -57,9 +59,13 @@ public final class GrpcProjectionSource implements ProjectionSource, AutoCloseab
     private final DiscoveryProtoMapper mapper = DiscoveryProtoMapper.INSTANCE;
 
     public GrpcProjectionSource(
-            StringProperties properties, UpstreamConfig.Upstream upstream, UpstreamAuthConfig auth) {
+            StringProperties properties,
+            UpstreamConfig.Upstream upstream,
+            UpstreamAuthConfig auth,
+            TlsClientSettings tls) {
         this.upstream = upstream;
         this.auth = auth;
+        this.tls = tls;
         this.bootstrapTimeoutMs = ScfProperties.staticLong(
                 properties,
                 KEY_BOOTSTRAP_TIMEOUT_MS,
@@ -87,8 +93,7 @@ public final class GrpcProjectionSource implements ProjectionSource, AutoCloseab
     private ManagedChannel channel(UpstreamConfig.Endpoint endpoint) {
         return channels.computeIfAbsent(
                 endpoint,
-                ignored -> ManagedChannelBuilder.forAddress(endpoint.host(), endpoint.port())
-                        .usePlaintext()
+                ignored -> GrpcTlsContexts.channelForAddress(endpoint.host(), endpoint.port(), tls)
                         .maxInboundMessageSize(maxInboundMessageBytes)
                         // watch 是被动长流，注册表无变更时零流量：keepalive ping 检测半开连接
                         // （NAT 静默丢弃）。间隔不低于服务端默认 permitKeepAlive（5min），
