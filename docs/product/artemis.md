@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.35    更新时间: 2026-10-27
+版本: 1.36    更新时间: 2026-10-27
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -293,7 +293,7 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 **v0.4 phase-6（console 只读版）已交付**：
 
 - **console 页面**：management 内嵌**原生单文件**静态 SPA（`static/index.html`，零依赖零构建、无独立前端部署单元，架构 §5.3），入口 = 外部端口根路径 `http://<host>:8081/`；认证与 Admin API 同源（ADR-021 单管理员 DB 账户，Basic 挑战，eval 关闭认证时直接可达）。
-- **页面能力**：服务列表（keyword 模糊搜索 + 分页，每页 20）、服务详情（注册/有效/摘除计数 + 实例表——地址/status/weight/metadata/摘除标注与原因、`includeEjected` 切换、实例分页）；hash 路由可刷新可分享。操作面（发布/摘除操作、订阅关系视图、审计流、自我保护态展示）随 v0.5 console 管理版。
+- **页面能力**：服务列表（keyword 模糊搜索 + 分页，每页 20）、服务详情（注册/有效/摘除计数 + 实例表——地址/status/weight/metadata/摘除标注与原因、`includeEjected` 切换、实例分页）；hash 路由可刷新可分享。操作面（发布/摘除操作、订阅关系视图、审计流、自我保护态展示）已随 v0.5 phase-5 console 管理版交付（见下）。
 - **API 扩展（additive）**：`GET /admin/v1/services` 增 `keyword`（大小写不敏感 substring，命中 namespace/service 任一）/`offset`/`limit`（clamp 1..1000，缺省全量），响应增 `total`（过滤后总数）；`GET /admin/v1/services/{ns}/{svc}` 增 `offset`/`limit` 作用于实例视图（计数始终全量）——响应体 ∝ 页大小而非总量（10 万实例语义）。见 [admin-api.md](../api/admin-api.md)。
 - **工程形态**：过滤/切片/total 单测（含 5000 服务构造的分页上界）+ `ManagementConsoleIT`（同 JVM registry + management：页面可达与 401、搜索分页、实例分页端到端）；IT 基建抽取共用（`RegistryFixture` 顶层化、`ManagementHttpIT` 基类）。
 
@@ -334,10 +334,19 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **保留名 `canary` 定稿**（phase-1 留白项）：CRUD 通道 create/update 拒绝（400），canary 通道独占；每服务一组（多组灰度/复杂圈定 = route-rule 手工用法）；与服务既有手工规则叠加时多规则 AND。
 - **工程形态**：proto / discovery / 配置 / store 零变更（canary 规则即普通 ACTIVE route-rule，phase-2 流与 phase-3 Group filter 原样消费——改动全部收敛在 management 两侧块）；`routeRuleLock` 写序对齐 release（生效优先 + 记录幂等补录）；code-review 4 findings 全修（e2e 尾断言真化、文档错误映射表述修正等）；单测 5 + 管理 IT 6 + 端到端 IT 1（canary API 驱动视图切分——roadmap v0.5 验收要点「canary 流量切分」落地）。
 
+**v0.5 phase-5（console 管理版）已交付**：
+
+- **操作面（零新端点）**：console SPA 升管理版——操作全部驱动既有治理 REST API（`/admin/v1/*`，plan 预告的执行确认）：服务详情页**实例摘除/恢复**（reason 记审计）+ **canary 一键部署/结束灰度**；摘除记录页四级一套（scope/value/reason 新建 + EJECT 行恢复）；路由规则页**两段发布闭环**（新建/编辑 targets → diff 预览 → 发布 → 发布记录一键回滚 → 删除；编辑回传 `status` 保持 INACTIVE 语义——review 修复）。原产品局限 #16/#17（表直透 API、console 缺操作闭环）修复收尾（架构 §8）。
+- **订阅关系视图（调用方视角）**：management → discovery 只读组合通道（架构 §2.1 依赖 0..N 首条落地，HTTP）——`SubscriptionQueryPort`（domain，`RegistryQueryPort` 先例）+ `DiscoveryAdminClient`（RestClient，共享命名虚拟线程并行、per-source fail-open）逐源拉取 discovery `/admin/v1/subscriptions`，出口 `GET /admin/v1/subscriptions`：**逐源并列不跨源去重**（节点互为独立投影，源列即排障维度）、单源失败 error 承载不拖垮视图；配置 `artemis.management.discovery.*`（endpoints/auth/timeoutMs，静态，命名与 discovery 侧对称）。见 [admin-api.md](../api/admin-api.md) §4.13。
+- **视图面**：操作审计流（operation 过滤 + 时间倒序）、自我保护态（节点级统计卡 + 服务明细，includeNormal 切换）两页新增；SPA 保持原生单文件零构建（架构 §5.3），hash 路由七视图（服务列表/详情、摘除记录、路由规则、订阅关系、审计、保护态）。
+- **all-in-one 组合注入**：launcher 注入 `artemis.management.discovery.endpoints`（同进程 discovery HTTP 端口，0/随机不注入）——eval 单包形态订阅视图开箱可用。
+- **工程形态**：proto / discovery 产品代码零变更；code-review 8 findings 全修（高优 1：编辑表单丢 status 静默激活 INACTIVE 规则；含编码边界、all-in-one 端口守卫、executor 命名纪律）；1 单测（组合隔离/排序）+ `ManagementConsoleOpsIT` 5 用例（console 操作闭环）+ `DiscoveryConsoleSubscriptionsIT` 2 用例（三服务端到端：真实订阅可见/断流移除/坏源隔离）。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.36 | 2026-10-27 | v0.5 phase-5 交付：console 管理版（操作面零新端点 + 订阅关系组合视图 + 审计/保护态页面 + all-in-one 订阅源注入）；v0.4 phase-6 操作面状态句更新 |
 | 1.35 | 2026-10-27 | v0.5 phase-4 交付：canary 一键用法（selector + weight 派生保留名规则 + 发布 + 下发，DELETE 结束）、weight 运维语义、保留名 canary 定稿、零 proto/discovery 变更 |
 | ------ | ------ | ------ |
 | 1.34 | 2026-10-27 | v0.5 phase-3 交付：Group filter 执行语义（selector 匹配 + 权重二值承接 + 兜底）+ 规则变化视图直投 + 三出口一致 + 结构债 #9/#10 收口；phase-2 节「执行归 phase-3」状态句更新 |

@@ -6,3 +6,4 @@
 | phase-2-two-phase-release | [phase-2-two-phase-release.md](phase-2-two-phase-release.md) | [phase-2-two-phase-release-test.md](phase-2-two-phase-release-test.md) |
 | phase-3-group-routing | [phase-3-group-routing.md](phase-3-group-routing.md) | [phase-3-group-routing-test.md](phase-3-group-routing-test.md) |
 | phase-4-canary | [phase-4-canary.md](phase-4-canary.md) | [phase-4-canary-test.md](phase-4-canary-test.md) |
+| phase-5-console-management | [phase-5-console-management.md](phase-5-console-management.md) | [phase-5-console-management-test.md](phase-5-console-management-test.md) |

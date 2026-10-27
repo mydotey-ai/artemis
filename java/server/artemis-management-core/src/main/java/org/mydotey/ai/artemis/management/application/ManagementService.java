@@ -13,6 +13,7 @@ import org.mydotey.ai.artemis.management.domain.RouteRuleRelease;
 import org.mydotey.ai.artemis.management.domain.RuleStatus;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
+import org.mydotey.ai.artemis.management.domain.SubscriptionSource;
 
 /**
  * 管理面用例（ADR-016）：有效视图 = registry 事实 + management 摘除记录。
@@ -84,6 +85,10 @@ public interface ManagementService {
 
     /** 结束灰度：删除 canary 规则（无治理意图 = 全实例回归可见）；缺失幂等 no-op，发布记录保留。 */
     void deleteCanary(ServiceKey service, String operator);
+
+    /** 订阅关系组合视图（console 调用方视角，v0.5 phase-5）：discovery 多源并列 +
+     * 逐源错误隔离 + 稳定排序（源序 → id 升序）；未配置 discovery 时空列表。 */
+    List<SubscriptionSource> subscriptions();
 
     LeaseStatus leaseStatus(String namespace, String service);
 

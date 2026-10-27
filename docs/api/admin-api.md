@@ -1,6 +1,6 @@
 # management-service Admin 与状态 API
 
-版本: 1.14    更新时间: 2026-10-27
+版本: 1.15    更新时间: 2026-10-27
 
 > 本文定义 management-service 对外 HTTP API（管理面：实例管理 Admin API、账户 API 与 registry 状态排障面）。有效视图 = registry 只读事实 + management 摘除记录（ADR-016）；registry 不感知摘除。内部 gRPC 查询契约见 [registry-query-api.md](registry-query-api.md)。
 
@@ -13,8 +13,8 @@
 | 认证（内存态） | 默认开启 HTTP Basic 单账户（默认 `artemis`/`artemis`，生产必须修改）；凭证取自配置，支持运行期轮换 |
 | 认证（DB 态，v0.4） | **账户表唯一源**（ADR-021）：PBKDF2 哈希验证；DB 态首启将配置凭证一次性 seed 物化进表，此后配置凭证失效、表非空永不覆盖 |
 | 关闭认证 | `artemis.management.auth.enabled=false`（仅 eval） |
-| console（v0.4） | 外部端口根路径 `/`——内嵌静态 SPA（只读版：服务列表/搜索/分页 + 实例视图），与 Admin API 同一认证；写操作面随 v0.5 管理版 |
-| 上游 | registry 只读查询 gRPC（registry 内部 peer 端口；端点**无默认值**，未配置时调用返回 REGISTRY_UNAVAILABLE；内部认证默认关闭，配置了 username 才附加 Basic 认证） |
+| console（v0.4 只读 → v0.5 管理版） | 外部端口根路径 `/`——内嵌静态 SPA（管理版：服务列表/详情 + 摘除/恢复操作、路由规则与两段发布、订阅关系视图、操作审计流、自我保护态展示），与 Admin API 同一认证 |
+| 上游 | registry 只读查询 gRPC（registry 内部 peer 端口；端点**无默认值**，未配置时调用返回 REGISTRY_UNAVAILABLE；内部认证默认关闭，配置了 username 才附加 Basic 认证）；discovery 只读订阅关系查询 HTTP（0..N，见 §4.13） |
 | 账户后端不可用 | 认证裁决 fail-closed：401 拒绝（账户 API 503，见 §7 错误语义） |
 
 配置项（SCF，静态）：
@@ -26,6 +26,9 @@
 | `artemis.management.registry.endpoint` | （无默认值） | registry 内部端口 `host:port`；未配置时 management 正常启动，查询返回 REGISTRY_UNAVAILABLE |
 | `artemis.management.registry.username` / `password` | 空 / 空 | 调用 registry 内部端口的凭证（**动态**，可运行期轮换）；username 非空才发送 Basic 认证 |
 | `artemis.management.registry.timeoutMs` | `3000` | 单次查询 deadline（1..60000，**动态**，每次调用现取） |
+| `artemis.management.discovery.endpoints` | 空 | 逗号分隔 `host:port`（discovery 外部 HTTP 端口，0..N）——订阅关系视图（§4.13）数据源；空 = 无订阅数据（视图自解释），不报错（**静态**） |
+| `artemis.management.discovery.auth.username` / `password` | 空 / 空 | 调用 discovery `/admin/*` 的 Basic 凭证（discovery 认证启用时配置；username 非空才发送，**静态**） |
+| `artemis.management.discovery.timeoutMs` | `3000` | 单源请求超时（**静态**，启动后不变） |
 
 > SCF 将空白字符串视为「未设置」并回落默认值。registry 内部认证启用（`artemis.registry.internal.auth.enabled=true`）时，须同时配置 management 侧 `artemis.management.registry.username/password` 为内部账户。
 
@@ -265,6 +268,38 @@ canary = route-rule + release 的预置派生（架构 §5.2「由 management �
 - 回滚到上一权重：复用 `POST /admin/v1/route-rules/{ns}/{svc}/canary/rollback`（§4.11）；查询 / 历史 / 预览同理经既有 route-rule API。
 - 审计：`DEPLOY_CANARY` / `DELETE_CANARY` 摘要行（target = `route-rule:{ns}/{svc}/canary`，detail 含 selector 摘要与 weight、releaseId）。
 
+### 4.13 订阅关系查询 `GET /admin/v1/subscriptions`（v0.5 phase-5）
+
+console 订阅关系视图（调用方视角）数据源：management 拉取所配 discovery 节点（`artemis.management.discovery.endpoints`，0..N）的活跃订阅快照（[discovery 发现管理 API](discovery-admin-api.md) §3），组合输出：
+
+```json
+{
+  "sources": [
+    {
+      "endpoint": "127.0.0.1:8090",
+      "error": null,
+      "subscriptions": [
+        {
+          "id": 7,
+          "subscriber": "/127.0.0.1:54321",
+          "establishedAt": "2026-10-27T10:00:00Z",
+          "services": [{"namespace": "default", "service": "order-service"}],
+          "labels": {"group": "a"},
+          "clusters": ["cluster-a"]
+        }
+      ]
+    }
+  ]
+}
+```
+
+- **逐源并列、不跨源合并去重**：discovery 节点互为独立投影副本（架构 §2.1），同一调用方可对多节点各持一条流，去重无事实依据；`endpoint` 列即排障维度。
+- **单源失败不拖垮视图**（per-source fail-open）：某源不可达/超时/认证失败时该源 `error` 置可读信息、`subscriptions` 为空数组，其余源照常返回，整体仍 200——只读排障面语义（与 discovery `/admin/v1` 免 readiness 门控哲学一致）。
+- 订阅条目字段与 discovery 侧输出同构（`subscriber` 为 gRPC 流远端地址——传输层调用方标识，账户体系升级后置，见 discovery-admin-api §3）；`services`/`clusters` 空数组 = 全部语义同 discovery 选择器。
+- 排序稳定：源按配置序、订阅按 `id` 升序。
+- 未配置 endpoints 时返回 `{"sources": []}`（不报错）。
+- 该端点为只读查询，无审计。
+
 ## 5. 账户 API（v0.4，ADR-021）
 
 单管理员账户管理。仅 DB 态支持——内存态凭证事实源是配置（改配置即改密，动态生效），端点返回 409。
@@ -442,6 +477,7 @@ management 启动不依赖 registry 可用；registry 故障时管理面仍可�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.15 | 2026-10-27 | v0.5 phase-5：新增 §4.13 订阅关系查询（discovery 多源组合 + per-source fail-open）；§1 console 行升管理版、上游补 discovery 只读通道；配置表补 `artemis.management.discovery.*` 三键 |
 | 1.14 | 2026-10-27 | v0.5 phase-4：新增 §4.12 canary 一键部署/结束两端点（派生语义、weight 视图、保留名、rollback 复用）；§4.11 尾注与 §8 边界更新（phase-3 执行已交付、phase-4 canary 已交付，下一边界 phase-5 console） |
 | ------ | ------ | ------ |
 | 1.13 | 2026-10-26 | v0.5 phase-2：§4.10 请求体删 weight（编辑通道收紧，等值重复 400）；新增 §4.11 两段式发布四端点（release/rollback/diff/releases）；§6.5 补 routeRules 水位节；错误表补 `ROUTE_RULE_RELEASE_NOT_FOUND`；§8 边界更新 |

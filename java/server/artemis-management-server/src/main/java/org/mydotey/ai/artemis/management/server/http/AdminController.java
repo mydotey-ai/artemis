@@ -25,6 +25,7 @@ import org.mydotey.ai.artemis.management.domain.RouteRuleRelease;
 import org.mydotey.ai.artemis.management.domain.RouteRuleStatus;
 import org.mydotey.ai.artemis.management.domain.RouteRuleTarget;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
+import org.mydotey.ai.artemis.management.domain.SubscriptionSource;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -126,6 +127,16 @@ public final class AdminController {
         return new ListEjectionsResponse(managementService.listEjections(
                 activeOnly, scope == null || scope.isBlank() ? null : parseScope(scope), bounded));
     }
+
+    // ---- 订阅关系（v0.5 phase-5，console 调用方视角组合视图）----
+
+    /** discovery 多源并列（不跨源合并去重，源列即排障维度）；单源失败以 error 承载（§4.13）。 */
+    @GetMapping("/subscriptions")
+    public SubscriptionsResponse subscriptions() {
+        return new SubscriptionsResponse(managementService.subscriptions());
+    }
+
+    public record SubscriptionsResponse(List<SubscriptionSource> sources) {}
 
     // ---- 审计 ----
 

@@ -1,6 +1,6 @@
 # all-in-one 单进程部署
 
-版本: 2.0    更新时间: 2026-10-26
+版本: 2.1    更新时间: 2026-10-27
 
 registry + management + discovery 的单进程完整组合形态（v0.3 phase-9 双服务、v0.4 phase-7 扩三服务）：同一 JVM 起三个独立 Spring 上下文，各自端口、彼此走标准网络协议（ADR-001：不做进程内直连优化）。面向单机/评估/开发场景「单包起」，治理链（规则流 + 逻辑实例流 + 事实查询）在组合内默认闭合；生产集群部署仍用各单服务包。
 
@@ -50,7 +50,7 @@ source 优先级（同服务端纪律，无 Spring 层）：**系统属性 > 环
 
 ## 语义与限制
 
-- **治理链默认接通且固定同进程**（launcher 命令行注入，优先级最高）：discovery 固定订阅同进程 management（规则流 + 逻辑实例流，`artemis.discovery.management.endpoints` 不可经工作目录覆盖）、management 固定查询同进程 registry 内部端口（`artemis.management.registry.endpoint` 同理）。想要无 management 的组合或外置治理面：用各单服务包自行部署（v0.3 的双服务 all-in-one jar 已被三服务完整形态取代，不再单独交付）。
+- **治理链默认接通且固定同进程**（launcher 命令行注入，优先级最高）：discovery 固定订阅同进程 management（规则流 + 逻辑实例流，`artemis.discovery.management.endpoints` 不可经工作目录覆盖）、management 固定查询同进程 registry 内部端口（`artemis.management.registry.endpoint` 同理）、management 订阅关系视图数据源固定同进程 discovery 外部 HTTP 端口（`artemis.management.discovery.endpoints`，v0.5 phase-5；discovery HTTP 端口为 0/随机时不注入——仅测试场景）。想要无 management 的组合或外置治理面：用各单服务包自行部署（v0.3 的双服务 all-in-one jar 已被三服务完整形态取代，不再单独交付）。
 - 上游集群**固定**为同进程 registry；**多集群 union 聚合不在 all-in-one 形态提供**——多集群仍由独立 discovery 部署承载（phase-5 已交付）。
 - 节点目录默认指向本 discovery 外部端口（`127.0.0.1:<discoveryGrpcPort>`）：仅宿主未配置 `artemis.discovery.nodes` 时注入，显式配置（系统属性/环境变量/工作目录文件）优先。
 - 启动时序 registry → management → discovery（依赖反序）：registry 空表即 ready → management 起（事实查询上游就位）→ discovery 起（上游与规则流端点确定，治理链零等待闭合）。任一后续上下文启动失败按启动反序回滚，不留半启进程。关闭序 discovery → management → registry（SIGTERM 单个 JVM hook，幂等）。
@@ -62,5 +62,6 @@ source 优先级（同服务端纪律，无 Spring 层）：**系统属性 > 环
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 2.1 | 2026-10-27 | v0.5 phase-5：治理链注入键补 management → discovery 订阅关系源（同进程 discovery 外部 HTTP 端口；0/随机端口不注入） |
 | 2.0 | 2026-10-26 | v0.4 phase-7：扩三服务完整形态（+management 上下文、组合键 +3、治理链默认闭合、DB 双轨、凭证与限制更新） |
 | 1.0 | 2026-10-24 | v0.3 phase-9 初版：入口、端口表、`artemis.dist.*` 组合配置键、语义与限制 |

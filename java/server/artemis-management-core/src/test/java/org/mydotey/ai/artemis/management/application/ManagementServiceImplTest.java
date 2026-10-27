@@ -37,6 +37,9 @@ import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
 import org.mydotey.ai.artemis.management.domain.ServiceProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceSummary;
+import org.mydotey.ai.artemis.management.domain.Subscription;
+import org.mydotey.ai.artemis.management.domain.SubscriptionQueryPort;
+import org.mydotey.ai.artemis.management.domain.SubscriptionSource;
 import org.mydotey.ai.artemis.management.infrastructure.EjectionRuleDispatcher;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryAuditLogStore;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryEjectionStore;
@@ -53,6 +56,7 @@ class ManagementServiceImplTest {
     private static final String OPERATOR = "admin";
 
     private final FakeRegistry registry = new FakeRegistry();
+    private final FakeSubscriptionPort subscriptionQueries = new FakeSubscriptionPort();
     private final InMemoryEjectionStore ejections = new InMemoryEjectionStore();
     private final InMemoryAuditLogStore auditLogs = new InMemoryAuditLogStore();
     private final EjectionRuleDispatcher dispatcher = new EjectionRuleDispatcher(ejections);
@@ -66,6 +70,7 @@ class ManagementServiceImplTest {
     private final SettableClock clock = new SettableClock();
     private final ManagementServiceImpl service = new ManagementServiceImpl(
             registry,
+            subscriptionQueries,
             ejections,
             auditLogs,
             dispatcher,
@@ -79,6 +84,36 @@ class ManagementServiceImplTest {
             clock);
 
     // ---- 视图组合 ----
+
+    @Test
+    void should_isolate_failing_source_and_keep_stable_order_when_subscriptions_queried() {
+        subscriptionQueries.sources = List.of(
+                new SubscriptionSource("127.0.0.1:1", "connection refused", List.of()),
+                new SubscriptionSource(
+                        "127.0.0.1:8090",
+                        null,
+                        List.of(subscription(2, "/10.0.0.1:2"), subscription(1, "/10.0.0.1:1"))));
+
+        List<SubscriptionSource> sources = service.subscriptions();
+
+        assertThat(sources).hasSize(2);
+        assertThat(sources.get(0).endpoint()).isEqualTo("127.0.0.1:1");
+        assertThat(sources.get(0).error()).isEqualTo("connection refused"); // 坏源隔离：error 承载
+        assertThat(sources.get(0).subscriptions()).isEmpty();
+        assertThat(sources.get(1).error()).isNull();
+        assertThat(sources.get(1).subscriptions())
+                .extracting(Subscription::id)
+                .containsExactly(1L, 2L); // 不依赖远端排序纪律，出口按 id 稳定
+    }
+
+    @Test
+    void should_return_empty_sources_when_no_discovery_configured() {
+        assertThat(service.subscriptions()).isEmpty();
+    }
+
+    private static Subscription subscription(long id, String subscriber) {
+        return new Subscription(id, subscriber, NOW, List.of(SERVICE), Map.of("group", "a"), List.of("cluster-a"));
+    }
 
     @Test
     void should_filter_ejected_instances_when_get_service() {
@@ -440,6 +475,7 @@ class ManagementServiceImplTest {
         };
         ManagementServiceImpl serviceWithFailingAudit = new ManagementServiceImpl(
                 registry,
+                subscriptionQueries,
                 ejections,
                 failing,
                 dispatcher,
@@ -1159,6 +1195,17 @@ class ManagementServiceImplTest {
                 null,
                 null,
                 null);
+    }
+
+    /** 订阅查询端口 fake（phase-5）：可变 sources，模拟 discovery 多源含坏源。 */
+    private static final class FakeSubscriptionPort implements SubscriptionQueryPort {
+
+        private List<SubscriptionSource> sources = List.of();
+
+        @Override
+        public List<SubscriptionSource> subscriptions() {
+            return sources;
+        }
     }
 
     private static final class FakeRegistry implements RegistryQueryPort {

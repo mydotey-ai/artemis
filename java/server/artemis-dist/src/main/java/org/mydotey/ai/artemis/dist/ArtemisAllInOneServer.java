@@ -137,7 +137,7 @@ public final class ArtemisAllInOneServer {
     }
 
     private static List<String> managementArgs(AllInOneOptions options, int peerPort) {
-        return List.of(
+        List<String> args = new ArrayList<>(List.of(
                 "--spring.config.name=artemis-all-in-one-management",
                 // gRPC 监听双键：spring.grpc.server.port 是实际监听位，artemis.management.grpc.port 是
                 // 条件装配开关（单服务默认 -1 不监听；all-in-one 治理链闭环前提 = 必监听）
@@ -146,7 +146,13 @@ public final class ArtemisAllInOneServer {
                 "--server.port=" + options.getManagementHttpPort(),
                 "--management.server.port=" + options.getManagementManagementPort(),
                 // 事实查询上游固定同进程 registry 内部端口（RegistryQueryService 驻留端口，loopback）
-                "--artemis.management.registry.endpoint=127.0.0.1:" + peerPort);
+                "--artemis.management.registry.endpoint=127.0.0.1:" + peerPort));
+        // 订阅关系视图数据源（phase-5）：固定同进程 discovery 外部 HTTP 端口（loopback）；
+        // 0（随机，测试用）时无法自引用，跳过注入（同下方 discovery.nodes 先例）
+        if (options.getDiscoveryHttpPort() > 0) {
+            args.add("--artemis.management.discovery.endpoints=127.0.0.1:" + options.getDiscoveryHttpPort());
+        }
+        return args;
     }
 
     private static List<String> discoveryArgs(AllInOneOptions options, int peerPort, int managementGrpcPort) {

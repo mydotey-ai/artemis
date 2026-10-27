@@ -45,6 +45,9 @@ import org.mydotey.ai.artemis.management.domain.RuleStatus;
 import org.mydotey.ai.artemis.management.domain.SelfProtectionStatus;
 import org.mydotey.ai.artemis.management.domain.ServiceKey;
 import org.mydotey.ai.artemis.management.domain.ServiceSummary;
+import org.mydotey.ai.artemis.management.domain.Subscription;
+import org.mydotey.ai.artemis.management.domain.SubscriptionQueryPort;
+import org.mydotey.ai.artemis.management.domain.SubscriptionSource;
 
 /**
  * 有效视图组合：查询 registry 事实，叠加摘除记录（四级级联判定）；
@@ -77,6 +80,7 @@ public final class ManagementServiceImpl implements ManagementService {
             Comparator.comparing(RouteRule::service, SERVICE_ORDER).thenComparing(RouteRule::name);
 
     private final RegistryQueryPort registry;
+    private final SubscriptionQueryPort subscriptionQueries;
     private final EjectionStore ejections;
     private final AuditLogStore auditLogs;
     private final EjectionRulePublisher publisher;
@@ -91,6 +95,7 @@ public final class ManagementServiceImpl implements ManagementService {
 
     public ManagementServiceImpl(
             RegistryQueryPort registry,
+            SubscriptionQueryPort subscriptionQueries,
             EjectionStore ejections,
             AuditLogStore auditLogs,
             EjectionRulePublisher publisher,
@@ -103,6 +108,7 @@ public final class ManagementServiceImpl implements ManagementService {
             RuleAckRegistry routeRuleAcks,
             Clock clock) {
         this.registry = registry;
+        this.subscriptionQueries = subscriptionQueries;
         this.ejections = ejections;
         this.auditLogs = auditLogs;
         this.publisher = publisher;
@@ -578,6 +584,19 @@ public final class ManagementServiceImpl implements ManagementService {
                 .map(target -> Integer.toString(target.weight()))
                 .collect(Collectors.joining(","));
         return "targets=" + rule.targets().size() + " weights=[" + weights + "]";
+    }
+
+    @Override
+    public List<SubscriptionSource> subscriptions() {
+        return subscriptionQueries.subscriptions().stream()
+                .map(source -> new SubscriptionSource(
+                        source.endpoint(),
+                        source.error(),
+                        // 不依赖 discovery 侧排序纪律，组合出口显式稳定（源序 → id 升序）
+                        source.subscriptions().stream()
+                                .sorted(Comparator.comparingLong(Subscription::id))
+                                .toList()))
+                .toList();
     }
 
     @Override

@@ -5,17 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Artemis Console</title>
 <style>
-  :root { --line: #d9dee5; --muted: #6b7280; --accent: #2563eb; }
+  :root { --line: #d9dee5; --muted: #6b7280; --accent: #2563eb; --danger: #b91c1c; --ok: #15803d; }
   * { box-sizing: border-box; }
   body { margin: 0; font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif; color: #1f2937; background: #f7f8fa; }
-  header { display: flex; align-items: baseline; gap: 12px; padding: 14px 24px; background: #fff; border-bottom: 1px solid var(--line); }
+  header { display: flex; align-items: baseline; gap: 16px; padding: 14px 24px; background: #fff; border-bottom: 1px solid var(--line); }
   header h1 { font-size: 17px; margin: 0; }
   header .sub { color: var(--muted); font-size: 12px; }
-  main { max-width: 1080px; margin: 0 auto; padding: 20px 24px 48px; }
+  nav { display: flex; gap: 2px; margin-left: 24px; align-self: center; }
+  nav a { padding: 6px 12px; border-radius: 4px; color: #374151; }
+  nav a.active { background: #e8effc; color: var(--accent); font-weight: 600; }
+  main { max-width: 1180px; margin: 0 auto; padding: 20px 24px 48px; }
   .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
-  .toolbar input[type="search"] { width: 260px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 4px; }
+  input[type="text"], input[type="search"], input[type="number"], select {
+    padding: 6px 10px; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
   button { padding: 6px 12px; border: 1px solid var(--line); border-radius: 4px; background: #fff; cursor: pointer; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--danger); border-color: #f3c1c1; }
   button:disabled { opacity: .45; cursor: default; }
   table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid var(--line); border-radius: 4px; }
   th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -23,22 +28,48 @@
   tr:last-child td { border-bottom: none; }
   td.num { font-variant-numeric: tabular-nums; }
   .tag { display: inline-block; padding: 0 6px; border-radius: 3px; font-size: 12px; }
-  .tag.up { background: #e7f6ec; color: #15803d; }
-  .tag.down, .tag.ejected { background: #fdecec; color: #b91c1c; }
+  .tag.up { background: #e7f6ec; color: var(--ok); }
+  .tag.down, .tag.ejected { background: #fdecec; color: var(--danger); }
+  .tag.protecting { background: #fff4e0; color: #b45309; }
+  .tag.normal { background: #eef1f5; color: var(--muted); }
   .meta { color: var(--muted); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .counts { display: flex; gap: 24px; margin-bottom: 12px; color: var(--muted); }
   .counts b { color: #1f2937; font-size: 16px; }
+  .cards { display: flex; gap: 16px; margin-bottom: 12px; flex-wrap: wrap; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 10px 16px; min-width: 160px; }
+  .card .label { color: var(--muted); font-size: 12px; }
+  .card .value { font-size: 20px; font-variant-numeric: tabular-nums; }
   .pager { display: flex; gap: 8px; align-items: center; margin-top: 12px; color: var(--muted); }
-  .error { padding: 12px; background: #fdecec; color: #b91c1c; border-radius: 4px; }
+  .error { padding: 12px; background: #fdecec; color: var(--danger); border-radius: 4px; margin-bottom: 12px; }
+  .notice { padding: 12px; background: #eef6ff; color: #1d4ed8; border-radius: 4px; margin-bottom: 12px; }
+  .empty { padding: 12px; color: var(--muted); background: #fff; border: 1px dashed var(--line); border-radius: 4px; }
   a { color: var(--accent); text-decoration: none; }
+  a.action { cursor: pointer; margin-right: 10px; }
+  a.action.danger { color: var(--danger); }
   .crumb { margin-bottom: 8px; color: var(--muted); }
   label.switch { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+  fieldset { border: 1px solid var(--line); border-radius: 4px; background: #fff; margin: 0 0 16px; padding: 12px 16px; }
+  legend { padding: 0 6px; color: var(--muted); font-size: 13px; }
+  fieldset .row { display: flex; gap: 8px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
+  fieldset .row label { min-width: 96px; color: var(--muted); }
+  .targets .trow { display: flex; gap: 8px; margin: 4px 0; align-items: center; }
+  .targets .trow input { flex: 1; }
+  section.expand { background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 12px 16px; margin: 8px 0; }
+  h3.view { margin: 4px 0 12px; font-size: 15px; }
 </style>
 </head>
 <body>
 <header>
   <h1>Artemis Console</h1>
-  <span class="sub">management 只读视图（v0.4；操作面随 v0.5 管理版交付）</span>
+  <nav id="nav">
+    <a href="#/?offset=0" data-view="list">服务</a>
+    <a href="#/ejections" data-view="ejections">摘除记录</a>
+    <a href="#/rules" data-view="rules">路由规则</a>
+    <a href="#/subscriptions" data-view="subscriptions">订阅关系</a>
+    <a href="#/audit" data-view="audit">审计</a>
+    <a href="#/protection" data-view="protection">保护态</a>
+  </nav>
+  <span class="sub">management 管理版（v0.5）</span>
 </header>
 <main id="app"><div class="error">加载中…</div></main>
 <script>
@@ -55,11 +86,51 @@ function api(path) {
   });
 }
 
+function apiSend(method, path, body) {
+  return fetch(path, {
+    method,
+    headers: {'Accept': 'application/json', 'Content-Type': 'application/json'},
+    body: body == null ? undefined : JSON.stringify(body)
+  }).then(async r => {
+    if (!r.ok) {
+      let detail = '';
+      try { detail = (await r.json()).message || ''; } catch (ignored) {}
+      throw new Error('HTTP ' + r.status + (detail ? '：' + detail : ''));
+    }
+    return r.status === 204 ? null : r.json();
+  });
+}
+
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 }
 
-// hash 路由：#/（列表，?keyword=&offset=）、#/s/{namespace}/{service}（详情，?includeEjected=&offset=）
+function escAttr(value) { return esc(value); }
+
+function fmt(value) {
+  if (value == null) return '—';
+  return typeof value === 'object' ? esc(JSON.stringify(value)) : esc(value);
+}
+
+function selectorText(selector) {
+  if (!selector || Object.keys(selector).length === 0) return '（兜底目标）';
+  return Object.entries(selector).map(([k, v]) => k + '=' + v).join(', ');
+}
+
+// selector 输入解析："k=v, k2=v2" → map；空 = {}；非法段抛错
+function parseSelector(text) {
+  const map = {};
+  for (const part of String(text || '').split(',')) {
+    const entry = part.trim();
+    if (!entry) continue;
+    const eq = entry.indexOf('=');
+    if (eq <= 0 || eq >= entry.length - 1) throw new Error('selector 格式非法：' + entry + '（应为 k=v 逗号分隔）');
+    map[entry.slice(0, eq).trim()] = entry.slice(eq + 1).trim();
+  }
+  return map;
+}
+
+// hash 路由：#/、#/s/{ns}/{svc}、#/ejections、#/rules[?edit=ns/svc/name]、#/subscriptions、#/audit、#/protection
 function route() {
   const hash = location.hash.replace(/^#/, '') || '/';
   const [path, query] = hash.split('?');
@@ -72,6 +143,11 @@ function route() {
       return {view: 'detail', namespace: decodeURIComponent(rest.slice(0, sep)), service: decodeURIComponent(rest.slice(sep + 1)), params};
     }
   }
+  if (path === '/ejections') return {view: 'ejections', params};
+  if (path === '/rules') return {view: 'rules', params};
+  if (path === '/subscriptions') return {view: 'subscriptions', params};
+  if (path === '/audit') return {view: 'audit', params};
+  if (path === '/protection') return {view: 'protection', params};
   return {view: 'list', params};
 }
 
@@ -79,17 +155,27 @@ function nav(hash) { location.hash = hash; }
 
 window.addEventListener('hashchange', render);
 
+function showError(e) {
+  app.innerHTML = '<div class="error">' + esc(e.message) + '</div><button onclick="location.reload()">重试</button>';
+}
+
 async function render() {
   try {
     const r = route();
+    document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('active', a.dataset.view === r.view));
     if (r.view === 'detail') await renderDetail(r.namespace, r.service, r.params);
+    else if (r.view === 'ejections') await renderEjections(r.params);
+    else if (r.view === 'rules') await renderRules(r.params);
+    else if (r.view === 'subscriptions') await renderSubscriptions();
+    else if (r.view === 'audit') await renderAudit(r.params);
+    else if (r.view === 'protection') await renderProtection(r.params);
     else await renderList(r.params);
   } catch (e) {
-    app.innerHTML = '<div class="error">' + esc(e.message) + '</div>';
+    showError(e);
   }
 }
 
-// ---- 列表视图：搜索 + 分页 ----
+// ---- 服务列表视图：搜索 + 分页 ----
 
 async function renderList(params) {
   const keyword = params.get('keyword') || '';
@@ -105,7 +191,7 @@ async function renderList(params) {
     '<td>' + esc(s.key.service) + '</td>' +
     '<td class="num">' + s.instanceCount + '</td>' +
     '<td class="num">' + (s.ejectedCount > 0 ? '<span class="tag ejected">' + s.ejectedCount + '</span>' : '0') + '</td>' +
-    '<td><a href="#/s/' + encodeURIComponent(s.key.namespace) + '/' + encodeURIComponent(s.key.service) + '">详情</a></td></tr>'
+    '<td><a href="#/s/' + encodeURIComponent(s.key.namespace) + '/' + encodeURIComponent(s.key.service) + '">详情 / 操作</a></td></tr>'
   ).join('');
 
   app.innerHTML =
@@ -115,7 +201,7 @@ async function renderList(params) {
       (keyword ? '<button type="button" id="clear">清除</button>' : '') + '</form>' +
     '</div>' +
     (rows ? '<table><thead><tr><th>namespace</th><th>service</th><th>实例数</th><th>摘除数</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
-          : '<div class="error">无匹配服务</div>') +
+          : '<div class="empty">无匹配服务</div>') +
     '<div class="pager">' +
       '<button id="prev"' + (offset <= 0 ? ' disabled' : '') + '>&#8592; 上一页</button>' +
       '<span>第 ' + current + ' / ' + totalPages + ' 页，共 ' + page.total + ' 个服务</span>' +
@@ -140,7 +226,7 @@ function bindPager(offset, total, urlOf) {
   if (next && offset + PAGE_SIZE < total) next.addEventListener('click', () => nav(urlOf(offset + PAGE_SIZE)));
 }
 
-// ---- 详情视图：实例表 + 摘除标注 ----
+// ---- 服务详情视图：实例表 + 摘除/恢复 + canary ----
 
 async function renderDetail(namespace, service, params) {
   const includeEjected = params.get('includeEjected') === 'true';
@@ -148,17 +234,35 @@ async function renderDetail(namespace, service, params) {
   const query = new URLSearchParams({includeEjected, offset, limit: PAGE_SIZE});
   const detail = await api('/admin/v1/services/' + encodeURIComponent(namespace) + '/' + encodeURIComponent(service) + '?' + query);
   const visibleTotal = includeEjected ? detail.instanceCount : detail.effectiveInstanceCount;
+  const ruleBase = '/admin/v1/route-rules/' + encodeURIComponent(namespace) + '/' + encodeURIComponent(service);
+  const canary = await api(ruleBase + '/canary').catch(() => null);
 
   const rows = detail.instances.map(i => {
     const meta = JSON.stringify(i.metadata || {});
-    const ejection = i.ejected ? '<span class="tag ejected" title="' + esc(i.reason || '') + ' | ' + esc(i.ejectedAt || '') + '">已摘除</span>' : '—';
+    const ejection = i.ejected
+      ? '<span class="tag ejected" title="' + esc(i.reason || '') + ' | ' + esc(i.ejectedAt || '') + '">已摘除</span>' +
+        '<button class="recover" data-id="' + escAttr(i.instanceId) + '" style="margin-left:8px">恢复</button>'
+      : '<button class="eject" data-id="' + escAttr(i.instanceId) + '">摘除</button>';
     return '<tr><td>' + esc(i.instanceId) + '</td>' +
       '<td>' + esc(i.host) + ':' + i.port + '</td>' +
       '<td><span class="tag ' + String(i.status).toLowerCase() + '">' + esc(i.status) + '</span></td>' +
       '<td class="num">' + i.weight + '</td>' +
-      '<td class="meta" title="' + esc(meta) + '">' + esc(meta) + '</td>' +
+      '<td><div class="meta" title="' + esc(meta) + '">' + esc(meta) + '</div></td>' +
       '<td>' + ejection + '</td></tr>';
   }).join('');
+
+  const canaryBlock =
+    '<fieldset><legend>canary 一键灰度（预置派生：selector 圈金丝雀实例 + weight 承接权重）</legend>' +
+    '<div class="row"><label>金丝雀 selector</label><input type="text" id="canarySelector" placeholder="version=canary" value="' +
+      esc(canary ? selectorText(canary.targets.filter(t => Object.keys(t.selector).length > 0)[0]?.selector) : '') + '"></div>' +
+    '<div class="row"><label>weight（0–10000）</label><input type="number" id="canaryWeight" min="0" max="10000" value="' +
+      (canary ? (canary.targets.filter(t => Object.keys(t.selector).length > 0)[0]?.weight ?? 1000) : 1000) + '">' +
+      '<span class="meta">0 = 金丝雀摘出；10000 = 稳定组摘出（全量切流）</span></div>' +
+    '<div class="row"><label></label><button class="primary" id="canaryDeploy">' + (canary ? '重新部署' : '部署') + '</button>' +
+      (canary ? '<button class="danger" id="canaryFinish">结束灰度（删规则）</button>' : '') + '</div>' +
+    (canary ? '<div class="row"><label>当前状态</label><span class="meta">已部署：' + esc(selectorText(canary.targets[0].selector)) +
+      ' weight=' + canary.targets[0].weight + '（查询 / 发布记录 / 回滚经路由规则页）</span></div>' : '') +
+    '</fieldset>';
 
   const urlOf = o => '#/s/' + encodeURIComponent(namespace) + '/' + encodeURIComponent(service) +
     '?includeEjected=' + includeEjected + '&offset=' + o;
@@ -172,18 +276,392 @@ async function renderDetail(namespace, service, params) {
     '</div>' +
     '<div class="toolbar">' +
       '<label class="switch"><input type="checkbox" id="showEjected"' + (includeEjected ? ' checked' : '') + '> 显示已摘除实例</label>' +
+      '<input type="text" id="reason" placeholder="摘除原因（记入审计）" style="width:240px">' +
     '</div>' +
-    (rows ? '<table><thead><tr><th>instanceId</th><th>地址</th><th>状态</th><th>weight</th><th>metadata</th><th>摘除</th></tr></thead><tbody>' + rows + '</tbody></table>'
-          : '<div class="error">无可见实例</div>') +
+    (rows ? '<table><thead><tr><th>instanceId</th><th>地址</th><th>状态</th><th>weight</th><th>metadata</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table>'
+          : '<div class="empty">无可见实例</div>') +
     '<div class="pager">' +
       '<button id="prev"' + (offset <= 0 ? ' disabled' : '') + '>&#8592; 上一页</button>' +
       '<span>第 ' + (Math.floor(offset / PAGE_SIZE) + 1) + ' / ' + Math.max(Math.ceil(visibleTotal / PAGE_SIZE), 1) + ' 页</span>' +
       '<button id="next"' + (offset + PAGE_SIZE >= visibleTotal ? ' disabled' : '') + '>下一页 &#8594;</button>' +
-    '</div>';
+    '</div>' +
+    canaryBlock;
 
+  const ejectPath = '/admin/v1/ejections';
+  const base = {scope: 'INSTANCE', namespace, service};
+  const reasonInput = document.getElementById('reason');
+  document.querySelectorAll('button.eject').forEach(b => b.addEventListener('click', async () => {
+    try {
+      await apiSend('POST', ejectPath, {...base, instanceId: b.dataset.id, reason: reasonInput.value.trim() || null});
+      render();
+    } catch (e) { alert(e.message); }
+  }));
+  document.querySelectorAll('button.recover').forEach(b => b.addEventListener('click', async () => {
+    try {
+      await apiSend('POST', ejectPath + '/recover', {...base, instanceId: b.dataset.id});
+      render();
+    } catch (e) { alert(e.message); }
+  }));
   document.getElementById('showEjected').addEventListener('change', e =>
     nav('#/s/' + encodeURIComponent(namespace) + '/' + encodeURIComponent(service) + '?includeEjected=' + e.target.checked + '&offset=0'));
   bindPager(offset, visibleTotal, urlOf);
+
+  const canaryPath = '/admin/v1/canary/' + encodeURIComponent(namespace) + '/' + encodeURIComponent(service);
+  const canaryDeploy = document.getElementById('canaryDeploy');
+  if (canaryDeploy) canaryDeploy.addEventListener('click', async () => {
+    try {
+      await apiSend('POST', canaryPath, {selector: parseSelector(document.getElementById('canarySelector').value),
+        weight: parseInt(document.getElementById('canaryWeight').value, 10)});
+      render();
+    } catch (e) { alert(e.message); }
+  });
+  const canaryFinish = document.getElementById('canaryFinish');
+  if (canaryFinish) canaryFinish.addEventListener('click', async () => {
+    try {
+      await apiSend('DELETE', canaryPath);
+      render();
+    } catch (e) { alert(e.message); }
+  });
+}
+
+// ---- 摘除记录视图：四级摘除 + 恢复 ----
+
+async function renderEjections(params) {
+  const activeOnly = params.get('activeOnly') !== 'false';
+  const page = await api('/admin/v1/ejections?activeOnly=' + activeOnly + '&limit=200');
+  const rows = (page.records || []).map(record => {
+    const target = record.scope === 'INSTANCE'
+      ? record.namespace + '/' + record.service + '/' + record.instanceId
+      : record.scope.toLowerCase() + ' = ' + record.value;
+    // 恢复按钮挂 EJECT 行（API 幂等：已对消目标 recover = no-op 204，服务端语义安全）
+    return '<tr><td>' + esc(record.action) + '</td><td>' + esc(record.scope) + '</td><td>' + esc(target) + '</td>' +
+      '<td><div class="meta" title="' + esc(record.reason || '') + '">' + esc(record.reason || '') + '</div></td>' +
+      '<td>' + esc(record.operator) + '</td><td>' + esc(record.timestamp) + '</td>' +
+      '<td>' + (record.action === 'EJECT'
+        ? '<button class="recover" data-scope="' + escAttr(record.scope) + '" data-ns="' + escAttr(record.namespace) +
+          '" data-svc="' + escAttr(record.service) + '" data-id="' + escAttr(record.instanceId) +
+          '" data-val="' + escAttr(record.value) + '">恢复</button>'
+        : '—') + '</td></tr>';
+  }).join('');
+
+  app.innerHTML =
+    '<h3 class="view">摘除记录（操作记录即状态：恢复 = 反向记录对消）</h3>' +
+    '<fieldset><legend>新建摘除（四级一套）</legend>' +
+      '<div class="row"><label>scope</label><select id="ejectScope">' +
+        '<option value="INSTANCE">INSTANCE（实例级）</option><option value="SERVER">SERVER（metadata server）</option>' +
+        '<option value="ZONE">ZONE（metadata zone）</option><option value="GROUP">GROUP（metadata group）</option></select>' +
+      '</div>' +
+      '<div class="row"><label>实例定位</label><input type="text" id="ejectNs" placeholder="namespace（INSTANCE 级）">' +
+        '<input type="text" id="ejectSvc" placeholder="service（INSTANCE 级）"><input type="text" id="ejectId" placeholder="instanceId（INSTANCE 级）"></div>' +
+      '<div class="row"><label>selector 值</label><input type="text" id="ejectValue" placeholder="value（SERVER/ZONE/GROUP 级）"></div>' +
+      '<div class="row"><label>原因</label><input type="text" id="ejectReason" placeholder="reason" style="width:320px">' +
+        '<button class="primary" id="ejectSubmit">摘除</button></div>' +
+    '</fieldset>' +
+    '<div class="toolbar"><label class="switch"><input type="checkbox" id="activeOnly"' + (activeOnly ? ' checked' : '') + '> 仅生效中</label></div>' +
+    (rows ? '<table><thead><tr><th>动作</th><th>scope</th><th>目标</th><th>原因</th><th>操作者</th><th>时间</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table>'
+          : '<div class="empty">无摘除记录</div>');
+
+  document.getElementById('ejectSubmit').addEventListener('click', async () => {
+    const scope = document.getElementById('ejectScope').value;
+    const body = {scope};
+    if (scope === 'INSTANCE') {
+      body.namespace = document.getElementById('ejectNs').value.trim();
+      body.service = document.getElementById('ejectSvc').value.trim();
+      body.instanceId = document.getElementById('ejectId').value.trim();
+    } else {
+      body.value = document.getElementById('ejectValue').value.trim();
+    }
+    const reason = document.getElementById('ejectReason').value.trim();
+    if (reason) body.reason = reason;
+    try {
+      await apiSend('POST', '/admin/v1/ejections', body);
+      render(); // 直接重渲染：nav 同 hash 不触发 hashchange（review #7）
+    } catch (e) { alert(e.message); }
+  });
+  document.getElementById('activeOnly').addEventListener('change', e => nav('#/ejections?activeOnly=' + e.target.checked));
+  document.querySelectorAll('button.recover').forEach(b => b.addEventListener('click', async () => {
+    const body = {scope: b.dataset.scope};
+    if (b.dataset.scope === 'INSTANCE') {
+      body.namespace = b.dataset.ns;
+      body.service = b.dataset.svc;
+      body.instanceId = b.dataset.id;
+    } else {
+      body.value = b.dataset.val;
+    }
+    try {
+      await apiSend('POST', '/admin/v1/ejections/recover', body);
+      render();
+    } catch (e) { alert(e.message); }
+  }));
+}
+
+// ---- 路由规则视图：两段发布（编辑 → diff → release / rollback）----
+
+async function renderRules(params) {
+  const namespace = params.get('namespace') || '';
+  const service = params.get('service') || '';
+  const query = new URLSearchParams({limit: 200});
+  if (namespace) query.set('namespace', namespace);
+  if (service) query.set('service', service);
+  const page = await api('/admin/v1/route-rules?' + query);
+  let edit = null;
+  if (params.get('edit')) {
+    try { edit = JSON.parse(params.get('edit')); } catch (ignored) { edit = null; }
+  }
+  const editing = Array.isArray(edit) && edit.length === 3
+    ? (page.rules || []).find(r => r.namespace === edit[0] && r.service === edit[1] && r.name === edit[2]) || null
+    : null;
+
+  const targetRows = editing
+    ? editing.targets.map((t, i) => targetRowHtml(i, selectorText(t.selector), t.unreleasedWeight)).join('')
+    : targetRowHtml(0, '', 100);
+
+  const rows = (page.rules || []).map((rule, index) => {
+    const targets = rule.targets.map(t =>
+      esc(selectorText(t.selector)) + ' <span class="meta">生效 ' + t.weight + ' / 编辑 ' + t.unreleasedWeight + '</span>')
+      .join('<br>');
+    const key = encodeURIComponent(rule.namespace) + '/' + encodeURIComponent(rule.service) + '/' + encodeURIComponent(rule.name);
+    // 保留名 canary 不可经 CRUD 编辑（400），管理入口在服务详情页区块
+    const editAction = rule.name === 'canary'
+      ? '<span class="meta">canary 规则经服务详情页管理</span>'
+      : '<a class="action edit" data-ns="' + escAttr(rule.namespace) + '" data-svc="' + escAttr(rule.service) +
+        '" data-name="' + escAttr(rule.name) + '">编辑</a>';
+    return '<tr><td>' + esc(rule.namespace) + '</td><td>' + esc(rule.service) + '</td><td>' + esc(rule.name) + '</td>' +
+      '<td>' + esc(rule.status) + '</td><td>' + targets + '</td>' +
+      '<td><a class="action expand" data-index="' + index + '">diff / 发布记录</a>' +
+        editAction +
+        '<a class="action release" data-key="' + escAttr(key) + '">发布</a>' +
+        '<a class="action danger delete" data-key="' + escAttr(key) + '">删除</a></td></tr>' +
+      '<tr id="expandRow-' + index + '" style="display:none"><td colspan="6"><div class="expandContent">加载中…</div></td></tr>';
+  }).join('');
+
+  app.innerHTML =
+    '<h3 class="view">路由规则（两段式：编辑列 → diff 预览 → 发布；回滚 = 指向历史版本的反向发布）</h3>' +
+    '<fieldset><legend>' + (editing
+      ? '编辑规则 ' + esc(editing.namespace + '/' + editing.service + '/' + editing.name) + '（状态 ' + esc(editing.status) + ' 保持不变）'
+      : '新建规则') + '</legend>' +
+      (editing ? '' : '<div class="row"><label>namespace</label><input type="text" id="ruleNs" value="' + esc(namespace) + '">' +
+        '<label>service</label><input type="text" id="ruleSvc" value="' + esc(service) + '">' +
+        '<label>name</label><input type="text" id="ruleName" placeholder="规则名（canary 为保留名）"></div>') +
+      '<div class="targets" id="targetRows">' + targetRows + '</div>' +
+      '<div class="row"><label></label><button id="addTarget">+ 目标</button>' +
+        '<span class="meta">selector 空 = 兜底目标；weight 单位 0–10000（万分比）</span>' +
+        '<button class="primary" id="ruleSubmit">' + (editing ? '保存（全量替换）' : '创建') + '</button>' +
+        (editing ? '<button id="cancelEdit">取消编辑</button>' : '') + '</div>' +
+    '</fieldset>' +
+    '<div class="toolbar">' +
+      '<input type="text" id="filterNs" placeholder="namespace 过滤" value="' + esc(namespace) + '">' +
+      '<input type="text" id="filterSvc" placeholder="service 过滤" value="' + esc(service) + '">' +
+      '<button id="filterApply">筛选</button></div>' +
+    (rows ? '<table><thead><tr><th>namespace</th><th>service</th><th>name</th><th>状态</th><th>targets（生效/编辑）</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table>'
+          : '<div class="empty">无路由规则</div>');
+
+  const addTarget = document.getElementById('addTarget');
+  addTarget.addEventListener('click', () => {
+    document.getElementById('targetRows').insertAdjacentHTML('beforeend',
+      targetRowHtml(document.querySelectorAll('.trow').length, '', 100));
+    bindTargetRemoval();
+  });
+  bindTargetRemoval();
+
+  document.getElementById('ruleSubmit').addEventListener('click', async () => {
+    try {
+      const targets = [];
+      document.querySelectorAll('#targetRows .trow').forEach(row => {
+        targets.push({selector: parseSelector(row.querySelector('.tselector').value),
+          unreleasedWeight: parseInt(row.querySelector('.tweight').value, 10) || 0});
+      });
+      if (targets.length === 0) throw new Error('至少一个目标');
+      if (editing) {
+        await apiSend('PUT',
+          '/admin/v1/route-rules/' + encodeURIComponent(editing.namespace) + '/' +
+            encodeURIComponent(editing.service) + '/' + encodeURIComponent(editing.name),
+          // status 必须随 PUT 回传：缺省会归一 ACTIVE，静默激活 INACTIVE 规则（review #1）
+          {namespace: editing.namespace, service: editing.service, name: editing.name, status: editing.status, targets});
+      } else {
+        const ruleNamespace = document.getElementById('ruleNs').value.trim();
+        const ruleService = document.getElementById('ruleSvc').value.trim();
+        const name = document.getElementById('ruleName').value.trim();
+        await apiSend('POST', '/admin/v1/route-rules', {namespace: ruleNamespace, service: ruleService, name, targets});
+      }
+      const query = new URLSearchParams();
+      if (namespace) query.set('namespace', namespace);
+      if (service) query.set('service', service);
+      nav('#/rules' + (query.toString() ? '?' + query : ''));
+    } catch (e) { alert(e.message); }
+  });
+  const cancelEdit = document.getElementById('cancelEdit');
+  if (cancelEdit) cancelEdit.addEventListener('click', () => nav('#/rules'));
+  document.getElementById('filterApply').addEventListener('click', () => {
+    const q = new URLSearchParams();
+    const ns = document.getElementById('filterNs').value.trim();
+    const svc = document.getElementById('filterSvc').value.trim();
+    if (ns) q.set('namespace', ns);
+    if (svc) q.set('service', svc);
+    nav('#/rules' + (q.toString() ? '?' + q : ''));
+  });
+
+  document.querySelectorAll('a.expand').forEach(a => a.addEventListener('click', () => toggleExpand(parseInt(a.dataset.index, 10))));
+  document.querySelectorAll('a.edit').forEach(a => a.addEventListener('click', () => {
+    // edit 参数承载 JSON 数组：namespace/service 无字符集约束（可含 / 与引号），定界符拆分不可靠
+    const q = new URLSearchParams();
+    if (namespace) q.set('namespace', namespace);
+    if (service) q.set('service', service);
+    q.set('edit', JSON.stringify([a.dataset.ns, a.dataset.svc, a.dataset.name]));
+    nav('#/rules?' + q);
+  }));
+  document.querySelectorAll('a.release').forEach(a => a.addEventListener('click', async () => {
+    if (!confirm('发布 ' + a.dataset.key.split('/')[2] + '？编辑列权重将生效并落发布记录。')) return;
+    try {
+      await apiSend('POST', '/admin/v1/route-rules/' + a.dataset.key + '/release');
+      render();
+    } catch (e) { alert(e.message); }
+  }));
+  document.querySelectorAll('a.delete').forEach(a => a.addEventListener('click', async () => {
+    if (!confirm('删除规则 ' + a.dataset.key.split('/')[2] + '？')) return;
+    try {
+      await apiSend('DELETE', '/admin/v1/route-rules/' + a.dataset.key);
+      render();
+    } catch (e) { alert(e.message); }
+  }));
+}
+
+function targetRowHtml(index, selector, weight) {
+  return '<div class="trow">' +
+    '<input type="text" class="tselector" placeholder="selector（k=v,..；空 = 兜底）" value="' + esc(selector === '（兜底目标）' ? '' : selector) + '">' +
+    '<input type="number" class="tweight" min="0" max="10000" placeholder="weight" value="' + (weight ?? '') + '" style="width:110px">' +
+    '<button class="danger removeTarget">移除</button></div>';
+}
+
+function bindTargetRemoval() {
+  document.querySelectorAll('button.removeTarget').forEach(b => {
+    b.onclick = () => b.closest('.trow').remove();
+  });
+}
+
+async function toggleExpand(index) {
+  // getElementById 原样匹配（querySelector 会解析属性值内的引号/斜杠，review #5）
+  const row = document.getElementById('expandRow-' + index);
+  if (!row) return;
+  if (row.style.display !== 'none') { row.style.display = 'none'; return; }
+  row.style.display = '';
+  const content = row.querySelector('.expandContent');
+  try {
+    const [diff, releases] = await Promise.all([
+      api('/admin/v1/route-rules/' + key + '/diff'),
+      api('/admin/v1/route-rules/' + key + '/releases?limit=20')
+    ]);
+    const diffRows = diff.targets.map(t =>
+      '<tr><td>' + esc(selectorText(t.selector)) + '</td><td class="num">' + fmt(t.currentWeight) + '</td>' +
+      '<td class="num">' + fmt(t.nextWeight) + '</td></tr>').join('');
+    const releaseRows = releases.releases.map(r =>
+      '<tr><td class="num">#' + r.id + '</td><td>' + esc(r.type) + '</td>' +
+      '<td>' + esc(r.snapshot.map(t => selectorText(t.selector) + ':' + t.weight).join('；')) + '</td>' +
+      '<td>' + esc(r.operator) + '</td><td>' + esc(r.releasedAt) + '</td>' +
+      '<td><button class="rollback" data-key="' + escAttr(key) + '" data-id="' + r.id + '">回滚到此</button></td></tr>').join('');
+    content.innerHTML =
+      '<b>diff 预览（当前生效 → 本次发布后）</b>' +
+      '<table style="margin:8px 0"><thead><tr><th>目标</th><th>当前生效</th><th>发布后</th></tr></thead><tbody>' + diffRows + '</tbody></table>' +
+      '<b>发布记录（append-only）</b>' +
+      (releaseRows ? '<table style="margin-top:8px"><thead><tr><th>id</th><th>类型</th><th>快照</th><th>操作者</th><th>时间</th><th></th></tr></thead><tbody>' + releaseRows + '</tbody></table>'
+                   : '<div class="empty" style="margin-top:8px">无发布记录</div>');
+    content.querySelectorAll('button.rollback').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('回滚到发布记录 #' + b.dataset.id + '？')) return;
+      try {
+        await apiSend('POST', '/admin/v1/route-rules/' + b.dataset.key + '/rollback', {releaseId: parseInt(b.dataset.id, 10)});
+        render();
+      } catch (e) { alert(e.message); }
+    }));
+  } catch (e) {
+    content.innerHTML = '<div class="error">' + esc(e.message) + '</div>';
+  }
+}
+
+// ---- 订阅关系视图（调用方视角）：discovery 多源并列 ----
+
+async function renderSubscriptions() {
+  const view = await api('/admin/v1/subscriptions');
+  const sources = view.sources || [];
+  if (sources.length === 0) {
+    app.innerHTML = '<h3 class="view">订阅关系（调用方视角）</h3>' +
+      '<div class="notice">未配置 discovery 节点（artemis.management.discovery.endpoints）——视图无数据，all-in-one 形态默认已注入。</div>';
+    return;
+  }
+  const blocks = sources.map(source => {
+    if (source.error) {
+      return '<section class="expand"><b>' + esc(source.endpoint) + '</b> <span class="tag ejected">源不可达</span>' +
+        '<div class="meta">' + esc(source.error) + '</div></section>';
+    }
+    const rows = (source.subscriptions || []).map(s =>
+      '<tr><td class="num">' + s.id + '</td><td>' + esc(s.subscriber) + '</td><td>' + esc(s.establishedAt) + '</td>' +
+      '<td>' + (s.services.length ? s.services.map(k => esc(k.namespace + '/' + k.service)).join('<br>') : '全部服务') + '</td>' +
+      '<td>' + fmt(s.labels) + '</td>' +
+      '<td>' + (s.clusters.length ? esc(s.clusters.join(', ')) : '全部 cluster') + '</td></tr>').join('');
+    return '<section class="expand"><b>' + esc(source.endpoint) + '</b>' +
+      (rows ? '<table style="margin-top:8px"><thead><tr><th>id</th><th>调用方</th><th>建立时间</th><th>订阅服务</th><th>labels</th><th>clusters</th></tr></thead><tbody>' + rows + '</tbody></table>'
+            : '<div class="empty" style="margin-top:8px">当前无活跃订阅</div>') + '</section>';
+  }).join('');
+
+  app.innerHTML = '<h3 class="view">订阅关系（调用方视角；discovery 各节点活跃订阅快照，逐源并列）</h3>' +
+    '<div class="meta" style="margin-bottom:8px">subscriber 为 gRPC 流远端地址（传输层调用方标识）；流断开即移除，不保留历史。</div>' + blocks;
+}
+
+// ---- 审计流视图 ----
+
+async function renderAudit(params) {
+  const operation = params.get('operation') || '';
+  const query = new URLSearchParams({limit: 200});
+  if (operation) query.set('operation', operation);
+  const page = await api('/admin/v1/audit-logs?' + query);
+  const rows = (page.logs || []).map(log =>
+    '<tr><td class="num">' + log.sequence + '</td><td>' + esc(log.timestamp) + '</td><td>' + esc(log.operation) + '</td>' +
+    '<td>' + esc(log.target) + '</td><td>' + esc(log.operator) + '</td><td>' + esc(log.result) + '</td>' +
+    '<td><div class="meta" title="' + esc(log.detail || '') + '">' + esc(log.detail || '') + '</div></td></tr>').join('');
+
+  app.innerHTML =
+    '<h3 class="view">操作审计流（时间倒序）</h3>' +
+    '<div class="toolbar"><form id="auditFilter"><input type="text" name="operation" placeholder="operation 过滤（如 EJECT / RELEASE_ROUTE_RULE / DEPLOY_CANARY）" value="' + esc(operation) + '" style="width:360px">' +
+      '<button class="primary" type="submit">筛选</button>' + (operation ? '<button type="button" id="auditClear">清除</button>' : '') + '</form></div>' +
+    (rows ? '<table><thead><tr><th>seq</th><th>时间</th><th>操作</th><th>目标</th><th>操作者</th><th>结果</th><th>详情</th></tr></thead><tbody>' + rows + '</tbody></table>'
+          : '<div class="empty">无审计记录</div>');
+
+  document.getElementById('auditFilter').addEventListener('submit', e => {
+    e.preventDefault();
+    const value = e.target.operation.value.trim();
+    nav('#/audit' + (value ? '?operation=' + encodeURIComponent(value) : ''));
+  });
+  const clear = document.getElementById('auditClear');
+  if (clear) clear.addEventListener('click', () => nav('#/audit'));
+}
+
+// ---- 自我保护态视图 ----
+
+async function renderProtection(params) {
+  const includeNormal = params.get('includeNormal') === 'true';
+  const status = await api('/admin/v1/status/protection?includeNormal=' + includeNormal);
+  const node = status.node || {};
+  const rows = (status.services || []).map(s =>
+    '<tr><td>' + esc(s.service.namespace + '/' + s.service.service) + '</td>' +
+    '<td class="num">' + s.windowRenewals + '</td><td class="num">' + s.maxCount + '</td>' +
+    '<td>' + (s.nodeFallback ? '<span class="tag normal">节点级兜底</span>' : '服务级') + '</td>' +
+    '<td>' + (s.protecting ? '<span class="tag protecting">保护中</span>' : '<span class="tag normal">正常</span>') + '</td>' +
+    '<td class="num">' + Math.round(s.protectingForMs / 1000) + 's</td></tr>').join('');
+
+  app.innerHTML =
+    '<h3 class="view">自我保护态（registry 内部清理门控概念，不进 discovery 分发契约）</h3>' +
+    '<div class="cards">' +
+      '<div class="card"><div class="label">节点级窗口续约</div><div class="value">' + (node.windowRenewals ?? '—') + '</div></div>' +
+      '<div class="card"><div class="label">节点级保护阈值</div><div class="value">' + (node.maxCount ?? '—') + '</div></div>' +
+      '<div class="card"><div class="label">节点级状态</div><div class="value">' +
+        (node.protecting ? '<span class="tag protecting">保护中</span>' : '<span class="tag normal">正常</span>') + '</div></div>' +
+      '<div class="card"><div class="label">保护中服务数</div><div class="value">' + (status.protectingServices ?? 0) + ' / ' + (status.trackedServices ?? 0) + '</div></div>' +
+    '</div>' +
+    '<div class="toolbar"><label class="switch"><input type="checkbox" id="includeNormal"' + (includeNormal ? ' checked' : '') + '> 显示全部服务（默认仅保护中）</label></div>' +
+    (rows ? '<table><thead><tr><th>服务</th><th>窗口续约</th><th>峰值阈值</th><th>判定层</th><th>状态</th><th>持续</th></tr></thead><tbody>' + rows + '</tbody></table>'
+          : '<div class="empty">无保护中服务（勾选「显示全部服务」查看全量）</div>') +
+    (status.truncated ? '<div class="notice">明细超上限已截断（保护中服务全量保留）</div>' : '');
+
+  document.getElementById('includeNormal').addEventListener('change', e => nav('#/protection?includeNormal=' + e.target.checked));
 }
 
 render();

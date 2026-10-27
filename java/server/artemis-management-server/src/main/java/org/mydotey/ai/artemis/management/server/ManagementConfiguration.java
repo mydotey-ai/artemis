@@ -15,6 +15,7 @@ import org.mydotey.ai.artemis.management.domain.RegistryQueryPort;
 import org.mydotey.ai.artemis.management.domain.RouteRuleReleaseStore;
 import org.mydotey.ai.artemis.management.domain.RouteRuleStore;
 import org.mydotey.ai.artemis.management.domain.RuleAckRegistry;
+import org.mydotey.ai.artemis.management.domain.SubscriptionQueryPort;
 import org.mydotey.ai.artemis.management.infrastructure.EjectionRuleDispatcher;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryAuditLogStore;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryEjectionStore;
@@ -28,6 +29,8 @@ import org.mydotey.ai.artemis.management.server.auth.ManagementAuthConfig;
 import org.mydotey.ai.artemis.management.server.config.ManagementConfigurationSources;
 import org.mydotey.ai.artemis.management.server.grpc.RegistryClientConfig;
 import org.mydotey.ai.artemis.management.server.grpc.RegistryQueryGrpcClient;
+import org.mydotey.ai.artemis.management.server.http.DiscoveryAdminClient;
+import org.mydotey.ai.artemis.management.server.http.DiscoveryClientConfig;
 import org.mydotey.ai.artemis.management.server.http.HttpBasicAuthFilter;
 import org.mydotey.ai.artemis.management.server.repository.AccountMapper;
 import org.mydotey.ai.artemis.management.server.repository.AccountStoreImpl;
@@ -50,6 +53,7 @@ import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
+import org.springframework.web.client.RestClient;
 
 /**
  * 装配层（IoC）：SCF 配置、摘除存储与规则分发、registry 查询客户端、应用服务与认证裁决。
@@ -193,9 +197,24 @@ public class ManagementConfiguration {
         return new RegistryQueryGrpcClient(config);
     }
 
+    /** discovery 订阅关系查询客户端（phase-5）：未配置 endpoints 时零端点、查询返回空列表。 */
+    @Bean
+    DiscoveryClientConfig discoveryClientConfig(StringProperties properties) {
+        return new DiscoveryClientConfig(properties);
+    }
+
+    @Bean(destroyMethod = "close")
+    SubscriptionQueryPort subscriptionQueryPort(
+            DiscoveryClientConfig config, ObjectProvider<RestClient.Builder> builderProvider) {
+        // RestClient.Builder 由 SB 自动配置（converter 与容器 ObjectMapper 一致）；零 web 场景兜底原生 builder
+        RestClient.Builder builder = builderProvider.getIfAvailable(RestClient::builder);
+        return new DiscoveryAdminClient(config, builder);
+    }
+
     @Bean
     ManagementService managementService(
             RegistryQueryPort registryQueryPort,
+            SubscriptionQueryPort subscriptionQueryPort,
             EjectionStore ejectionStore,
             AuditLogStore auditLogStore,
             EjectionRuleDispatcher ejectionRuleDispatcher,
@@ -209,6 +228,7 @@ public class ManagementConfiguration {
             Clock clock) {
         return new ManagementServiceImpl(
                 registryQueryPort,
+                subscriptionQueryPort,
                 ejectionStore,
                 auditLogStore,
                 ejectionRuleDispatcher,
