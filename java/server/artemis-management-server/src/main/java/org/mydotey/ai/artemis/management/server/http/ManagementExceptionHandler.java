@@ -2,6 +2,7 @@ package org.mydotey.ai.artemis.management.server.http;
 
 import lombok.extern.slf4j.Slf4j;
 import org.mydotey.ai.artemis.management.domain.AccountAccessException;
+import org.mydotey.ai.artemis.management.domain.AccountAdminException;
 import org.mydotey.ai.artemis.management.domain.EjectionAccessException;
 import org.mydotey.ai.artemis.management.domain.RegistryQueryException;
 import org.mydotey.ai.artemis.management.domain.RouteRuleException;
@@ -61,6 +62,20 @@ public final class ManagementExceptionHandler {
     public ResponseEntity<ErrorResponse> accountAccess(AccountAccessException e) {
         log.warn("account access failed: code={}, message={}", e.code(), e.getMessage());
         return response(HttpStatus.SERVICE_UNAVAILABLE, e.code(), e.getMessage());
+    }
+
+    /** 账户管理冲突（v1.0 phase-2）：不存在 404；已存在/最后 ADMIN 保护/删自己 409。 */
+    @ExceptionHandler(AccountAdminException.class)
+    public ResponseEntity<ErrorResponse> accountAdmin(AccountAdminException e) {
+        HttpStatus status =
+                AccountAdminException.NOT_FOUND.equals(e.code()) ? HttpStatus.NOT_FOUND : HttpStatus.CONFLICT;
+        return response(status, e.code(), e.getMessage());
+    }
+
+    /** 内存态用户管理（v1.0 phase-2）：多账户仅 DB 态。 */
+    @ExceptionHandler(MemoryModeUserAdminException.class)
+    public ResponseEntity<ErrorResponse> memoryModeUserAdmin(MemoryModeUserAdminException e) {
+        return response(HttpStatus.CONFLICT, "NOT_SUPPORTED_IN_MEMORY_MODE", e.getMessage());
     }
 
     /** 摘除/审计存储不可用（DB 态）：503，操作未落库可重试。 */

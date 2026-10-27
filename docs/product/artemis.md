@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.37    更新时间: 2026-10-27
+版本: 1.38    更新时间: 2026-10-27
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -349,10 +349,19 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **行为**：未启用通道与既有明文行为逐位一致；客户端自定义 trustCa 时 gRPC 与 HTTP 同锚（支持多证书 CA bundle），未配置用 JVM 默认信任库（公网 CA）；不提供跳过校验开关——证书须带 SAN 覆盖目标地址；actuator 管理端口不做 TLS（本机绑定 + 网络策略隔离）；all-in-one 跨服务 loopback 通道启用 TLS 需证书含 localhost SAN。
 - **工程形态**：`artemis-common` 新增 `tls` 设施（`TlsSettings` 绑定 + `GrpcTlsContexts` 装配，入站经 spring-grpc factory 构造参数 KeyManagerFactory 接入——安全设置冻结约束的实现期定案）；code-review 7 findings 处理（6 修 1 归文档：含 SDK https 多证书 bundle 解析崩溃修复、坏 CA 绕过启动校验修复）；common/client 单测 16 + `RegistryTlsIT` 3（SDK over TLS + 双节点 peer TLS 复制 + 明文/无信任锚拒绝）+ `DiscoveryTlsIT` 1（三服务全 TLS：投影/规则流/console https）。
 
+**v1.0 phase-2（RBAC）已交付**：
+
+- **权限模型**：预置角色 **ADMIN / OPERATOR / VIEWER** × 资源 × 动作——角色→权限矩阵为代码常量（产品语义，自定义角色待真实需求），账户→角色映射 DB 持久化（V7 迁移账户表 `role` 列，v0.4 存量单管理员升级即 ADMIN，行为无回退）。资源词汇 = 治理资源归并：release/canary 归 `route-rule:write`、订阅视图与排障面归 `service:read`，加 `audit:read`（ADMIN/OPERATOR）与 `user:manage`（仅 ADMIN）；VIEWER = 四资源读，OPERATOR = 读 + 治理写 + 审计读，ADMIN = 全权。
+- **enforcement**：management 外部 HTTP `/admin/v1` 认证后判权——401（未认证）与 403（已认证越权）分层，路由逐端点显式登记、**未登记路径默认 deny**（fail-closed）；console 走同一 REST 面天然覆盖；自助改密任何已认证用户可用（不进矩阵）。内存态保持单管理员配置凭证全权（无判权），用户管理端点 409；内部 gRPC 规则流端口为 discovery 服务凭证域，不属 RBAC 面。
+- **多账户用户管理**（DB 态 REST）：`GET/POST /admin/v1/users`、`PUT .../role`、`PUT .../password`（admin 重置）、`DELETE`、`GET /admin/v1/roles`；保护规则 = 最后 ADMIN 不可降级/删除、不可删自己；建户/改角色/重置密码/删户全量进审计表；认证缓存按用户名键控，改密/重置/改角色/删户即时清槽（权限变更即时生效）。改密语义升级：以认证主体定位账户（多账户化）。契约见 [admin-api.md](../api/admin-api.md) §5。
+- **ADR-021 委托定案**：各服务管理面对 management 账户的认证委托**继续后置 v1.x**——RBAC 资源全部位于 management 本地管理访问面，registry 零依赖资产与 failover 代价的否决理由依然成立；mTLS 客户端证书校验随委托一并评估（ADR-021 v1.1）。
+- **工程形态**：单测 176（management-core 133 + server 43，含权限矩阵全笛卡尔积、路由登记、缓存失效、保护规则）+ 双方言 Docker IT（`RbacIT` 4/4×2：seed 角色/矩阵允许拒绝/401 分层/审计；内存态 `UserAdminMemoryModeIT`）；code-review 2 low 接受并注释（最后 ADMIN check-then-act 竞态、缓存回填竞态 ≤60s——已知限制见 [admin-api.md](../api/admin-api.md) §8）；另修复 `RouteRulePersistenceIT` 既有审计断言顺序依赖。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.38 | 2026-10-27 | v1.0 phase-2 交付：RBAC（三预置角色矩阵、/admin/v1 enforcement、多账户用户管理、ADR-021 委托定案后置 v1.x） |
 | 1.37 | 2026-10-27 | v1.0 phase-1 交付：TLS 传输安全（内外通道可启、Spring bundle/SCF 键分界、SDK gRPC+https 同锚、默认明文不变） |
 | 1.36 | 2026-10-27 | v0.5 phase-5 交付：console 管理版（操作面零新端点 + 订阅关系组合视图 + 审计/保护态页面 + all-in-one 订阅源注入）；v0.4 phase-6 操作面状态句更新 |
 | 1.35 | 2026-10-27 | v0.5 phase-4 交付：canary 一键用法（selector + weight 派生保留名规则 + 发布 + 下发，DELETE 结束）、weight 运维语义、保留名 canary 定稿、零 proto/discovery 变更 |

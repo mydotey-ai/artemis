@@ -7,6 +7,7 @@ import org.mydotey.ai.artemis.management.application.DbAccountAuthService;
 import org.mydotey.ai.artemis.management.application.ManagementService;
 import org.mydotey.ai.artemis.management.application.ManagementServiceImpl;
 import org.mydotey.ai.artemis.management.application.PersistenceInfo;
+import org.mydotey.ai.artemis.management.application.UserAccountService;
 import org.mydotey.ai.artemis.management.domain.AccountStore;
 import org.mydotey.ai.artemis.management.domain.AuditLogStore;
 import org.mydotey.ai.artemis.management.domain.EjectionStore;
@@ -32,6 +33,7 @@ import org.mydotey.ai.artemis.management.server.grpc.RegistryQueryGrpcClient;
 import org.mydotey.ai.artemis.management.server.http.DiscoveryAdminClient;
 import org.mydotey.ai.artemis.management.server.http.DiscoveryClientConfig;
 import org.mydotey.ai.artemis.management.server.http.HttpBasicAuthFilter;
+import org.mydotey.ai.artemis.management.server.http.RbacAuthorizationFilter;
 import org.mydotey.ai.artemis.management.server.repository.AccountMapper;
 import org.mydotey.ai.artemis.management.server.repository.AccountStoreImpl;
 import org.mydotey.ai.artemis.management.server.repository.AuditLogMapper;
@@ -249,6 +251,27 @@ public class ManagementConfiguration {
                 new FilterRegistrationBean<>(new HttpBasicAuthFilter(authConfig, accountAuthService));
         registration.addUrlPatterns("/*");
         registration.setName("httpBasicAuthFilter");
+        registration.setOrder(1);
         return registration;
+    }
+
+    /** RBAC 判权（v1.0 phase-2，仅 DB 态）：/admin/v1 认证后判权，顺序在认证过滤器之后。 */
+    @Bean
+    @ConditionalOnProperty("spring.datasource.url")
+    FilterRegistrationBean<RbacAuthorizationFilter> rbacAuthorizationFilter() {
+        FilterRegistrationBean<RbacAuthorizationFilter> registration =
+                new FilterRegistrationBean<>(new RbacAuthorizationFilter());
+        registration.addUrlPatterns("/admin/v1/*");
+        registration.setName("rbacAuthorizationFilter");
+        registration.setOrder(2);
+        return registration;
+    }
+
+    /** 用户管理应用服务（仅 DB 态）：DB 态认证实现必为 DbAccountAuthService（同 accountAuthService 装配）。 */
+    @Bean
+    @ConditionalOnProperty("spring.datasource.url")
+    UserAccountService userAccountService(
+            AccountStore accountStore, AccountAuthService accountAuthService, Clock clock) {
+        return new UserAccountService(accountStore, (DbAccountAuthService) accountAuthService, clock);
     }
 }

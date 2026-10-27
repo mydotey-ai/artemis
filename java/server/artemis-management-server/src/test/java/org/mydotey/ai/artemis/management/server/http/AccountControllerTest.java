@@ -7,8 +7,10 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.mydotey.ai.artemis.management.application.AccountAuthService;
+import org.mydotey.ai.artemis.management.application.AuthenticatedAccount;
 import org.mydotey.ai.artemis.management.application.PersistenceInfo;
 import org.mydotey.ai.artemis.management.domain.AuditLog;
 import org.mydotey.ai.artemis.management.infrastructure.InMemoryAuditLogStore;
@@ -23,8 +25,8 @@ class AccountControllerTest {
 
     @Test
     void should_change_password_when_old_valid() {
-        AccountController.ChangePasswordResponse response =
-                controller.changePassword(new AccountController.ChangePasswordRequest("old-s3cret-1", "new-s3cret-9"));
+        AccountController.ChangePasswordResponse response = controller.changePassword(
+                new AccountController.ChangePasswordRequest("old-s3cret-1", "new-s3cret-9"), "artemis");
 
         assertThat(response.username()).isEqualTo("artemis");
         assertThat(authService.changeCalls).isEqualTo(1);
@@ -34,15 +36,16 @@ class AccountControllerTest {
     void should_return_409_when_memory_mode_change_password() {
         AccountController memoryMode = new AccountController(authService, PersistenceInfo.memory(), auditLogs, clock);
 
-        assertThatThrownBy(() ->
-                        memoryMode.changePassword(new AccountController.ChangePasswordRequest("old", "new-s3cret-9")))
+        assertThatThrownBy(() -> memoryMode.changePassword(
+                        new AccountController.ChangePasswordRequest("old", "new-s3cret-9"), "artemis"))
                 .isInstanceOf(MemoryModePasswordChangeException.class);
         assertThat(authService.changeCalls).isZero();
     }
 
     @Test
     void should_audit_successful_password_change() {
-        controller.changePassword(new AccountController.ChangePasswordRequest("old-s3cret-1", "new-s3cret-9"));
+        controller.changePassword(
+                new AccountController.ChangePasswordRequest("old-s3cret-1", "new-s3cret-9"), "artemis");
 
         List<AuditLog> logs = auditLogs.find("CHANGE_PASSWORD", 10);
         assertThat(logs).singleElement().satisfies(log -> {
@@ -55,11 +58,13 @@ class AccountControllerTest {
 
     @Test
     void should_return_400_when_change_request_invalid() {
-        assertThatThrownBy(() -> controller.changePassword(null)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() ->
-                        controller.changePassword(new AccountController.ChangePasswordRequest(null, "new-s3cret-9")))
+        assertThatThrownBy(() -> controller.changePassword(null, "artemis"))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> controller.changePassword(new AccountController.ChangePasswordRequest("old", " ")))
+        assertThatThrownBy(() -> controller.changePassword(
+                        new AccountController.ChangePasswordRequest(null, "new-s3cret-9"), "artemis"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() ->
+                        controller.changePassword(new AccountController.ChangePasswordRequest("old", " "), "artemis"))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -67,8 +72,8 @@ class AccountControllerTest {
     void should_propagate_service_validation_when_new_password_too_short() {
         authService.rejectChange = true;
 
-        assertThatThrownBy(() ->
-                        controller.changePassword(new AccountController.ChangePasswordRequest("old-s3cret-1", "short")))
+        assertThatThrownBy(() -> controller.changePassword(
+                        new AccountController.ChangePasswordRequest("old-s3cret-1", "short"), "artemis"))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -78,12 +83,12 @@ class AccountControllerTest {
         boolean rejectChange;
 
         @Override
-        public boolean verify(String username, String password) {
-            return false;
+        public Optional<AuthenticatedAccount> verify(String username, String password) {
+            return Optional.empty();
         }
 
         @Override
-        public String changePassword(String oldPassword, String newPassword) {
+        public String changePassword(String username, String oldPassword, String newPassword) {
             changeCalls++;
             if (rejectChange) {
                 throw new IllegalArgumentException("newPassword must be at least 8 characters");

@@ -1,6 +1,6 @@
 # 新一代 Artemis 架构设计
 
-版本: 1.46    更新时间: 2026-10-27
+版本: 1.47    更新时间: 2026-10-27
 
 > 本文是新一代 Artemis（重设计产品）的架构设计基线：总体架构、核心机制、技术栈策略与关键决策记录。产品定位与版本切分见 [产品规划与路线图](../product/artemis-next-roadmap.md)；设计输入来自 [原产品能力基线](../legacy/legacy-product-analysis.md)（§5 可继承资产 / §6 局限清单）与[行业对标报告](../legacy/industry-benchmark.md)。
 
@@ -188,7 +188,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 ### 5.3 console 与账户
 
 - console：management 内嵌静态 SPA + REST，不引入独立前端部署单元；分页 + 模糊搜索（10 万实例可用性前提）、服务/实例详情、订阅关系视图（调用方视角）、操作审计流、自我保护态展示。
-- 账户：认证 v0.1 起默认开启（各服务本地单账户）；账户体系（DB 持久化、统一认证）随 management v0.4 交付——接管形态为**管理访问面收敛**（[ADR-021](../decisions/adr-021-management-account-takeover.md)：Admin API 与 console 以单管理员 DB 账户为唯一认证源，DB 态首启将配置凭证一次性 seed 物化、此后配置凭证失效；各服务本地单账户保留为服务自身凭证——SDK 数据面与排障面，与管理凭证分域；各服务管理面委托机制后置 v1.0 RBAC）；RBAC（角色 × 资源 × 动作）v1.0；全部治理操作可审计——摘除/恢复以摘除记录表自身为完整操作审计（操作记录即状态）+ 审计表摘要行（尽力而为，摘除状态源唯一在记录表），其余治理操作全量进审计表（v0.4 phase-3 定案）。
+- 账户：认证 v0.1 起默认开启（各服务本地单账户）；账户体系（DB 持久化、统一认证）随 management v0.4 交付——接管形态为**管理访问面收敛**（[ADR-021](../decisions/adr-021-management-account-takeover.md)：Admin API 与 console 以单管理员 DB 账户为唯一认证源，DB 态首启将配置凭证一次性 seed 物化、此后配置凭证失效；各服务本地单账户保留为服务自身凭证——SDK 数据面与排障面，与管理凭证分域；各服务管理面委托机制经 v1.0 phase-2 定案继续后置 v1.x）；RBAC v1.0：**预置角色 ADMIN/OPERATOR/VIEWER × 资源 × 动作**（角色→权限矩阵为代码常量，账户→角色映射 DB 持久化于账户表 `role` 列，存量单管理员升级即 ADMIN；资源词汇表 = §5.2 治理资源归并——release/canary 归 `route-rule:write`、订阅视图与排障面归 `service:read`，加 `audit`/`user`），enforcement 于 management 外部 HTTP `/admin/v1`（认证后判权，401/403 分层，未登记路径默认 deny），console 走同一 REST 面天然覆盖；用户管理（多账户 CRUD + 角色分配 + admin 重置密码）DB 态 REST 交付，自助改密任何已认证用户可用，账户管理操作全量进审计表；全部治理操作可审计——摘除/恢复以摘除记录表自身为完整操作审计（操作记录即状态）+ 审计表摘要行（尽力而为，摘除状态源唯一在记录表），其余治理操作全量进审计表（v0.4 phase-3 定案）。
 - management 可不部署：registry + discovery 独立可用（双轨分离资产延续），单机 eval 零 DB 依赖。
 
 ## 6. 安全与可观测
@@ -197,7 +197,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 |---|---|
 | 认证 | v0.1 起默认开启（各服务本地单账户），吸取 Nacos 3.0 才默认鉴权的教训；显式配置方可关闭（eval 场景）；v0.4 management 单管理员 DB 账户接管管理访问面（[ADR-021](../decisions/adr-021-management-account-takeover.md)，各服务本地账户保留为服务凭证） |
 | TLS | v1.0 支持（内外通道均可启），内网部署可配明文；仅 server-auth TLS（mTLS 客户端证书校验随 RBAC 后置）。外部端口（gRPC/HTTP）经 Spring SSL bundle（框架自有键，零代码）；程序化通道（内部 peer、discovery/management 上游、SDK gRPC 与 https 寻址）经 SCF 静态键 `artemis.*.tls.*`（enabled + 服务端 certChain/privateKey + 客户端可选 trustCa，坏配置启动 fail-fast）；证书 = PEM 文件路径，轮换重启生效，证书须带 SAN 覆盖目标地址（不提供跳过校验开关） |
-| RBAC | v1.0 |
+| RBAC | v1.0（三预置角色 × 资源 × 动作，模型与 enforcement 见 §5.3）；跨服务管理面委托与 mTLS 客户端证书校验随 v1.x（ADR-021 定案） |
 | metrics | Micrometer + Prometheus 格式，v0.1 第一天起按版本递补：心跳/租约/节点级保护态 v0.1；复制 v0.2（`batches.sent/failed/rejected/dropped`、`batches.received`、`applied.changes`）+ bootstrap（`attempts/failures/synced.instances`）+ 节点探测（`cluster.probe.rounds/failures`、`cluster.peers.up`）+ 保护态 2.0（节点级 gauge 保留；`service.protection{namespace,service}` 仅保护中注册、`service.protection.count`、`service.protection.transitions{to}`）；推送 v0.3 |
 | 告警 | 走 Prometheus + Alertmanager 生态（不自建），关键告警规则（保护态触发、节点失联）随 v1.0 提供示例配置 |
 | log | 结构化 JSON，v0.1 第一天 |
@@ -267,6 +267,7 @@ registry 定期任务只有两个：租约过期清理、快照落盘。**没有
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.47 | 2026-10-27 | v1.0 phase-2 设计 review 定案：§5.3 RBAC 模型落稿（三预置角色、矩阵代码常量、账户表 role 列、/admin/v1 enforcement、用户管理 REST）；§6 RBAC 行同步；ADR-021 委托机制定案继续后置 v1.x（ADR-021 v1.1 同步） |
 | 1.46 | 2026-10-27 | §6 TLS 行落地细化：Spring bundle / SCF 键分界、仅 server-auth、SAN 要求（v1.0 phase-1） |
 | 1.45 | 2026-10-27 | v0.5 phase-5 设计定案：§2.2 端口表补 management → discovery 只读发现管理查询通道（HTTP、复用 discovery 外部端口、订阅关系组合）——§2.1 依赖矩阵既有 0..N 依赖的首条落地 |
 | 1.44 | 2026-10-27 | v0.5 phase-2 落点：§2.2 补路由规则订阅流（RouteRuleService 独立流 + AckRouteRules + status/rules routeRules 节，版本 = dispatcher tick） |

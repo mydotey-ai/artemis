@@ -65,12 +65,15 @@ abstract class RouteRulePersistenceIT extends ManagementHttpIT {
                         .asInt())
                 .isEqualTo(100);
 
-        // 审计可查：operation 过滤 + target 与 operator 透出
-        JsonNode audits = json(get("/admin/v1/audit-logs?operation=UPDATE_ROUTE_RULE"));
-        assertThat(audits.get("logs").size()).isEqualTo(1);
-        assertThat(audits.get("logs").get(0).get("target").asText())
-                .isEqualTo("route-rule:" + NAMESPACE + "/" + SERVICE + "/beta");
-        assertThat(audits.get("logs").get(0).get("operator").asText()).isEqualTo("artemis");
+        // 审计可查：operation 过滤 + target 与 operator 透出。
+        // 与 CREATE 同理：重启用例共享 operation（PUT keep 同为 UPDATE_ROUTE_RULE），
+        // 按本用例 target 过滤断言，不依赖方法执行顺序
+        JsonNode audits = json(get("/admin/v1/audit-logs?operation=UPDATE_ROUTE_RULE&limit=50"));
+        assertThat(java.util.stream.StreamSupport.stream(audits.get("logs").spliterator(), false)
+                        .filter(log -> log.get("target").asText()
+                                .equals("route-rule:" + NAMESPACE + "/" + SERVICE + "/beta")))
+                .singleElement()
+                .satisfies(log -> assertThat(log.get("operator").asText()).isEqualTo("artemis"));
         JsonNode created = json(get("/admin/v1/audit-logs?operation=CREATE_ROUTE_RULE&limit=10"));
         // 重启用例（键隔离前共享 operation）可能先行，断言包含本用例两条而非精确计数
         assertThat(java.util.stream.StreamSupport.stream(created.get("logs").spliterator(), false)

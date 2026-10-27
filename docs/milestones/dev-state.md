@@ -32,22 +32,24 @@
 > v0.5（治理面 II）已收尾（2026-10-27）：五个 phase 全部交付，验收对照见 [plan.md](v0.5/plan.md)。
 >
 > v1.0（GA 生产就绪）于 2026-10-27 启动：plan 已写（8 phase：TLS / RBAC / Docker+VM / Helm / 滚动升级 / 容量压测 / 文档站 / SDK 发布），基线提交后转 in-progress。
+>
+> v1.0 phase-1（TLS 传输安全）已交付（958379b）。phase-2（RBAC：三预置角色矩阵 + /admin/v1 判权 + 多账户用户管理 + V7 role 列；ADR-021 委托定案后置 v1.x）已交付。
 
 ## 当前 phase 步骤进度（版本 done 后清空本节）
 
 | 步骤 | 状态 | 备注 |
 |---|---|---|
-| worktree 开工 | done | 分支 v1.0-phase1-tls 自基线 c6c2212 起；骨架与索引已登记 |
-| 上下文加载 | done | 已读：roadmap §3 v1.0、架构 §2.2/§2.3/§6/§7（D9/D21）、tech-java.md 全文、guidelines §7/§10、plan v1.0；代码：PeerServerConfiguration/PeerChannels/GrpcProjectionSource/ManagementRuleChannels/GrpcLogicalInstanceSource/RegistryQueryGrpcClient/GrpcRegistryClient/GrpcDiscoveryClient/HttpNodeListFetcher/ArtemisClients、application.properties×3、spring-boot-grpc-server 4.1.1 Ssl 属性。proto/legacy 不涉（传输层新增能力） |
-| 设计 | done | review 通过（2026-10-27），两份制品定稿 |
-| 实现 | done | common TLS 设施 + peer/discovery/management/SDK 全通道接线 + 双 IT |
-| 测试 | done | dev-test.sh all 全绿（BUILD SUCCESS，12 模块 0 失败） |
-| code-review | done | max 级 7 findings（1 崩溃级 + 1 行为不一致 + 1 NPE + 3 简洁/卫生 + 1 文档） |
-| fix | done | 6/7 修复（1 崩溃/1 fail-fast/1 NPE/2 简洁/1 卫生），7 归 ⑩ 文档 |
-| 回归测试 | done | 修复后 all 全量重跑 BUILD SUCCESS（13 模块 0 失败） |
-| 验证 | done | 自动化 4 项全过；用户人工验证通过（2026-10-27） |
-| 文档同步 | done | 产品/API×2/架构/技术选型 + 设计文档 ⑩ 节登记 |
-| 完工 | done | squash 入 main（2026-10-27） |
+| worktree 开工 | done | 分支 v1.0-phase2-rbac 自基线 958379b 起；骨架与索引已登记 |
+| 上下文加载 | done | 已读：roadmap §3 v1.0、架构 §5.2/§5.3/§6/§8、ADR-021、tech-java.md、guidelines §7、proto-contract.md（结论：本 phase 无 proto 变更）、legacy 基线 §6 #18/#19、management-core/server 账户/审计/装配源码、Flyway V2、admin-api.md |
+| 设计 | done | review 通过；ADR-021 v1.1 与架构 v1.47 已同步（委托继续后置 v1.x + RBAC 模型落稿） |
+| 实现 | done | core 域模型/多账户认证/用户管理服务 + server 判权 filter/用户端点/V7 迁移；单测 133+43 绿 |
+| 测试 | done | dev-test.sh all 全绿（第 4 轮；registry-core 既有 flaky 与本 phase 无关，单模块复跑绿；双方言 IT 无 Docker skipped） |
+| code-review | done | 内联替代 skill（已知环境故障：审查子 agent 无内置工具会挂起，工作流既定兜底）；max 口径逐文件审查，findings 2 条 low |
+| fix | done | 2 条 low 接受并 ponytail 注释（最后 ADMIN 竞态 / 缓存回填竞态）；实现结果节已记 |
+| 回归测试 | done | ⑧ all 全绿 + Docker 双方言 IT 补跑全绿（RbacIT 4/4×2；RouteRulePersistenceIT 既有顺序依赖已修） |
+| 验证 | done | 自动化全绿 + 用户人工验证通过（2026-10-27） |
+| 文档同步 | done | 产品 v1.38、admin-api v1.16、ADR-021 v1.1 与架构 v1.47（③ 已同步）、phase 双文档回填 |
+| 完工 | done | worktree 提交 7d4e80f，squash 回 main 并 push |
 
 步骤状态枚举：pending | in-progress | done | skipped。
 
@@ -56,7 +58,7 @@
 | phase | 状态 |
 |---|---|
 | phase-1-tls | done |
-| phase-2-rbac | planned |
+| phase-2-rbac | done |
 | phase-3-docker-vm | planned |
 | phase-4-helm | planned |
 | phase-5-rolling-upgrade | planned |

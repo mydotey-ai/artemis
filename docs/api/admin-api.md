@@ -1,6 +1,6 @@
 # management-service Admin 与状态 API
 
-版本: 1.15    更新时间: 2026-10-27
+版本: 1.16    更新时间: 2026-10-27
 
 > 本文定义 management-service 对外 HTTP API（管理面：实例管理 Admin API、账户 API 与 registry 状态排障面）。有效视图 = registry 只读事实 + management 摘除记录（ADR-016）；registry 不感知摘除。内部 gRPC 查询契约见 [registry-query-api.md](registry-query-api.md)。
 
@@ -12,7 +12,8 @@
 | 管理端口 | **9092**（`management.server.port`，默认仅绑 `127.0.0.1`；actuator health/info/prometheus） |
 | 认证（内存态） | 默认开启 HTTP Basic 单账户（默认 `artemis`/`artemis`，生产必须修改）；凭证取自配置，支持运行期轮换 |
 | 认证（DB 态，v0.4） | **账户表唯一源**（ADR-021）：PBKDF2 哈希验证；DB 态首启将配置凭证一次性 seed 物化进表，此后配置凭证失效、表非空永不覆盖 |
-| 关闭认证 | `artemis.management.auth.enabled=false`（仅 eval） |
+| RBAC（DB 态，v1.0） | 预置角色 ADMIN/OPERATOR/VIEWER（§5.2）：`/admin/v1` 认证后判权——401 未认证 / 403 越权，路由逐端点登记、未登记默认 deny；内存态单管理员全权不判权 |
+| 关闭认证 | `artemis.management.auth.enabled=false`（仅 eval；关闭后无认证主体，`/admin/v1` 不判权） |
 | console（v0.4 只读 → v0.5 管理版） | 外部端口根路径 `/`——内嵌静态 SPA（管理版：服务列表/详情 + 摘除/恢复操作、路由规则与两段发布、订阅关系视图、操作审计流、自我保护态展示），与 Admin API 同一认证 |
 | 上游 | registry 只读查询 gRPC（registry 内部 peer 端口；端点**无默认值**，未配置时调用返回 REGISTRY_UNAVAILABLE；内部认证默认关闭，配置了 username 才附加 Basic 认证）；discovery 只读订阅关系查询 HTTP（0..N，见 §4.13） |
 | 账户后端不可用 | 认证裁决 fail-closed：401 拒绝（账户 API 503，见 §7 错误语义） |
@@ -300,22 +301,53 @@ console 订阅关系视图（调用方视角）数据源：management 拉取所�
 - 未配置 endpoints 时返回 `{"sources": []}`（不报错）。
 - 该端点为只读查询，无审计。
 
-## 5. 账户 API（v0.4，ADR-021）
+## 5. 账户与用户管理 API（v0.4 ADR-021 → v1.0 RBAC）
 
-单管理员账户管理。仅 DB 态支持——内存态凭证事实源是配置（改配置即改密，动态生效），端点返回 409。
+DB 态账户表唯一认证源；v1.0 起多账户 + 预置角色 RBAC。内存态凭证事实源是配置（单管理员全权），本节端点均返回 409 `NOT_SUPPORTED_IN_MEMORY_MODE`。
 
-### 5.1 改密 `PUT /admin/v1/account/password`
+### 5.1 自助改密 `PUT /admin/v1/account/password`
 
-请求体（受当前认证源保护——DB 态旧密码）：
+请求体（任何已认证用户可改**自己**密码——以认证主体定位账户，不进权限矩阵）：
 
 ```json
 {"oldPassword": "artemis", "newPassword": "new-s3cret-9"}
 ```
 
 - 成功 200 `{"username": "artemis"}`；**旧凭证即时失效**（新凭证即用）。
-- `newPassword` 最少 8 字符（seed 的默认密码 7 字符属豁免——默认凭证本就要求立即改）；`oldPassword` 不匹配拒绝，均 400。
+- `newPassword` 最少 8 字符（seed 的默认密码 7 字符属豁免——默认凭证本就要求立即改）；`oldPassword` 不匹配拒绝，均 400；认证关闭时无主体可定位，400。
 - 内存态 409 `{"error": "NOT_SUPPORTED_IN_MEMORY_MODE", ...}`。
-- 改密操作的审计记录随 v0.4 phase-3 审计表落地。
+- 改密成功进审计（`CHANGE_PASSWORD`，尽力而为）。
+
+### 5.2 预置角色与权限矩阵（v1.0 phase-2）
+
+角色→权限矩阵为**代码常量**（产品语义，无自定义角色）；账户→角色映射持久化于账户表 `role` 列（V7 迁移，存量与 seed 账户均 ADMIN）。
+
+| Permission | ADMIN | OPERATOR | VIEWER | 覆盖端点（method + path） |
+|---|---|---|---|---|
+| `service:read` | ✓ | ✓ | ✓ | GET `/admin/v1/services/**`、`/admin/v1/subscriptions`、`/admin/v1/status/**` |
+| `ejection:read` | ✓ | ✓ | ✓ | GET `/admin/v1/ejections` |
+| `ejection:write` | ✓ | ✓ | — | POST `/admin/v1/ejections`、`/admin/v1/ejections/recover` |
+| `route-rule:read` | ✓ | ✓ | ✓ | GET `/admin/v1/route-rules/**` |
+| `route-rule:write` | ✓ | ✓ | — | POST/PUT/DELETE `/admin/v1/route-rules/**`（含 release/rollback）、POST/DELETE `/admin/v1/canary/**` |
+| `logical-instance:read` | ✓ | ✓ | ✓ | GET `/admin/v1/logical-instances` |
+| `logical-instance:write` | ✓ | ✓ | — | PUT/DELETE `/admin/v1/logical-instances` |
+| `audit:read` | ✓ | ✓ | — | GET `/admin/v1/audit-logs` |
+| `user:manage` | ✓ | — | — | `/admin/v1/users/**`、GET `/admin/v1/roles` |
+
+资源归并语义：release/rollback/canary 是 route-rule 的生命周期操作/预置派生用法，权限域不拆；订阅视图与排障面是服务事实读视图，归 `service:read`。enforcement 于 `/admin/v1` 认证后判权：**未登记路径默认 deny**（403 fail-closed）；认证显式关闭时不判权（eval 语义）。
+
+### 5.3 用户管理（全部 `user:manage`，即仅 ADMIN）
+
+| 端点 | 语义 | 响应/错误 |
+|---|---|---|
+| `GET /admin/v1/users` | 账户列表（username/role/createdAt/updatedAt，**不含密码哈希**） | 200 `{"users":[...]}` |
+| `POST /admin/v1/users` | 建户 `{"username","password","role"}` | 200；400 参数非法（username 空白/>64/含 `/`、password <8、role 未知）；409 `ACCOUNT_ALREADY_EXISTS` |
+| `PUT /admin/v1/users/{username}/role` | 改角色 `{"role"}` | 200；404 `ACCOUNT_NOT_FOUND`；409 `LAST_ADMIN_REQUIRED`（最后 ADMIN 不可降级） |
+| `PUT /admin/v1/users/{username}/password` | admin 重置密码 `{"newPassword"}` | 200；404；重置后旧凭证即时失效 |
+| `DELETE /admin/v1/users/{username}` | 删户 | 200；404；409 `SELF_DELETE`（不可删自己）/ `LAST_ADMIN_REQUIRED` |
+| `GET /admin/v1/roles` | 预置角色列表 | 200 `{"roles":["ADMIN","OPERATOR","VIEWER"]}` |
+
+建户/改角色/重置密码/删户全量进审计（`CREATE_USER` / `UPDATE_USER_ROLE` / `RESET_USER_PASSWORD` / `DELETE_USER`，operator = 认证用户，尽力而为）；403 拒绝不进审计表（审计是治理操作记录，非安全事件日志）。
 
 ## 6. 状态 API（registry 排障面）
 
@@ -450,11 +482,16 @@ management 自身持久化运行形态（v0.4 phase-1 起，不透传 registry�
 |---|---|---|
 | 400 | `INVALID_ARGUMENT` | 参数空白、scope 非法或字段组合不符、字段超长（`reason` > 1024 / `namespace`·`service` > 255 / `instanceId`·`value` > 512；逻辑实例 `instanceId` > 255、`host` > 255、metadata 值为 null 或序列化 > 16KB）、body 不可解析、参数类型错误、改密参数非法（old 不匹配 / newPassword < 8 字符） |
 | 401 | `UNAUTHORIZED` | Basic 缺失或错误 |
+| 403 | `FORBIDDEN` | 已认证但角色无该端点权限，或路径未登记（默认 deny，v1.0 RBAC） |
 | 404 | `NOT_FOUND` | 未知路径 |
 | 404 | `ROUTE_RULE_NOT_FOUND` | 路由规则查询/替换/发布缺失（v0.5 phase-1） |
 | 404 | `ROUTE_RULE_RELEASE_NOT_FOUND` | 回滚源发布记录缺失或属于其它规则（v0.5 phase-2） |
 | 405 | `METHOD_NOT_ALLOWED` | 方法不支持 |
-| 409 | `NOT_SUPPORTED_IN_MEMORY_MODE` | 内存态调用改密端点（凭证事实源是配置，v0.4 ADR-021） |
+| 404 | `ACCOUNT_NOT_FOUND` | 用户管理目标账户不存在（v1.0） |
+| 409 | `NOT_SUPPORTED_IN_MEMORY_MODE` | 内存态调用改密/用户管理端点（凭证事实源是配置，v0.4 ADR-021；v1.0 用户管理） |
+| 409 | `ACCOUNT_ALREADY_EXISTS` | 建户重名（含并发竞态 DB 唯一键兜底，v1.0） |
+| 409 | `LAST_ADMIN_REQUIRED` | 降级/删除最后 ADMIN 账户（v1.0） |
+| 409 | `SELF_DELETE` | 删除当前认证账户自身（v1.0） |
 | 409 | `ROUTE_RULE_ALREADY_EXISTS` | 路由规则创建重名（v0.5 phase-1） |
 | 502 | `REGISTRY_ERROR` | registry 返回 `ACK_FAIL` 或其它 gRPC 错误（含响应超过 16 MiB 入站上限） |
 | 503 | `REGISTRY_UNAVAILABLE` | registry `UNAVAILABLE` / `DEADLINE_EXCEEDED` |
@@ -469,7 +506,7 @@ management 启动不依赖 registry 可用；registry 故障时管理面仍可�
 ## 8. 已知限制
 
 - 摘除四级与审计已交付（v0.4 phase-3）；逻辑实例已交付（v0.4 phase-4，management 侧服务视图合并逻辑实例归 phase-6 console）；路由规则 CRUD 与持久化已交付（v0.5 phase-1）；两段式发布（release/rollback/diff/releases）与规则流下发 + ack 水位已交付（v0.5 phase-2）；分组路由执行（Group filter selector 过滤与视图扇出，三出口一致）已交付（v0.5 phase-3）；canary 一键部署/结束已交付（v0.5 phase-4）；console 管理版（发布/摘除操作、订阅关系视图）归 v0.5 phase-5；内存态（未配置 DB）仍重启丢失（期 1 设计内行为，配置 DB 即持久化——重启后经流快照重下发恢复）；审批流随 v1.x 按社区需求排期。
-- RBAC 随 v1.0；内存态外部 HTTP 单账户凭证（DB 态为单管理员账户表，v0.4）。
+- RBAC 已交付（v1.0 phase-2，§5.2 三预置角色）。限制：无自定义角色/权限矩阵（代码常量，真实需求再评估）；内存态单管理员无多账户（用户管理 409）；console 暂无用户管理页面（API 先行）；最后 ADMIN 保护为 check-then-act，并发降级/删除（尤其多副本）可绕过——锁死恢复路径 = DBA 直接 SQL 更新 `role` 列；认证缓存回填/失效存在小竞态，凭证或角色变更后旧值最长残留 60s（TTL 有界）。
 - registry 地址单值、无重试/熔断（v0.2 集群后引入地址列表与容灾）。
 - registry 查询无分页；客户端入站上限 16 MiB，超限返回 502。
 
@@ -477,6 +514,7 @@ management 启动不依赖 registry 可用；registry 故障时管理面仍可�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.16 | 2026-10-27 | v1.0 phase-2：§5 重写为多账户 + RBAC（§5.2 权限矩阵、§5.3 用户管理端点）；§1 加 RBAC 行；§7 补 403/404/409 账户管理错误码；§8 已知限制更新 |
 | 1.15 | 2026-10-27 | v0.5 phase-5：新增 §4.13 订阅关系查询（discovery 多源组合 + per-source fail-open）；§1 console 行升管理版、上游补 discovery 只读通道；配置表补 `artemis.management.discovery.*` 三键 |
 | 1.14 | 2026-10-27 | v0.5 phase-4：新增 §4.12 canary 一键部署/结束两端点（派生语义、weight 视图、保留名、rollback 复用）；§4.11 尾注与 §8 边界更新（phase-3 执行已交付、phase-4 canary 已交付，下一边界 phase-5 console） |
 | ------ | ------ | ------ |

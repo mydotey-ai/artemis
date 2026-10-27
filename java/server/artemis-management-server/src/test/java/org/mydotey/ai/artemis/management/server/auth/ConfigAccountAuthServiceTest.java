@@ -14,16 +14,16 @@ class ConfigAccountAuthServiceTest {
 
     @Test
     void should_verify_when_configured_credentials_match() {
-        assertThat(service.verify("artemis", "secret")).isTrue();
+        assertThat(service.verify("artemis", "secret")).isPresent();
     }
 
     @Test
     void should_not_verify_when_credentials_mismatch_or_request_password_blank() {
-        assertThat(service.verify("artemis", "wrong")).isFalse();
-        assertThat(service.verify("other", "secret")).isFalse();
+        assertThat(service.verify("artemis", "wrong")).isEmpty();
+        assertThat(service.verify("other", "secret")).isEmpty();
         // 请求侧空白密码拒绝（v0.1 headerValueOrNull 语义；配置侧空白由 SCF 回落默认，ADR-009）
-        assertThat(service.verify("artemis", "")).isFalse();
-        assertThat(service.verify("artemis", null)).isFalse();
+        assertThat(service.verify("artemis", "")).isEmpty();
+        assertThat(service.verify("artemis", null)).isEmpty();
     }
 
     @Test
@@ -31,13 +31,13 @@ class ConfigAccountAuthServiceTest {
         ManagementAuthConfig rotated = ManagementAuthConfigs.enabled("artemis", "rotated");
         ConfigAccountAuthService service = new ConfigAccountAuthService(rotated);
 
-        assertThat(service.verify("artemis", "secret")).isFalse();
-        assertThat(service.verify("artemis", "rotated")).isTrue();
+        assertThat(service.verify("artemis", "secret")).isEmpty();
+        assertThat(service.verify("artemis", "rotated")).isPresent();
     }
 
     @Test
     void should_reject_change_when_memory_mode() {
-        assertThatThrownBy(() -> service.changePassword("secret", "new-s3cret-1"))
+        assertThatThrownBy(() -> service.changePassword("artemis", "secret", "new-s3cret-1"))
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 }

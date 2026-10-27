@@ -2,10 +2,13 @@ package org.mydotey.ai.artemis.management.server.http;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.mydotey.ai.artemis.common.auth.BasicAuth;
 import org.mydotey.ai.artemis.management.application.AccountAuthService;
+import org.mydotey.ai.artemis.management.application.AuthenticatedAccount;
 import org.mydotey.ai.artemis.management.domain.AccountAccessException;
+import org.mydotey.ai.artemis.management.domain.Role;
 import org.mydotey.ai.artemis.management.server.auth.ManagementAuthConfigs;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -95,15 +98,15 @@ class HttpBasicAuthFilterTest {
         boolean unavailable;
 
         @Override
-        public boolean verify(String username, String password) {
+        public Optional<AuthenticatedAccount> verify(String username, String password) {
             if (unavailable) {
                 throw new AccountAccessException(AccountAccessException.ACCOUNT_STORE_UNAVAILABLE, "store down", null);
             }
-            return accept;
+            return accept ? Optional.of(new AuthenticatedAccount(username, Role.ADMIN)) : Optional.empty();
         }
 
         @Override
-        public String changePassword(String oldPassword, String newPassword) {
+        public String changePassword(String username, String oldPassword, String newPassword) {
             return "artemis";
         }
     }

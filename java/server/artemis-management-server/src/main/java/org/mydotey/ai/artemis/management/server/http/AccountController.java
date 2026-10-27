@@ -7,6 +7,7 @@ import org.mydotey.ai.artemis.management.application.PersistenceInfo;
 import org.mydotey.ai.artemis.management.domain.AuditLog;
 import org.mydotey.ai.artemis.management.domain.AuditLogStore;
 import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -37,14 +38,20 @@ public final class AccountController {
     }
 
     @PutMapping("/password")
-    public ChangePasswordResponse changePassword(@RequestBody(required = false) ChangePasswordRequest request) {
+    public ChangePasswordResponse changePassword(
+            @RequestBody(required = false) ChangePasswordRequest request,
+            @RequestAttribute(value = HttpBasicAuthFilter.AUTH_USER_ATTRIBUTE, required = false) String operator) {
         if (persistenceInfo.mode() != PersistenceInfo.Mode.DATABASE) {
             throw new MemoryModePasswordChangeException();
         }
         if (request == null || isBlank(request.oldPassword()) || isBlank(request.newPassword())) {
             throw new IllegalArgumentException("oldPassword and newPassword are required");
         }
-        String username = accountAuthService.changePassword(request.oldPassword(), request.newPassword());
+        if (isBlank(operator)) {
+            // 多账户后改密以认证主体定位账户（v1.0 phase-2）；认证关闭时无主体可定位
+            throw new IllegalArgumentException("authentication is required for password change");
+        }
+        String username = accountAuthService.changePassword(operator, request.oldPassword(), request.newPassword());
         audit(username);
         return new ChangePasswordResponse(username);
     }

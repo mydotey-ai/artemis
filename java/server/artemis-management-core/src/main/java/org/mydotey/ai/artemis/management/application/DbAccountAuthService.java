@@ -7,16 +7,22 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import lombok.extern.slf4j.Slf4j;
 import org.mydotey.ai.artemis.management.domain.Account;
+import org.mydotey.ai.artemis.management.domain.AccountAdminException;
 import org.mydotey.ai.artemis.management.domain.AccountStore;
 import org.mydotey.ai.artemis.management.domain.PasswordHasher;
+import org.mydotey.ai.artemis.management.domain.Role;
 
 /**
- * DB 态账户认证（ADR-021）：账户表为唯一凭证源；seed 由装配层在 migration 后调用一次。
+ * DB 态账户认证（ADR-021；v1.0 phase-2 多账户）：账户表为唯一凭证源；seed 由装配层在
+ * migration 后调用一次（role=ADMIN）。
  *
- * <p>成功凭证单槽缓存：正确路径每 TTL 付一次 PBKDF2（百 ms 级），错误路径每次全额计算
- * （暴力破解无缓存折扣）；改密即时清槽（旧凭证立即失效）。
+ * <p>成功凭证按用户名键控缓存：正确路径每 TTL 付一次 PBKDF2（百 ms 级），错误路径每次
+ * 全额计算（暴力破解无缓存折扣）；缓存仅认证成功条目，容量 = 有效账户数天然有界。
+ * 改密即时清槽；角色变更/重置密码/删户经 {@link #invalidate} 清槽（权限即时生效，不等 TTL）。
  */
 @Slf4j
 public final class DbAccountAuthService implements AccountAuthService {
@@ -26,11 +32,9 @@ public final class DbAccountAuthService implements AccountAuthService {
 
     private final AccountStore store;
     private final Clock clock;
+    private final ConcurrentHashMap<String, CachedCredential> cache = new ConcurrentHashMap<>();
 
-    // ponytail: 单槽缓存只服务单管理员；多用户（RBAC v1.0）改按账户键控缓存
-    private volatile CachedCredential cached;
-
-    private record CachedCredential(String token, Instant expiresAt) {}
+    private record CachedCredential(String token, Role role, Instant expiresAt) {}
 
     public DbAccountAuthService(AccountStore store, Clock clock) {
         this.store = store;
@@ -38,58 +42,65 @@ public final class DbAccountAuthService implements AccountAuthService {
     }
 
     @Override
-    public boolean verify(String username, String password) {
+    public Optional<AuthenticatedAccount> verify(String username, String password) {
         if (username == null || password == null) {
-            return false;
+            return Optional.empty();
         }
         String token = cacheToken(username, password);
-        CachedCredential current = cached;
-        if (current != null
-                && clock.instant().isBefore(current.expiresAt())
+        CachedCredential cached = cache.get(username);
+        if (cached != null
+                && clock.instant().isBefore(cached.expiresAt())
                 && MessageDigest.isEqual(
-                        current.token().getBytes(StandardCharsets.US_ASCII),
+                        cached.token().getBytes(StandardCharsets.US_ASCII),
                         token.getBytes(StandardCharsets.US_ASCII))) {
-            return true;
+            return Optional.of(new AuthenticatedAccount(username, cached.role()));
         }
-        Account account = store.findAny().orElse(null);
+        Account account = store.findByUsername(username).orElse(null);
         if (account == null) {
-            return false;
+            return Optional.empty();
         }
-        boolean accepted =
-                username.equals(account.username()) && PasswordHasher.matches(password, account.passwordHash());
-        if (accepted) {
-            cached = new CachedCredential(token, clock.instant().plus(CACHE_TTL));
-        } else {
+        if (!PasswordHasher.matches(password, account.passwordHash())) {
             // 凭证不进日志（ADR-009 语义）
             log.warn("management authentication rejected for username <{}>", username);
+            return Optional.empty();
         }
-        return accepted;
+        // ponytail: 与 invalidate 存在回填竞态（重置/改角色瞬间的并发认证可回填旧凭证/旧角色，
+        // 残留 ≤ TTL 60s；v0.4 单槽实现同款），真需即时硬一致再引入版本化缓存
+        cache.put(
+                username,
+                new CachedCredential(token, account.role(), clock.instant().plus(CACHE_TTL)));
+        return Optional.of(new AuthenticatedAccount(username, account.role()));
     }
 
     @Override
-    public String changePassword(String oldPassword, String newPassword) {
-        if (oldPassword == null || newPassword == null) {
-            throw new IllegalArgumentException("oldPassword and newPassword are required");
+    public String changePassword(String username, String oldPassword, String newPassword) {
+        if (oldPassword == null) {
+            throw new IllegalArgumentException("oldPassword is required");
         }
-        if (newPassword.codePointCount(0, newPassword.length()) < MIN_PASSWORD_LENGTH) {
-            throw new IllegalArgumentException("newPassword must be at least " + MIN_PASSWORD_LENGTH + " characters");
-        }
-        Account account = store.findAny().orElse(null);
-        if (account == null) {
-            throw new IllegalStateException("no account present; seed must run before password change");
-        }
+        requireValidPassword(newPassword);
+        Account account = store.findByUsername(username)
+                .orElseThrow(() ->
+                        new AccountAdminException(AccountAdminException.NOT_FOUND, "account not found: " + username));
         if (!PasswordHasher.matches(oldPassword, account.passwordHash())) {
             throw new IllegalArgumentException("oldPassword does not match");
         }
-        store.updatePasswordHash(account.username(), PasswordHasher.hash(newPassword), clock.instant());
-        cached = null;
-        log.info("management account password changed (username <{}>)", account.username());
-        return account.username();
+        store.updatePasswordHash(username, PasswordHasher.hash(newPassword), clock.instant());
+        invalidate(username);
+        log.info("management account password changed (username <{}>)", username);
+        return username;
+    }
+
+    /** 使指定账户的认证缓存失效（改密/重置/角色变更/删户调用）。 */
+    public void invalidate(String username) {
+        if (username != null) {
+            cache.remove(username);
+        }
     }
 
     /**
      * DB 态首启 seed（ADR-021）：表空时将配置凭证一次性物化——已配置自定义凭证的部署升级
-     * 无缝；表非空永不覆盖（此后配置凭证在 DB 态失效）。
+     * 无缝；表非空永不覆盖（此后配置凭证在 DB 态失效）。seed 账户为 ADMIN（v0.4 单管理员
+     * 升级经 V7 迁移 role 列默认值同语义）。
      */
     public void seedIfAbsent(String configuredUsername, String configuredPassword) {
         if (store.existsAny()) {
@@ -97,18 +108,22 @@ public final class DbAccountAuthService implements AccountAuthService {
             return;
         }
         Instant now = clock.instant();
-        store.insert(new Account(configuredUsername, PasswordHasher.hash(configuredPassword), now, now));
+        store.insert(new Account(configuredUsername, PasswordHasher.hash(configuredPassword), Role.ADMIN, now, now));
         log.warn(
                 "management account seeded from configuration (username <{}>); "
                         + "the account table is the credential source from now on",
                 configuredUsername);
     }
 
-    /** 启动告警用（ADR-009 默认密码检测延续）：给定明文是否为当前账户密码。 */
+    /** 启动告警用（ADR-009 默认密码检测延续）：给定明文是否为任一账户密码。 */
     public boolean passwordInUse(String rawPassword) {
-        return store.findAny()
-                .map(account -> PasswordHasher.matches(rawPassword, account.passwordHash()))
-                .orElse(false);
+        return store.list().stream().anyMatch(account -> PasswordHasher.matches(rawPassword, account.passwordHash()));
+    }
+
+    static void requireValidPassword(String newPassword) {
+        if (newPassword == null || newPassword.codePointCount(0, newPassword.length()) < MIN_PASSWORD_LENGTH) {
+            throw new IllegalArgumentException("newPassword must be at least " + MIN_PASSWORD_LENGTH + " characters");
+        }
     }
 
     /** 缓存键为凭证摘要（不存明文），常量时间比较。 */
