@@ -1051,6 +1051,105 @@ class ManagementServiceImplTest {
         assertThat(service.listRouteRules(null, null, 1)).hasSize(1); // limit 截断
     }
 
+    // ---- canary 预置派生（v0.5 phase-4）----
+
+    @Test
+    void should_derive_canary_targets_when_deploy() {
+        RouteRule deployed = service.deployCanary(SERVICE, Map.of("version", "canary"), 1000, OPERATOR);
+
+        assertThat(deployed.name()).isEqualTo("canary"); // 保留名
+        assertThat(deployed.status()).isEqualTo(RouteRuleStatus.ACTIVE);
+        assertThat(deployed.operator()).isEqualTo(OPERATOR);
+        assertThat(deployed.targets())
+                .extracting(RouteRuleTarget::selector, RouteRuleTarget::weight, RouteRuleTarget::unreleasedWeight)
+                .containsExactly(
+                        tuple(Map.of("version", "canary"), 1000, 1000), // 两列一致 = 已发布态
+                        tuple(Map.of(), 9000, 9000)); // 兜底 = 10000 - weight
+        assertThat(service.getRouteRule(SERVICE, "canary")).isEqualTo(deployed);
+
+        // deploy 即 release：RELEASE 记录快照 = 派生 targets
+        RouteRuleRelease record = service.listReleases(SERVICE, "canary", 10).get(0);
+        assertThat(record.type()).isEqualTo(ReleaseType.RELEASE);
+        assertThat(record.snapshot()).isEqualTo(deployed.targets());
+        assertThat(auditLogs.find("DEPLOY_CANARY", 10)).singleElement().satisfies(log -> {
+            assertThat(log.target()).isEqualTo("route-rule:ns/svc/canary");
+            assertThat(log.detail()).contains("weight=1000", "releaseId=" + record.id());
+        });
+    }
+
+    @Test
+    void should_reject_invalid_canary_requests() {
+        // selector 缺失/空（空 map 是兜底语义，canary 圈定必须非空）
+        assertThatThrownBy(() -> service.deployCanary(SERVICE, null, 1000, OPERATOR))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.deployCanary(SERVICE, Map.of(), 1000, OPERATOR))
+                .isInstanceOf(IllegalArgumentException.class);
+        // weight 越界（0–10000）
+        assertThatThrownBy(() -> service.deployCanary(SERVICE, Map.of("version", "canary"), -1, OPERATOR))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.deployCanary(SERVICE, Map.of("version", "canary"), 10001, OPERATOR))
+                .isInstanceOf(IllegalArgumentException.class);
+        // 边界值合法：0（dark launch）与 10000（全量切流）
+        assertThat(service.deployCanary(SERVICE, Map.of("version", "canary"), 0, OPERATOR)
+                        .targets()
+                        .get(1)
+                        .weight())
+                .isEqualTo(10000);
+        assertThat(service.deployCanary(new ServiceKey("ns", "svc2"), Map.of("version", "canary"), 10000, OPERATOR)
+                        .targets()
+                        .get(1)
+                        .weight())
+                .isZero();
+    }
+
+    @Test
+    void should_reject_reserved_name_when_crud_create_or_update() {
+        assertThatThrownBy(() -> service.createRouteRule(rule("canary", Map.of("version", "canary"), 0, 100), OPERATOR))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reserved");
+
+        assertThatThrownBy(() -> service.updateRouteRule(rule("canary", Map.of("version", "canary"), 0, 100), OPERATOR))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void should_replace_targets_and_append_release_when_redeploy() {
+        service.deployCanary(SERVICE, Map.of("version", "canary"), 1000, OPERATOR);
+        Instant createdAt = service.getRouteRule(SERVICE, "canary").createdAt();
+        clock.set(NOW.plusSeconds(60));
+
+        // 调整权重 + 重圈定（selector 变更，旧组回归兜底承接）
+        RouteRule redeployed = service.deployCanary(SERVICE, Map.of("version", "v2"), 3000, OPERATOR);
+
+        assertThat(redeployed.createdAt()).isEqualTo(createdAt); // 创建事实继承
+        assertThat(redeployed.updatedAt()).isEqualTo(NOW.plusSeconds(60));
+        assertThat(redeployed.targets())
+                .extracting(RouteRuleTarget::selector, RouteRuleTarget::weight)
+                .containsExactly(tuple(Map.of("version", "v2"), 3000), tuple(Map.of(), 7000));
+        assertThat(service.listReleases(SERVICE, "canary", 10)).hasSize(2); // 每次部署一条记录
+        assertThat(service.listReleases(SERVICE, "canary", 10).get(0).snapshot())
+                .isEqualTo(redeployed.targets()); // 最新在前
+    }
+
+    @Test
+    void should_delete_rule_and_keep_releases_when_delete_canary() {
+        service.deployCanary(SERVICE, Map.of("version", "canary"), 1000, OPERATOR);
+
+        service.deleteCanary(SERVICE, OPERATOR);
+
+        assertThatThrownBy(() -> service.getRouteRule(SERVICE, "canary"))
+                .isInstanceOfSatisfying(
+                        RouteRuleException.class, e -> assertThat(e.code()).isEqualTo(RouteRuleException.NOT_FOUND));
+        assertThat(service.listReleases(SERVICE, "canary", 10)).hasSize(1); // 发布记录 append-only 保留
+        assertThat(auditLogs.find("DELETE_CANARY", 10))
+                .singleElement()
+                .satisfies(log -> assertThat(log.target()).isEqualTo("route-rule:ns/svc/canary"));
+
+        // 二次删除幂等 no-op（不追加审计）
+        service.deleteCanary(SERVICE, OPERATOR);
+        assertThat(auditLogs.find("DELETE_CANARY", 10)).hasSize(1);
+    }
+
     private static RouteRule rule(String name, Map<String, String> selector, int weight, int unreleased) {
         return new RouteRule(
                 SERVICE,

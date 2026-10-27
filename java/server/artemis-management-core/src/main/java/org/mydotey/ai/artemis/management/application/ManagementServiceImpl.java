@@ -36,6 +36,7 @@ import org.mydotey.ai.artemis.management.domain.RouteRuleException;
 import org.mydotey.ai.artemis.management.domain.RouteRulePublisher;
 import org.mydotey.ai.artemis.management.domain.RouteRuleRelease;
 import org.mydotey.ai.artemis.management.domain.RouteRuleReleaseStore;
+import org.mydotey.ai.artemis.management.domain.RouteRuleStatus;
 import org.mydotey.ai.artemis.management.domain.RouteRuleStore;
 import org.mydotey.ai.artemis.management.domain.RouteRuleTarget;
 import org.mydotey.ai.artemis.management.domain.RouteRules;
@@ -487,6 +488,79 @@ public final class ManagementServiceImpl implements ManagementService {
                 .sorted(ROUTE_RULE_ORDER)
                 .limit(Math.max(1, limit))
                 .toList();
+    }
+
+    // ---- canary（v0.5 phase-4：route-rule + release 预置派生，架构 §5.2）----
+
+    @Override
+    public RouteRule deployCanary(ServiceKey service, Map<String, String> selector, int weight, String operator) {
+        Map<String, String> canarySelector = selector == null ? Map.of() : selector;
+        // 空 selector 先拒：空 map 在规则域是兜底目标语义，canary 圈定必须非空（validate 放行空 map）
+        if (canarySelector.isEmpty()) {
+            throw new IllegalArgumentException("canary selector required (empty selector is fallback-only)");
+        }
+        // 派生规则：canary 目标 + 兜底目标，两列一致 = 已发布态（deploy 本身就是一次 release，
+        // 落 RELEASE 记录 → 既有 rollback / releases / diff 对 canary 规则直接可用）
+        List<RouteRuleTarget> targets = List.of(
+                new RouteRuleTarget(canarySelector, weight, weight),
+                new RouteRuleTarget(Map.of(), RouteRules.MAX_WEIGHT - weight, RouteRules.MAX_WEIGHT - weight));
+        RouteRules.validate(
+                new RouteRule(
+                        service,
+                        RouteRules.RESERVED_NAME_CANARY,
+                        RouteRuleStatus.ACTIVE,
+                        targets,
+                        operator,
+                        null,
+                        null),
+                true); // 保留名独占：canary 派生通道放行
+        Instant now = clock.instant();
+        RouteRule stored;
+        RouteRuleRelease record;
+        synchronized (routeRuleLock) {
+            RouteRule current = routeRules.find(service, RouteRules.RESERVED_NAME_CANARY);
+            // 全量替换派生 targets（单次构造：createdAt 继承创建事实，首次部署 = now）；
+            // 重圈定（selector 变更）时旧 canary 组自然回归兜底承接
+            stored = new RouteRule(
+                    service,
+                    RouteRules.RESERVED_NAME_CANARY,
+                    RouteRuleStatus.ACTIVE,
+                    targets,
+                    operator,
+                    current == null ? now : current.createdAt(),
+                    now);
+            boolean written = current == null ? routeRules.insert(stored) : routeRules.update(stored);
+            if (!written) {
+                // find 后被并发删除（update）/ insert 撞唯一键（insert）——锁内不可能，防御兜底
+                throw current == null
+                        ? new RouteRuleException(
+                                RouteRuleException.ALREADY_EXISTS,
+                                "route rule exists: " + describe(service, RouteRules.RESERVED_NAME_CANARY))
+                        : notFound(service, RouteRules.RESERVED_NAME_CANARY);
+            }
+            // 生效优先：流与存储一致先于发布记录（append 失败 → 503，重试 deploy 幂等补录；
+            // 两列已一致照常落记录，release 写序同型）
+            notifyRuleChanged(stored);
+            record = releases.append(new RouteRuleRelease(
+                    0, service, RouteRules.RESERVED_NAME_CANARY, ReleaseType.RELEASE, targets, null, operator, now));
+        }
+        audit(
+                "DEPLOY_CANARY",
+                routeRuleTarget(service, RouteRules.RESERVED_NAME_CANARY),
+                operator,
+                "selector=" + canarySelector + " weight=" + weight + " releaseId=" + record.id());
+        return stored;
+    }
+
+    @Override
+    public void deleteCanary(ServiceKey service, String operator) {
+        synchronized (routeRuleLock) {
+            if (!routeRules.delete(service, RouteRules.RESERVED_NAME_CANARY)) {
+                return; // 缺失幂等 no-op（不删除不审计）；发布记录 append-only 保留
+            }
+            routeRulePublisher.onDeleted(service, RouteRules.RESERVED_NAME_CANARY);
+        }
+        audit("DELETE_CANARY", routeRuleTarget(service, RouteRules.RESERVED_NAME_CANARY), operator, null);
     }
 
     private static RouteRuleException notFound(ServiceKey service, String name) {

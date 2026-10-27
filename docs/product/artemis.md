@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.34    更新时间: 2026-10-27
+版本: 1.35    更新时间: 2026-10-27
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -327,9 +327,18 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **纵深防御**：空 targets 规则（上游不变量破坏）视为无治理意图全可见——规则数据损坏不得静默摘除整个服务；多兜底目标取首个生效（确定性降级）。
 - **工程形态**：结构债 #9 收口（ejection/route-rule 两同步器抽 `ManagementRuleSynchronizer` 共享骨架，ejection 既有测试原样通过为安全网）+ #10 收口（两规则流 source 抽 `ManagementRuleChannels` 共享 channel/轮换/认证设施）；零 proto/API/配置变更；code-review 7 findings 全修；17 单测 + 4 IT（三出口一致 / 无兜底摘出 / 回滚还原 / 逻辑实例）。
 
+**v0.5 phase-4（canary 一键用法）已交付**：
+
+- **预置派生（架构 §5.2，不新增独立资源类型）**：`POST /admin/v1/canary/{ns}/{svc}`（body = `selector` + `weight`）一个 API 完成金丝雀部署——management 派生保留名 `canary` 规则（canary 目标 + 兜底目标 `10000 - weight`，两列一致即已发布态，deploy 本身就是一次 release）+ 落 RELEASE 记录 + 规则流下发；`DELETE` 同路径 = 结束灰度（删规则 = 无治理意图 = 全实例回归，幂等；发布记录保留）。金丝雀身份以实例 metadata 表达（ADR-013 世界：部署侧打标，如 `version=canary`——取代原产品 IP 列表绑定，全程零 IP 维护）。见 [admin-api.md](../api/admin-api.md) §4.12。
+- **weight 运维语义**（配 phase-3 二值承接）：0 = 金丝雀实例摘出视图（dark launch）；1–9999 = 两组均可见、比例意图由调用方消费；10000 = 稳定组摘出（全量切流）；中途调整 = 再次 POST（全量替换派生 targets，重圈定时旧组回归兜底）。查询/历史/预览/回滚零新端点——既有 route-rule API 对 `canary` 规则直接可用（`.../route-rules/{ns}/{svc}/canary/*`）。
+- **保留名 `canary` 定稿**（phase-1 留白项）：CRUD 通道 create/update 拒绝（400），canary 通道独占；每服务一组（多组灰度/复杂圈定 = route-rule 手工用法）；与服务既有手工规则叠加时多规则 AND。
+- **工程形态**：proto / discovery / 配置 / store 零变更（canary 规则即普通 ACTIVE route-rule，phase-2 流与 phase-3 Group filter 原样消费——改动全部收敛在 management 两侧块）；`routeRuleLock` 写序对齐 release（生效优先 + 记录幂等补录）；code-review 4 findings 全修（e2e 尾断言真化、文档错误映射表述修正等）；单测 5 + 管理 IT 6 + 端到端 IT 1（canary API 驱动视图切分——roadmap v0.5 验收要点「canary 流量切分」落地）。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
+| ------ | ------ | ------ |
+| 1.35 | 2026-10-27 | v0.5 phase-4 交付：canary 一键用法（selector + weight 派生保留名规则 + 发布 + 下发，DELETE 结束）、weight 运维语义、保留名 canary 定稿、零 proto/discovery 变更 |
 | ------ | ------ | ------ |
 | 1.34 | 2026-10-27 | v0.5 phase-3 交付：Group filter 执行语义（selector 匹配 + 权重二值承接 + 兜底）+ 规则变化视图直投 + 三出口一致 + 结构债 #9/#10 收口；phase-2 节「执行归 phase-3」状态句更新 |
 | 1.33 | 2026-10-27 | v0.5 phase-2 交付：两段状态机（编辑通道收紧）+ release/rollback/diff/releases + RouteRuleService 规则流与 routeRules 水位 + V6 发布记录持久化 |

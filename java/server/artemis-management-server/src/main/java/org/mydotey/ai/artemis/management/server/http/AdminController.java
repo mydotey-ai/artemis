@@ -228,6 +228,33 @@ public final class AdminController {
         managementService.deleteRouteRule(key(namespace, service), name, operator(operator));
     }
 
+    // ---- canary（v0.5 phase-4：route-rule + release 预置派生，一键金丝雀切分）----
+
+    /** canary 一键部署：selector 圈金丝雀实例 + weight（0–10000）承接权重 → 派生保留名 canary
+     *  规则（canary 目标 + 兜底目标）并发布；查询/历史/回滚经既有 route-rule API（规则名 canary）。 */
+    @PostMapping("/canary/{namespace}/{service}")
+    public RouteRuleResponse deployCanary(
+            @PathVariable("namespace") String namespace,
+            @PathVariable("service") String service,
+            @RequestBody(required = false) CanaryRequest request,
+            @RequestAttribute(value = HttpBasicAuthFilter.AUTH_USER_ATTRIBUTE, required = false) String operator) {
+        if (request == null || request.weight() == null) {
+            throw new IllegalArgumentException("selector and weight required");
+        }
+        return toResponse(managementService.deployCanary(
+                key(namespace, service), request.selector(), request.weight(), operator(operator)));
+    }
+
+    /** 结束灰度：删除 canary 规则（无治理意图 = 全实例回归可见），幂等。 */
+    @DeleteMapping("/canary/{namespace}/{service}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteCanary(
+            @PathVariable("namespace") String namespace,
+            @PathVariable("service") String service,
+            @RequestAttribute(value = HttpBasicAuthFilter.AUTH_USER_ATTRIBUTE, required = false) String operator) {
+        managementService.deleteCanary(key(namespace, service), operator(operator));
+    }
+
     // ---- 两段式发布（v0.5 phase-2：release / rollback / diff / 发布记录）----
 
     /** 发布：一个 API 完成灰度运维意图（编辑列拷贝生效列，落 append-only 发布记录）。 */
@@ -532,6 +559,9 @@ public final class AdminController {
 
     /** 回滚请求体：releaseId = 源发布记录 id（回滚历史源）。 */
     public record RollbackRequest(Long releaseId) {}
+
+    /** canary 部署请求体：selector 圈金丝雀实例（非空 metadata 等值）、weight 0–10000 承接权重。 */
+    public record CanaryRequest(Map<String, String> selector, Integer weight) {}
 
     /** 发布差异预览响应：currentWeight/nextWeight null = 该侧无此目标（移除/新增）。 */
     public record ReleaseDiffResponse(

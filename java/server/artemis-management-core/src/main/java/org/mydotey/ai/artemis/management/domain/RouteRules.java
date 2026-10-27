@@ -24,9 +24,17 @@ public final class RouteRules {
     public static final int MAX_SELECTOR_VALUE_LENGTH = 512;
     public static final int MAX_WEIGHT = 10_000;
 
+    /** 保留名：canary 专属规则组（phase-4 预置派生独占，CRUD 通道创建拒绝）。 */
+    public static final String RESERVED_NAME_CANARY = "canary";
+
     private RouteRules() {}
 
     public static void validate(RouteRule rule) {
+        validate(rule, false);
+    }
+
+    /** allowReservedName = canary 派生通道独占保留名（保留名约束是 CRUD 输入约束，非 domain 不变量）。 */
+    public static void validate(RouteRule rule, boolean allowReservedName) {
         if (rule == null) {
             throw new IllegalArgumentException("route rule required");
         }
@@ -39,6 +47,9 @@ public final class RouteRules {
         requireName(rule.name(), "name", MAX_NAME_LENGTH);
         if (!NAME_PATTERN.matcher(rule.name()).matches()) {
             throw new IllegalArgumentException("name must match " + NAME_PATTERN.pattern());
+        }
+        if (!allowReservedName && RESERVED_NAME_CANARY.equals(rule.name())) {
+            throw new IllegalArgumentException("name is reserved: " + RESERVED_NAME_CANARY);
         }
         if (rule.status() == null) {
             throw new IllegalArgumentException("status required");

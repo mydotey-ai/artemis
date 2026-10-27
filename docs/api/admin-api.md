@@ -1,6 +1,6 @@
 # management-service Admin 与状态 API
 
-版本: 1.13    更新时间: 2026-10-26
+版本: 1.14    更新时间: 2026-10-27
 
 > 本文定义 management-service 对外 HTTP API（管理面：实例管理 Admin API、账户 API 与 registry 状态排障面）。有效视图 = registry 只读事实 + management 摘除记录（ADR-016）；registry 不感知摘除。内部 gRPC 查询契约见 [registry-query-api.md](registry-query-api.md)。
 
@@ -248,7 +248,22 @@ Base path：`/admin/v1`
 - 发布记录 `type` = `RELEASE` / `ROLLBACK`（`rollbackTo` 指向源记录 id）；记录 append-only：规则删除不级联删（审计语义），内存态与规则同清零、DB 态持久（重启后回滚仍可用）。
 - 两写边界：规则表生效优先于发布记录——append 失败（503）时规则已生效且流已通知，重试 release 幂等补录记录。
 - 审计：`RELEASE_ROUTE_RULE` / `ROLLBACK_ROUTE_RULE` 摘要行（detail 含发布后权重序列与 `releaseId`/`rollbackTo` 关联）。
-- 规则流下发（ACTIVE 集、版本化 + ack）与 discovery 生效水位见 §6.5；**discovery 执行（selector 过滤）归 phase-3**——当前规则不影响发现结果。
+- 规则流下发（ACTIVE 集、版本化 + ack）与 discovery 生效水位见 §6.5；discovery 执行（Group filter selector 过滤与视图扇出）已于 v0.5 phase-3 交付。
+
+### 4.12 canary 一键部署 `POST /admin/v1/canary/{ns}/{svc}` / `DELETE /admin/v1/canary/{ns}/{svc}`（v0.5 phase-4）
+
+canary = route-rule + release 的预置派生（架构 §5.2「由 management 生成专属规则组并下发，不新增独立资源类型」）：调用方只声明金丝雀实例圈定与承接权重，一个 API 完成部署（派生保留名 `canary` 规则 + 发布记录 + 规则流下发）。
+
+| 端点 | 语义 |
+|---|---|
+| `POST /admin/v1/canary/{namespace}/{service}` | 一键部署：body `{"selector": {...}, "weight": 1000}`——selector（非空 metadata 等值）圈金丝雀实例、weight（0–10000）承接权重；派生规则 targets = canary 目标（`weight = unreleasedWeight = weight`）+ 兜底目标（`10000 - weight`，两列一致即已发布态）；不存在则创建、存在则全量替换（重圈定时旧组回归兜底承接）；每次部署落一条 `RELEASE` 记录（既有 rollback / releases / diff 对 canary 规则直接可用）。200 返回派生后完整规则视图 |
+| `DELETE /admin/v1/canary/{namespace}/{service}` | 结束灰度：删除 canary 规则 = 无治理意图 = 全实例回归可见；幂等（缺失 204 no-op）；发布记录 append-only 保留 |
+
+- **weight 运维语义**（配 phase-3 二值承接）：0 = 金丝雀实例摘出视图（dark launch）；1–9999 = 两组均可见，比例意图（weight : 10000-weight）由调用方消费；10000 = 稳定组摘出（全量切流）。
+- **保留名 `canary`**：CRUD 通道 create/update 拒绝（400 `INVALID_ARGUMENT`，"name is reserved: canary"）；GET / DELETE / release / rollback 等对保留名规则不特判（规则是规则）。
+- 每服务一组 canary；多组灰度 / 复杂圈定用 route-rule 手工用法。与服务既有手工规则叠加时多规则 AND（phase-3 语义）。
+- 回滚到上一权重：复用 `POST /admin/v1/route-rules/{ns}/{svc}/canary/rollback`（§4.11）；查询 / 历史 / 预览同理经既有 route-rule API。
+- 审计：`DEPLOY_CANARY` / `DELETE_CANARY` 摘要行（target = `route-rule:{ns}/{svc}/canary`，detail 含 selector 摘要与 weight、releaseId）。
 
 ## 5. 账户 API（v0.4，ADR-021）
 
@@ -418,7 +433,7 @@ management 启动不依赖 registry 可用；registry 故障时管理面仍可�
 
 ## 8. 已知限制
 
-- 摘除四级与审计已交付（v0.4 phase-3）；逻辑实例已交付（v0.4 phase-4，management 侧服务视图合并逻辑实例归 phase-6 console）；路由规则 CRUD 与持久化已交付（v0.5 phase-1）；两段式发布（release/rollback/diff/releases）与规则流下发 + ack 水位已交付（v0.5 phase-2），**discovery 执行（selector 过滤与视图扇出）归 v0.5 phase-3**（当前规则变化不影响发现结果）；内存态（未配置 DB）仍重启丢失（期 1 设计内行为，配置 DB 即持久化——重启后经流快照重下发恢复）；审批流随 v1.x 按社区需求排期。
+- 摘除四级与审计已交付（v0.4 phase-3）；逻辑实例已交付（v0.4 phase-4，management 侧服务视图合并逻辑实例归 phase-6 console）；路由规则 CRUD 与持久化已交付（v0.5 phase-1）；两段式发布（release/rollback/diff/releases）与规则流下发 + ack 水位已交付（v0.5 phase-2）；分组路由执行（Group filter selector 过滤与视图扇出，三出口一致）已交付（v0.5 phase-3）；canary 一键部署/结束已交付（v0.5 phase-4）；console 管理版（发布/摘除操作、订阅关系视图）归 v0.5 phase-5；内存态（未配置 DB）仍重启丢失（期 1 设计内行为，配置 DB 即持久化——重启后经流快照重下发恢复）；审批流随 v1.x 按社区需求排期。
 - RBAC 随 v1.0；内存态外部 HTTP 单账户凭证（DB 态为单管理员账户表，v0.4）。
 - registry 地址单值、无重试/熔断（v0.2 集群后引入地址列表与容灾）。
 - registry 查询无分页；客户端入站上限 16 MiB，超限返回 502。
@@ -426,6 +441,8 @@ management 启动不依赖 registry 可用；registry 故障时管理面仍可�
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
+| ------ | ------ | ------ |
+| 1.14 | 2026-10-27 | v0.5 phase-4：新增 §4.12 canary 一键部署/结束两端点（派生语义、weight 视图、保留名、rollback 复用）；§4.11 尾注与 §8 边界更新（phase-3 执行已交付、phase-4 canary 已交付，下一边界 phase-5 console） |
 | ------ | ------ | ------ |
 | 1.13 | 2026-10-26 | v0.5 phase-2：§4.10 请求体删 weight（编辑通道收紧，等值重复 400）；新增 §4.11 两段式发布四端点（release/rollback/diff/releases）；§6.5 补 routeRules 水位节；错误表补 `ROUTE_RULE_RELEASE_NOT_FOUND`；§8 边界更新 |
 | 1.12 | 2026-10-26 | v0.5 phase-1：新增路由规则 CRUD（§4.10 五端点，等值选择器 + 两段双权重 + 域约束与审计语义）；错误表补 404/409/503 route-rule 三码；§8 限制补 phase-2/3 边界 |

@@ -1,6 +1,7 @@
 package org.mydotey.ai.artemis.management.application;
 
 import java.util.List;
+import java.util.Map;
 import org.mydotey.ai.artemis.common.governance.EjectionScope;
 import org.mydotey.ai.artemis.management.domain.AuditLog;
 import org.mydotey.ai.artemis.management.domain.ConfigProperty;
@@ -75,6 +76,14 @@ public interface ManagementService {
 
     /** 列表（(namespace, service) 过滤可选，(namespace, service, name) 升序，limit 截断）。 */
     List<RouteRule> listRouteRules(String namespace, String service, int limit);
+
+    /** canary 一键部署（route-rule + release 预置派生，架构 §5.2）：selector 圈金丝雀实例（非空
+     * metadata 等值）、weight 0–10000 承接权重；派生保留名 canary 规则（canary 目标 + 兜底目标
+     * 10000-weight，两列一致即已发布态），推规则流并落 RELEASE 记录（既有 rollback/releases 可用）。 */
+    RouteRule deployCanary(ServiceKey service, Map<String, String> selector, int weight, String operator);
+
+    /** 结束灰度：删除 canary 规则（无治理意图 = 全实例回归可见）；缺失幂等 no-op，发布记录保留。 */
+    void deleteCanary(ServiceKey service, String operator);
 
     LeaseStatus leaseStatus(String namespace, String service);
 

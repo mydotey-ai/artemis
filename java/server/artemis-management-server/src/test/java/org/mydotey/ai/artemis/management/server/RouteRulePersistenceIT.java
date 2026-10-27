@@ -13,7 +13,7 @@ import org.springframework.context.ConfigurableApplicationContext;
 import tools.jackson.databind.JsonNode;
 
 /**
- * 双方言路由规则持久化 IT（v0.5 phase-1 CRUD + phase-2 发布）：DB 态 CRUD 落库、审计
+ * 双方言路由规则持久化 IT（v0.5 phase-1 CRUD + phase-2 发布 + phase-4 canary）：DB 态 CRUD 落库、审计
  * 可查、**跨 management 重启（同 DB 新 context）规则与发布记录保留、重启后回滚仍生效**
  *（plan phase-2 DB 验收要点）。模式同 EjectionPersistenceIT（重启 = 同 DB 新 context）。
  */
@@ -153,6 +153,44 @@ abstract class RouteRulePersistenceIT extends ManagementHttpIT {
             assertThat(restored.get("targets").get(1).get("weight").asInt()).isEqualTo(70);
             assertThat(restored.get("targets").get(1).get("unreleasedWeight").asInt())
                     .isEqualTo(70); // 两列都写回
+        }
+    }
+
+    @Test
+    void should_keep_canary_rule_and_releases_across_management_restart() throws Exception {
+        // canary 预置派生（phase-4）：一键部署落 DB，重启后规则与发布记录保留
+        String canaryService = "canary-restart-service";
+        assertThat(post(
+                                "/admin/v1/canary/" + NAMESPACE + "/" + canaryService,
+                                "{\"selector\":{\"version\":\"canary\"},\"weight\":1000}")
+                        .statusCode())
+                .isEqualTo(200);
+
+        try (ConfigurableApplicationContext restarted = new SpringApplicationBuilder(ArtemisManagementServer.class)
+                .properties(
+                        "server.port=0",
+                        "management.server.port=0",
+                        "spring.datasource.url=" + jdbcUrl(),
+                        "spring.datasource.username=" + jdbcUsername(),
+                        "spring.datasource.password=" + jdbcPassword())
+                .run()) {
+            int restartedPort =
+                    ((WebServerApplicationContext) restarted).getWebServer().getPort();
+            String restartedBase =
+                    "http://localhost:" + restartedPort + "/admin/v1/route-rules/" + NAMESPACE + "/" + canaryService;
+
+            JsonNode rule = json(send(
+                    HttpRequest.newBuilder(URI.create(restartedBase + "/canary"))
+                            .GET(),
+                    true));
+            assertThat(rule.get("targets").get(0).get("weight").asInt()).isEqualTo(1000); // 已发布态保留
+            assertThat(rule.get("targets").get(1).get("weight").asInt()).isEqualTo(9000); // 兜底保留
+
+            JsonNode releases = json(send(
+                    HttpRequest.newBuilder(URI.create(restartedBase + "/canary/releases"))
+                            .GET(),
+                    true));
+            assertThat(releases.get("releases").size()).isEqualTo(1); // deploy 的 RELEASE 记录保留
         }
     }
 
