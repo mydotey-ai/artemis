@@ -11,6 +11,7 @@
 | v0.3 | done | |
 | v0.4 | done | |
 | v0.5 | done | |
+| v1.0 | planned | |
 
 状态枚举：planned | in-progress | acceptance | done（planned = 启动产物已写、基线未提交）。
 
@@ -25,7 +26,9 @@
 >
 > phase-4（canary：route-rule + release 预置派生一键用法）已交付（5f340c1）。
 >
-> v0.5（治理面 II）已收尾（2026-10-27）：五个 phase 全部交付，验收对照见 [plan.md](v0.5/plan.md)。下次 /dev-java 自动进入下一版本启动。
+> v0.5（治理面 II）已收尾（2026-10-27）：五个 phase 全部交付，验收对照见 [plan.md](v0.5/plan.md)。
+>
+> v1.0（GA 生产就绪）于 2026-10-27 启动：plan 已写（8 phase：TLS / RBAC / Docker+VM / Helm / 滚动升级 / 容量压测 / 文档站 / SDK 发布），基线提交后转 in-progress。
 
 ## 当前 phase 步骤进度（版本 done 后清空本节）
 
