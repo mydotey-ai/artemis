@@ -1,6 +1,6 @@
 # v0.5 版本规划
 
-版本: 1.0    更新时间: 2026-10-26
+版本: 1.1    更新时间: 2026-10-27
 
 ## 目标
 
@@ -36,9 +36,14 @@ phase-5 说明：console 管理版操作面全部走既有治理 REST API（不�
 
 | roadmap 验收要点 | 对应测试 | 结果 |
 |---|---|---|
+| 灰度发布端到端（一个 API 完成） | `RouteRuleReleaseIT.should_expose_release_api_contract_over_http`（phase-2：一个 release 调用拷贝编辑列生效 + append-only 发布记录） | 通过 |
+| 回滚生效 | `RouteRuleReleaseIT`（rollback 指向历史记录反向 release，视图还原）+ `DiscoveryGroupRoutingIT`（phase-3：回滚后 discovery 视图还原，三出口一致） | 通过 |
+| canary 流量切分 | `DiscoveryCanaryIT.should_cut_canary_traffic_end_to_end`（phase-4：端到端视图切分，weight 0/部分/10000 三态） | 通过 |
+| （范围项）console 管理版 | `ManagementConsoleOpsIT`（phase-5：操作闭环 5 用例）+ `DiscoveryConsoleSubscriptionsIT`（订阅组合端到端 2 用例） | 通过 |
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-27 | 版本收尾：验收对照表填齐（三验收要点 + console 范围项，全部通过） |
 | 1.0 | 2026-10-26 | 版本启动，初始 phase 拆分（5 phase，滚动细化） |
