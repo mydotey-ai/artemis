@@ -60,4 +60,17 @@ public class AllInOneOptions {
      * 建 SCF manager；测试/嵌入直构 options 时留空即取默认行为。
      */
     String configuredDiscoveryNodes;
+
+    /**
+     * 宿主已配置的 registry 集群成员表（{@code artemis.registry.cluster.members} 原始值；null/blank =
+     * 未配置，launcher 注入单成员自报默认——否则 {@code /cluster/nodes} 无 external 端点、SDK 前置寻址
+     * 得到空列表无法接入）。测试/嵌入直构 options 时留空即取默认行为。
+     */
+    String configuredClusterMembers;
+
+    /**
+     * 宿主已配置的自身节点 id（{@code artemis.registry.cluster.self} 原始值；null/blank = 未配置，
+     * launcher 注入 {@code all-in-one} 默认——覆盖 members 只改端点的常见场景免配第二键；显式配置优先）。
+     */
+    String configuredClusterSelf;
 }

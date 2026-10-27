@@ -47,3 +47,6 @@ docs/plans/
 target/
 # flatten-maven-plugin 生成的解析后 pom（每次 verify 重写，不入库）
 .flattened-pom.xml
+
+# build-dist.sh 打包暂存目录（VM 安装包产物，不入库）
+build/

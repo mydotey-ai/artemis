@@ -70,8 +70,8 @@ abstract class RouteRulePersistenceIT extends ManagementHttpIT {
         // 按本用例 target 过滤断言，不依赖方法执行顺序
         JsonNode audits = json(get("/admin/v1/audit-logs?operation=UPDATE_ROUTE_RULE&limit=50"));
         assertThat(java.util.stream.StreamSupport.stream(audits.get("logs").spliterator(), false)
-                        .filter(log -> log.get("target").asText()
-                                .equals("route-rule:" + NAMESPACE + "/" + SERVICE + "/beta")))
+                        .filter(log ->
+                                log.get("target").asText().equals("route-rule:" + NAMESPACE + "/" + SERVICE + "/beta")))
                 .singleElement()
                 .satisfies(log -> assertThat(log.get("operator").asText()).isEqualTo("artemis"));
         JsonNode created = json(get("/admin/v1/audit-logs?operation=CREATE_ROUTE_RULE&limit=10"));

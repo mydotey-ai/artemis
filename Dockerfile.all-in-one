@@ -1,0 +1,24 @@
+# all-in-one 单机容器镜像（v1.0 部署形态 I；eval 最短路径，一条 docker run 起全功能三服务）。
+# 与根 Dockerfile（registry 单服务镜像）并列：docker build -f Dockerfile.all-in-one -t artemis-all-in-one:local .
+# 多阶段自包含（同根 Dockerfile 模式）：构建不依赖宿主预构建。
+# 配置出口与端口语义见 docs/api/all-in-one.md（env relaxed 映射 / 工作目录 artemis.properties / SPRING_DATASOURCE_*）。
+
+FROM maven:3.9-eclipse-temurin-25 AS build
+WORKDIR /src
+COPY java ./java
+COPY proto ./proto
+# -DskipTests（非 maven.test.skip）：registry-server 依赖 registry-core 的 test-jar 测试设施，
+# 跳过 test-compile 会让该 artifact 不产出，依赖解析失败
+RUN mvn -B -f java/pom.xml -pl :artemis-dist -am package -DskipTests
+
+FROM eclipse-temurin:25-jre
+WORKDIR /app
+RUN useradd --system --uid 10001 --create-home artemis
+COPY --from=build /src/java/server/artemis-dist/target/artemis-dist-*-exec.jar /app/app.jar
+# registry 快照 data/registry-snapshot.bin 相对工作目录（卷挂 /app/data 持久化）
+RUN mkdir -p /app/data && chown -R artemis:artemis /app
+USER artemis
+# 对外业务端口（HTTP 8080/8081/8090 + gRPC 9090/9094/9095）；peer 9093 与三个管理端口绑
+# loopback 不 EXPOSE（管理端口经 docker exec 访问，见 docs/deploy/docker.md）
+EXPOSE 8080 8081 8090 9090 9094 9095
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]

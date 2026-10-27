@@ -7,6 +7,8 @@ on:
       - 'java/**'
       - 'proto/**'
       - 'Dockerfile'
+      - 'Dockerfile.all-in-one'
+      - 'deploy/**'
       - '.dockerignore'
       - '.github/workflows/**'
   pull_request:
@@ -14,6 +16,8 @@ on:
       - 'java/**'
       - 'proto/**'
       - 'Dockerfile'
+      - 'Dockerfile.all-in-one'
+      - 'deploy/**'
       - '.dockerignore'
       - '.github/workflows/**'
 
@@ -59,3 +63,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build registry image
         run: docker build -t artemis-registry-server:ci .
+      - name: Build all-in-one image
+        run: docker build -f Dockerfile.all-in-one -t artemis-all-in-one:ci .

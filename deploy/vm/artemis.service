@@ -1,0 +1,24 @@
+# Artemis all-in-one systemd unit 模板：app.sh install 时以实际安装路径替换 __APP_HOME__
+# 后写入 /etc/systemd/system/artemis.service。专用运行账户取消下行注释（先建账户并 chown 安装目录）：
+# User=artemis
+# Group=artemis
+
+[Unit]
+Description=Artemis registry/discovery/management all-in-one
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__APP_HOME__
+ExecStart=__APP_HOME__/bin/app.sh run
+Restart=on-failure
+RestartSec=5
+# 优雅停机（discovery -> management -> registry，含排水窗口）等待上限，与 app.sh stop 对齐
+TimeoutStopSec=90
+LimitNOFILE=65536
+# JVM 参数经此注入（堆大小按机器规格调整）：
+# Environment=JAVA_OPTS=-Xms512m -Xmx2g
+
+[Install]
+WantedBy=multi-user.target

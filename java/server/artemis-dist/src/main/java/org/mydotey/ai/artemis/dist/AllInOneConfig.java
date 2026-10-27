@@ -60,6 +60,19 @@ public final class AllInOneConfig {
                                 null,
                                 "discovery node directory (launcher injects loopback default only when unset)")
                         .getValue())
+                .configuredClusterMembers(ScfProperties.staticString(
+                                properties,
+                                "artemis.registry.cluster.members",
+                                null,
+                                "registry cluster members (launcher injects single-member self-report default"
+                                        + " only when unset)")
+                        .getValue())
+                .configuredClusterSelf(ScfProperties.staticString(
+                                properties,
+                                "artemis.registry.cluster.self",
+                                null,
+                                "registry cluster self node id (launcher injects default when unset)")
+                        .getValue())
                 .build();
     }
 

@@ -126,14 +126,33 @@ public final class ArtemisAllInOneServer {
     }
 
     private static List<String> registryArgs(AllInOneOptions options) {
-        return List.of(
+        List<String> args = new ArrayList<>(List.of(
                 "--spring.config.name=artemis-all-in-one-registry",
                 "--spring.grpc.server.port=" + options.getRegistryGrpcPort(),
                 "--server.port=" + options.getRegistryHttpPort(),
                 "--management.server.port=" + options.getRegistryManagementPort(),
                 // all-in-one 的 registry 内部端口只被同进程 management/discovery 消费，绑 loopback 即可
                 "--artemis.registry.internal.port=" + options.getRegistryPeerPort(),
-                "--artemis.registry.internal.address=127.0.0.1");
+                "--artemis.registry.internal.address=127.0.0.1"));
+        // 单成员自报（phase-3 部署形态缺口补全）：未配置 members 时 /cluster/nodes 无 external 端点，
+        // SDK 前置寻址得到空节点列表无法接入（单节点 = 1 成员集群，无特殊分支）；显式配置优先，
+        // 外部端点默认 loopback（eval/VM 同机），跨机接入经 env/properties 覆盖 members。
+        // grpc 端口 0（随机，测试/嵌入直构）无确定端点可自报，不注入（含 self——成员表为空时
+        // self 必须缺省，成对注入成对跳过）
+        String configuredMembers = options.getConfiguredClusterMembers();
+        String configuredSelf = options.getConfiguredClusterSelf();
+        if (options.getRegistryGrpcPort() > 0) {
+            if (configuredMembers == null || configuredMembers.isBlank()) {
+                args.add("--artemis.registry.cluster.members=all-in-one@127.0.0.1:" + options.getRegistryPeerPort()
+                        + "@127.0.0.1:" + options.getRegistryGrpcPort());
+            }
+            // self 默认独立注入（显式配置优先）：覆盖 members 只改端点的场景免配第二键（成员表非空时
+            // self 必填，缺省即启动失败）；自定义 members 不含 all-in-one 时 fail-fast 报 nodeId 不匹配
+            if (configuredSelf == null || configuredSelf.isBlank()) {
+                args.add("--artemis.registry.cluster.self=all-in-one");
+            }
+        }
+        return args;
     }
 
     private static List<String> managementArgs(AllInOneOptions options, int peerPort) {

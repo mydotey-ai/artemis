@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.38    更新时间: 2026-10-27
+版本: 1.39    更新时间: 2026-10-28
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -357,10 +357,19 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **ADR-021 委托定案**：各服务管理面对 management 账户的认证委托**继续后置 v1.x**——RBAC 资源全部位于 management 本地管理访问面，registry 零依赖资产与 failover 代价的否决理由依然成立；mTLS 客户端证书校验随委托一并评估（ADR-021 v1.1）。
 - **工程形态**：单测 176（management-core 133 + server 43，含权限矩阵全笛卡尔积、路由登记、缓存失效、保护规则）+ 双方言 Docker IT（`RbacIT` 4/4×2：seed 角色/矩阵允许拒绝/401 分层/审计；内存态 `UserAdminMemoryModeIT`）；code-review 2 low 接受并注释（最后 ADMIN check-then-act 竞态、缓存回填竞态 ≤60s——已知限制见 [admin-api.md](../api/admin-api.md) §8）；另修复 `RouteRulePersistenceIT` 既有审计断言顺序依赖。
 
+**v1.0 phase-3（部署形态 I：Docker + VM）已交付**：
+
+- **Docker all-in-one 镜像**：根 `Dockerfile.all-in-one`（多阶段自包含，与 registry 单服务镜像并列；CI docker job 双镜像构建）——一条 `docker run` 起全功能三服务（对外六端口：registry 8080/9090、management 8081/9094、discovery 8090/9095；peer 与管理端口 loopback 不外暴）；配置外置零新机制（SCF env relaxed 映射 / 挂载工作目录 `artemis.properties` / `SPRING_DATASOURCE_*` 双轨）。
+- **VM 标准安装包**：`deploy/vm/` 模板仓内化（`bin/app.sh` 九命令运维脚本 + `artemis.service` unit + 全注释 `artemis.properties`）+ `java/scripts/build-dist.sh` 出 `artemis-<version>.tar.gz`；`app.sh install` 一键 systemd 托管（journalctl 日志、优雅停机与 unit `TimeoutStopSec` 对齐）。配置文件置包根（SCF 工作目录语义零特判），无 logs/ 目录（stdout → journal）。
+- **all-in-one 成员自报补全**（实现期发现的 SDK 可接入性缺口）：launcher 在未配置时默认注入 `cluster.members`（单成员，external 端点 `127.0.0.1:<grpcPort>`）与 `cluster.self`（独立注入、显式配置优先）——此前 `/cluster/nodes` 无 external 端点，SDK 前置寻址（ADR-020）空列表无法接入。跨机/容器端口映射接入经 env 覆盖 members（见 [all-in-one.md](../api/all-in-one.md) v2.3）。
+- **部署冒烟**：`java/scripts/smoke-deploy.sh [docker|vm|all]`（独立于 dev-test.sh 的非 mvn 形态）——起服 + 端口就绪 + console 默认认证 401 + **SDK 走通**（single-file harness：注册 + 订阅发现断言）；端口映射场景以 `ARTEMIS_REGISTRY_CLUSTER_MEMBERS`/`ARTEMIS_DISCOVERY_NODES` 覆盖宿主端点。
+- **文档**：`docs/deploy/`（docker.md / vm.md，phase-4 Helm 与 phase-6 容量基线随交付补入）。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.39 | 2026-10-28 | v1.0 phase-3 交付：部署形态 I（Docker all-in-one 镜像 + VM tar.gz/systemd 安装包 + 冒烟脚本 + all-in-one 成员自报补全 + docs/deploy/） |
 | 1.38 | 2026-10-27 | v1.0 phase-2 交付：RBAC（三预置角色矩阵、/admin/v1 enforcement、多账户用户管理、ADR-021 委托定案后置 v1.x） |
 | 1.37 | 2026-10-27 | v1.0 phase-1 交付：TLS 传输安全（内外通道可启、Spring bundle/SCF 键分界、SDK gRPC+https 同锚、默认明文不变） |
 | 1.36 | 2026-10-27 | v0.5 phase-5 交付：console 管理版（操作面零新端点 + 订阅关系组合视图 + 审计/保护态页面 + all-in-one 订阅源注入）；v0.4 phase-6 操作面状态句更新 |

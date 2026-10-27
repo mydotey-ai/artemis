@@ -4,4 +4,5 @@
 |---|---|---|
 | phase-1-tls | [phase-1-tls.md](phase-1-tls.md) | [phase-1-tls-test.md](phase-1-tls-test.md) |
 | phase-2-rbac | [phase-2-rbac.md](phase-2-rbac.md) | [phase-2-rbac-test.md](phase-2-rbac-test.md) |
+| phase-3-docker-vm | [phase-3-docker-vm.md](phase-3-docker-vm.md) | [phase-3-docker-vm-test.md](phase-3-docker-vm-test.md) |
 
