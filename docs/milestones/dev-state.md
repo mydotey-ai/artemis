@@ -19,9 +19,9 @@
 
 | 项 | 值 |
 |---|---|
-| phase | phase-6-capacity |
-| 步骤 | worktree 开工 |
-| 分支 / worktree | v1.0-phase6-capacity @ .claude/worktrees/v1.0-phase6-capacity |
+| phase | — |
+| 步骤 | — |
+| 分支 / worktree | — |
 
 > v0.1–v0.4 已收尾（验收对照见各 `plan.md`）。v0.5（治理面 II）于 2026-10-26 启动，基线 c87dc2a 已提交。phase-1（route-rule 资源模型与持久化）已交付（e961ebb）。phase-2（两段式权重发布与回滚）已交付。
 >
@@ -40,22 +40,24 @@
 > phase-6（容量验证：artemis-bench + bench.sh + /bench-java-test + 容量基线 small 实测/外推；表外发现 3 节点订阅推送实时性退化）已交付（本 squash）。
 >
 > phase-5（滚动升级协议验证：proto 兼容契约门槛进 dev-test.sh all/CI + 未知字段前向兼容 IT + 3 节点滚动重启 IT；锚点 = 版本收尾 commit、ci fetch-depth 0）已交付（本 squash）。
+>
+> phase-7（文档站：快速开始/配置参考/运维手册 + README 门户 + 告警示例三件套 + check-docs.sh 守门与 docs.yml CI；修复 phase-3 smoke env 拼写空转假绿与 4 处存量断链）已交付（本 squash）。
 
 ## 当前 phase 步骤进度（版本 done 后清空本节）
 
 | 步骤 | 状态 | 备注 |
 |---|---|---|
-| worktree 开工 | pending | |
-| 上下文加载 | pending |
-| 设计 | pending |
-| 实现 | pending |
-| 测试 | pending |
-| code-review | pending |
-| fix | pending |
-| 回归测试 | pending |
-| 验证 | pending |
-| 文档同步 | pending |
-| 完工 | pending |
+| worktree 开工 | done | 分支 v1.0-phase7-docs 自基线 ca5de53 起；骨架与索引已登记 | |
+| 上下文加载 | done | 已读：roadmap §3 v1.0、架构 §2.2/§2.3/§6/§7、tech-java.md（全文）、guidelines §7/§10、plan v1.0、docs 目录现状盘点（deploy/api/product/README）、ci.yml、smoke-deploy.sh、代码指标名与 SCF 键枚举；proto/legacy 不涉及 |
+| 设计 | done | review 通过（2026-10-28 用户确认） | |
+| 实现 | done | 交付：quick-start/config-reference/operations 三文档、deploy/alerts 三件套、README 门户、check-docs.sh、docs.yml；附带修 4 处存量断链、smoke env 用例拼写与空转断言、docker.md 同款拼写 |
+| 测试 | done | ⑤ 首跑四检查全绿：dev-test all（25:18 + proto 5/5）、check-docs all（204 文件）、smoke docker（ALL PASS，env 覆盖实证） |
+| code-review | done | 内置 code-review skill（max）：15 findings（14 CONFIRMED / 1 PLAUSIBLE），chat 已呈现 |
+| fix | done | 14 条修复 + 1 条 sudo 消除；记录入 phase 文档「实现结果」 |
+| 回归测试 | done | ⑧ 两检查全绿：smoke docker（env HTTP 断言实证 401）+ dev-test all（20:48 + proto 5/5） |
+| 验证 | done | 自动化四项 + 人工验证均通过（2026-10-29 用户确认），记入测试文档验证记录 |
+| 文档同步 | done | 产品文档 artemis.md 1.43（交付节 + 快速开始指路）必含项已落；三索引 + project.md CI 行；清单入 phase 文档；CLAUDE.md/arch 无需更新；check-docs 终检绿 |
+| 完工 | done | squash 收尾完成 |
 
 步骤状态枚举：pending | in-progress | done | skipped。
 
@@ -69,5 +71,5 @@
 | phase-4-helm | done |
 | phase-5-rolling-upgrade | done |
 | phase-6-capacity | done |
-| phase-7-docs | planned |
+| phase-7-docs | done |
 | phase-8-release | planned |

@@ -35,7 +35,7 @@ docker run -d --name artemis \
 
 配置出口与裸跑 fat jar 完全一致（零新增机制），按优先级系统属性 > 环境变量 > 工作目录 `artemis.properties`：
 
-1. **环境变量**（SCF relaxed 映射，camel 键转 `_` 大写）：`-e ARTHEMIS_DIST_REGISTRY_HTTP_PORT=18080` 覆盖组合端口；`-e ARTEMIS_REGISTRY_AUTH_PASSWORD=...` 改认证；`-e SPRING_DATASOURCE_URL=...` 接 DB（仅 management 消费，见 all-in-one 文档「DB 双轨」）。
+1. **环境变量**（SCF relaxed 映射，camel 键转 `_` 大写）：`-e ARTEMIS_DIST_REGISTRY_HTTP_PORT=18080` 覆盖组合端口；`-e ARTEMIS_REGISTRY_AUTH_PASSWORD=...` 改认证；`-e SPRING_DATASOURCE_URL=...` 接 DB（仅 management 消费，见 all-in-one 文档「DB 双轨」）。
 2. **挂载工作目录配置文件**：`-v $PWD/artemis.properties:/app/artemis.properties:ro`（模板见 [deploy/vm/artemis.properties](../../deploy/vm/artemis.properties)）。
 3. **数据持久化**：registry 快照在 `/app/data`（卷挂 `-v artemis-data:/app/data`）。
 

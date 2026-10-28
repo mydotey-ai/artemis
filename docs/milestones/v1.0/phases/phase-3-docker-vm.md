@@ -55,7 +55,7 @@ Docker 单机容器（all-in-one 一条命令起全功能，eval 最短路径）
 
 **配置外置**（all-in-one 既有配置出口零新增机制，见 [docs/api/all-in-one.md](../../../api/all-in-one.md)）：
 
-1. **环境变量**：SCF relaxed 映射（`artemis.dist.registry.httpPort` → `ARTHEMIS_DIST_REGISTRY_HTTP_PORT`，camel 转 `_` 大写）覆盖组合端口与业务键；`SPRING_DATASOURCE_URL` 等标准键接 DB（仅 management 上下文消费）。
+1. **环境变量**：SCF relaxed 映射（`artemis.dist.registry.httpPort` → `ARTEMIS_DIST_REGISTRY_HTTP_PORT`，camel 转 `_` 大写）覆盖组合端口与业务键；`SPRING_DATASOURCE_URL` 等标准键接 DB（仅 management 上下文消费）。
 2. **挂载工作目录文件**：`-v $PWD/artemis.properties:/app/artemis.properties:ro`（工作目录 `artemis.properties` 是 all-in-one 既有 SCF source）。
 3. **数据持久化**：`-v artemis-data:/app/data`。
 

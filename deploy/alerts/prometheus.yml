@@ -1,0 +1,29 @@
+# Prometheus 接入示例：三服务 actuator management 端口（指标为 Micrometer Prometheus 格式）。
+# management 端口默认仅绑本机（各服务 application.properties：management.server.address=127.0.0.1）——
+# 监控部署须显式改 management.server.address（或 K8s Pod 网络内直连）并以网络策略保护该端口。
+# 加载校验：promtool check config prometheus.yml（CI 经 java/scripts/check-docs.sh）。
+global:
+  scrape_interval: 15s
+
+rule_files:
+  - rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+scrape_configs:
+  # job 名 artemis-.* 与 rules.yml 的 ArtemisTargetDown 匹配；targets 换为实际节点列表
+  - job_name: artemis-registry
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['registry-1:9091', 'registry-2:9091', 'registry-3:9091']
+  - job_name: artemis-discovery
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['discovery-1:9096']
+  - job_name: artemis-management
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['management-1:9092']

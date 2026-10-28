@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.42    更新时间: 2026-10-28
+版本: 1.43    更新时间: 2026-10-29
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -21,6 +21,7 @@
 数据模型与操作语义以仓库顶层 `proto/` 契约（单一来源：[proto 契约规范](../dev/proto-contract.md)）为准；本版契约的设计细节见 [phase-1 设计文档](../milestones/v0.1/phases/phase-1-scaffold.md)。
 
 ## 3. 开发者入口
+新用户从 [快速开始](quick-start.md) 进入（10 分钟注册 + 发现闭环）；本节面向仓库开发者。
 
 ### 仓库结构
 
@@ -389,10 +390,18 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **表外新发现 2 条**（压测核心产出）：3 节点拓扑订阅推送实时性退化（观察率 37%、延迟分钟级靠对账兜底，单拓扑 p95=7ms 对照——机制排查后置 v1.x）；RENEW 组批合并使复制流量低于线性外推。
 - **出数口径降级**：large 档（10 万）本机预检不可行（预算 14.1G > 可用），按设计以 small 实测 + 外推出数，10 万直测复现命令随基线文档（需 ≥16C/32G 独立机）。
 
+**v1.0 phase-7（文档站）已交付**：
+
+- **四类文档**：[快速开始](quick-start.md)（10 分钟注册 + 发现闭环，命令与 smoke-deploy.sh docker 同源）、[配置参考](../deploy/config-reference.md)（三服务 + all-in-one 全量配置键，键与默认值从代码穷举）、[API 参考](../api/README.md)（既有 14 文档聚合，门户直链）、[运维手册](../deploy/operations.md)（启停升级/监控接入/告警处置表/排障路径/数据恢复）；根 README 门户化。
+- **告警示例**（`deploy/alerts/`，arch §6 承诺兑现）：Prometheus 规则 7 条（节点失联双视角 critical ×2、保护态双级 warning ×2、复制/bootstrap 机械健康 ×3，counter 带 `_total` 后缀）+ scrape 配置 + Alertmanager 路由桩；`ArtemisNodePeersLost` 单节点部署需移除（peers.up 恒 0）已在文件与手册注明。
+- **文档守门**：`java/scripts/check-docs.sh`（markdown 相对链接存在性——含未跟踪文件；告警配置可加载性——promtool/amtool 真校验，缺失退化为行级形状断言）+ 独立 CI workflow [docs.yml](../../.github/workflows/docs.yml)（按路径触发不连带语言 job）。
+- **存量缺陷修复**：smoke docker env 覆盖用例变量名拼错（`ARTHEMIS_DIST_*`）+ TCP 探测空转（docker userland-proxy 对未监听端口也接受连接）→ 正确拼写 + HTTP 语义断言（匿名 `/cluster/nodes` 401）；4 处存量断链；code-review 15 findings 全处置。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.43 | 2026-10-29 | v1.0 phase-7 交付：文档站（快速开始/配置参考/运维手册/README 门户）+ 告警示例三件套 + check-docs.sh 与 docs CI；smoke env 假绿缺陷修复 |
 | 1.42 | 2026-10-28 | v1.0 phase-6：压测工具（artemis-bench + bench.sh）与容量基线交付（small 实测 + 外推口径 + 预判对照），表外新发现 2 条 |
 | 1.41 | 2026-10-28 | v1.0 phase-5 交付：滚动升级协议验证（proto 兼容契约门槛进 dev-test.sh all/CI + 前向兼容 IT + 3 节点滚动重启 IT）；构建注释同步 |
 | 1.40 | 2026-10-28 | v1.0 phase-4 交付：部署形态 II（K8s/Helm chart 三服务独立编排 + 三单服务镜像 + 探针 + DB 可选 + 冒烟与 CI 渲染断言） |

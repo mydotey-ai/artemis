@@ -1,0 +1,78 @@
+# Artemis 告警规则示例（架构 §6：告警走 Prometheus + Alertmanager 生态，不自建）
+# 指标名 = Micrometer Prometheus 格式（`.` → `_`，counter 带 `_total` 后缀）；指标清单见架构 §6 metrics 行。
+# 每条规则的含义与处置路径见 docs/deploy/operations.md「告警规则与处置」。
+# 加载校验：promtool check rules rules.yml（CI 经 java/scripts/check-docs.sh）。
+groups:
+  - name: artemis
+    rules:
+      # 节点失联（scrape 视角）：进程退出 / 网络不通 / management 端口未暴露
+      - alert: ArtemisTargetDown
+        expr: up{job=~"artemis-.*"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Artemis 节点失联（scrape）：{{ $labels.instance }}"
+          description: "Prometheus 连续 2 分钟拉不到 {{ $labels.job }}/{{ $labels.instance }} 的 metrics。"
+
+      # 节点失联（集群视角）：节点存活但与全部 peer 断联（复制不进不出，等价于脑裂单点）。
+      # 仅多节点集群适用：单节点 all-in-one 无 peer（peers.up 恒 0），部署时移除本条或按规模改阈值
+      # （如 3 节点集群阈值 1：与多数成员断联即告警）。
+      - alert: ArtemisNodePeersLost
+        expr: artemis_registry_cluster_peers_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Artemis 节点与全部 peer 断联：{{ $labels.instance }}"
+          description: "cluster.peers.up 连续 2 分钟为 0——复制/成员探测全断，检查 peer 端口 9093 连通性与内部认证配置。"
+
+      # 保护态触发（节点级）：15 秒内心跳续约数低于 15s 前峰值的 factor（默认 0.85）且实例数 ≥ minCount
+      - alert: ArtemisNodeSelfProtection
+        expr: artemis_registry_self_protection > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Artemis 节点级自我保护触发：{{ $labels.instance }}"
+          description: "心跳续约率跌破阈值（factor），节点已停止过期摘除。排查：是大规模实例真实下线（发布/故障），还是网络/客户端心跳异常。"
+
+      # 保护态触发（服务级）：某 namespace/service 退出保护窗口，暂停该服务过期摘除
+      - alert: ArtemisServiceProtection
+        expr: artemis_registry_self_service_protection_count > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Artemis 服务级保护态出现（{{ $value }} 个服务）"
+          description: "单个服务心跳跌幅超阈值进入保护。排查该服务实例（发布批量重启 / 网络分区 / SDK 心跳线程异常），恢复后自动退出。"
+
+      # 复制批发送失败：对端不可达/未就绪，重试耗尽计失败
+      - alert: ArtemisReplicationFailing
+        expr: increase(artemis_registry_replication_batches_failed_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Artemis 复制批发送失败：{{ $labels.instance }}"
+          description: "10 分钟内出现复制批失败——对端 peer 不可达或持续未就绪。结合 ArtemisNodePeersLost / ArtemisTargetDown 定位对端。"
+
+      # 复制批丢弃：对端拒绝（未就绪）且重试队列满，数据丢失（依赖对端 bootstrap 补齐）
+      - alert: ArtemisReplicationDropped
+        expr: increase(artemis_registry_replication_batches_dropped_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Artemis 复制批丢弃：{{ $labels.instance }}"
+          description: "复制重试队列满触发丢弃，节点间数据暂时漂移（AP 语义，由 bootstrap 兜底）。排查对端为何长期拒绝（未就绪/重启循环）。"
+
+      # bootstrap 反复失败：新起/重启示例数据同步不上来
+      - alert: ArtemisBootstrapFailing
+        expr: increase(artemis_registry_bootstrap_failures_total[30m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Artemis 节点 bootstrap 失败：{{ $labels.instance }}"
+          description: "30 分钟内 bootstrap 尝试失败——从 peer 拉全量快照不成功，节点以空/旧数据运行。检查 peer 端口连通性与快照分片配置。"

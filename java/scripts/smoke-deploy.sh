@@ -160,7 +160,7 @@ probe_unauthorized() { # url label —— 默认认证开启，匿名访问预�
 # ============================== docker 模式 ==============================
 
 smoke_docker() {
-    require_tools docker java mvn
+    require_tools docker java mvn curl
     log "building all-in-one image ($SMOKE_IMAGE)"
     (cd "$REPO_ROOT" && docker build -f Dockerfile.all-in-one -t "$SMOKE_IMAGE" .)
 
@@ -186,16 +186,31 @@ smoke_docker() {
     probe_unauthorized "http://127.0.0.1:$DOCKER_MGT_HTTP/" "console anonymous"
     run_sdk "http://127.0.0.1:$DOCKER_REG_HTTP" "http://127.0.0.1:$DOCKER_DISC_HTTP" "docker container"
 
-    # env 覆盖用例：ARTHEMIS_DIST_REGISTRY_HTTP_PORT 生效（容器内 http 起在改后端口）
+    # env 覆盖用例：ARTEMIS_DIST_REGISTRY_HTTP_PORT 生效（SCF relaxed 映射 artemis.dist.registry.httpPort）。
+    # 生效断言用 HTTP 语义探测（匿名 /cluster/nodes 预期 401）而非纯 TCP——docker userland-proxy
+    # 对容器内未监听端口也接受宿主连接，纯 TCP 探测在 env 未生效时会假绿（v1.0 phase-7 修正：
+    # 原用例拼错变量名 ARTHEMIS_* 且仅 TCP 探测，env 从未生效却一直「绿」）
     local env_container="artemis-smoke-env-$RANDOM"
     DOCKER_CONTAINERS+=("$env_container")
-    log "env override case: ARTHEMIS_DIST_REGISTRY_HTTP_PORT=$ENV_CASE_HTTP"
+    log "env override case: ARTEMIS_DIST_REGISTRY_HTTP_PORT=$ENV_CASE_HTTP"
     docker run -d --name "$env_container" \
-        -e "ARTHEMIS_DIST_REGISTRY_HTTP_PORT=$ENV_CASE_HTTP" \
+        -e "ARTEMIS_DIST_REGISTRY_HTTP_PORT=$ENV_CASE_HTTP" \
         -p "$ENV_CASE_HTTP:$ENV_CASE_HTTP" \
         "$SMOKE_IMAGE" >/dev/null
     wait_container_started "$env_container" 300
-    wait_tcp 127.0.0.1 "$ENV_CASE_HTTP" 30 "registry HTTP (env-overridden)"
+    # 401 = registry HTTP 真服务在覆盖端口（默认认证拒绝匿名）；503/000 = readiness 未就绪，重试等待
+    local code=""
+    for _ in $(seq 1 30); do
+        code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$ENV_CASE_HTTP/cluster/nodes" || echo 000)"
+        [ "$code" = "401" ] && break
+        { [ "$code" = "503" ] || [ "$code" = "000" ]; } || fail "env-overridden registry HTTP: unexpected code $code"
+        sleep 1
+    done
+    if [ "$code" != "401" ]; then
+        docker logs --tail 20 "$env_container" >&2 || true
+        fail "env override not applied (registry HTTP not serving on $ENV_CASE_HTTP, last code $code)"
+    fi
+    log "env override verified: registry HTTP serving on $ENV_CASE_HTTP (401 default auth)"
     cleanup_containers
     log "PASS: docker mode"
 }

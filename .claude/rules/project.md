@@ -10,7 +10,7 @@
 
 - 单 monorepo，顶层按语言分目录：`proto/`（契约）、`java/`（Maven reactor）、`rust/`（v1.x Cargo workspace）、`go/` 等按需。一种语言一个顶层目录，该语言的服务端与 SDK 同目录；根目录不放聚合构建文件，各语言构建入口在各自目录（Java 为 `mvn -f java/pom.xml`）。
 - `proto/` 是语言无关纯目录：不属于任何构建体系（非 Maven 模块）、不产 artifact，契约版本跟仓库 git tag 走；各语言实现从 .proto 文件各自生成代码，组织、wire 兼容规则与变更流程见 `docs/dev/proto-contract.md`（跨语言单一来源）。
-- CI 按路径触发：`java/**` 跑 Java job、`rust/**` 跑 Rust job；`proto/**` 变更触发全量（全量已含各语言 job，不重复单独触发）。
+- CI 按路径触发：`java/**` 跑 Java job、`rust/**` 跑 Rust job；`proto/**` 变更触发全量（全量已含各语言 job，不重复单独触发）；`docs/**`、`README.md`、`deploy/alerts/**` 变更触发 docs job（链接与告警示例校验，独立 workflow 不连带语言 job）。
 
 ## 文档多语言组织
 

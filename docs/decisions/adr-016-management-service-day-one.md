@@ -8,7 +8,7 @@ Accepted（2026-10-18 v0.1 phase-5 设计 review 中用户定案）
 
 ## 背景
 
-原方案（[路线图](../../product/artemis-next-roadmap.md) 初版、[架构](../arch/artemis-next-architecture.md) §5.1、[plan](../milestones/v0.1/plan.md) 原 phase-5）把治理期 1 前半的实例管理 Admin API 与状态 API 放在 registry 进程内：摘除记录由 registry 内存持有、查询出口过滤；management-service 到 v0.4 才交付（DB、账户、审计、四级摘除）。review 判定该切分有问题：
+原方案（[路线图](../product/artemis-next-roadmap.md) 初版、[架构](../arch/artemis-next-architecture.md) §5.1、[plan](../milestones/v0.1/plan.md) 原 phase-5）把治理期 1 前半的实例管理 Admin API 与状态 API 放在 registry 进程内：摘除记录由 registry 内存持有、查询出口过滤；management-service 到 v0.4 才交付（DB、账户、审计、四级摘除）。review 判定该切分有问题：
 
 - 管理面状态（摘除记录）与数据面临时注册数据同进程同生命周期，但二者演进方向不同（前者要持久化/审计/多级级联，后者 AP 临时数据）；
 - v0.2 为让 registry 集群各节点一致感知摘除，需要把摘除记录纳入变更事件扇出；v0.4 再迁往 management 时又需反向改造，迁移成本叠加；

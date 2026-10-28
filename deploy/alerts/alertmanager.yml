@@ -1,0 +1,24 @@
+# Alertmanager 路由示例（桩）：critical 单独分路，receiver 以 webhook 占位——按实际通知渠道替换
+# （email_configs / slack_configs / pagerduty_configs 等，见 Alertmanager 官方文档）。
+# 加载校验：amtool check-config alertmanager.yml（CI 经 java/scripts/check-docs.sh）。
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: default
+  group_by: ['alertname', 'instance']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers:
+        - severity="critical"
+      receiver: oncall
+
+receivers:
+  - name: default
+    webhook_configs:
+      - url: 'http://127.0.0.1:5001/artemis-alerts'
+  - name: oncall
+    webhook_configs:
+      - url: 'http://127.0.0.1:5001/artemis-alerts-critical'

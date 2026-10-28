@@ -1,0 +1,37 @@
+# 文档站守门（v1.0 phase-7）：markdown 链接存在性 + 告警示例可加载性（promtool 真校验在 CI 兜底，
+# 本地无 promtool 时 check-docs.sh 退化为形状断言）。独立于 ci.yml——docs 变更不触发 java/docker/helm job。
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'README.md'
+      - 'CLAUDE.md'
+      - 'deploy/alerts/**'
+      - 'java/scripts/check-docs.sh'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'README.md'
+      - 'CLAUDE.md'
+      - 'deploy/alerts/**'
+      - 'java/scripts/check-docs.sh'
+      - '.github/workflows/docs.yml'
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up promtool + amtool
+        run: |
+          curl -fsSL https://github.com/prometheus/prometheus/releases/download/v3.3.0/prometheus-3.3.0.linux-amd64.tar.gz \
+            | sudo tar -xz --strip-components=1 -C /usr/local/bin prometheus-3.3.0.linux-amd64/promtool
+          curl -fsSL https://github.com/prometheus/alertmanager/releases/download/v0.28.0/alertmanager-0.28.0.linux-amd64.tar.gz \
+            | sudo tar -xz --strip-components=1 -C /usr/local/bin alertmanager-0.28.0.linux-amd64/amtool
+          promtool --version && amtool --version
+      - name: Check docs
+        run: java/scripts/check-docs.sh all
