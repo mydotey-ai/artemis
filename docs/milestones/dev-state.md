@@ -19,9 +19,9 @@
 
 | 项 | 值 |
 |---|---|
-| phase | phase-4-helm |
-| 步骤 | 设计 |
-| 分支 / worktree | v1.0-phase4-helm @ .claude/worktrees/v1.0-phase4-helm |
+| phase | — |
+| 步骤 | — |
+| 分支 / worktree | — |
 
 > v0.1–v0.4 已收尾（验收对照见各 `plan.md`）。v0.5（治理面 II）于 2026-10-26 启动，基线 c87dc2a 已提交。phase-1（route-rule 资源模型与持久化）已交付（e961ebb）。phase-2（两段式权重发布与回滚）已交付。
 >
