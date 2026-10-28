@@ -36,22 +36,14 @@
 > v1.0 phase-1（TLS 传输安全）已交付（958379b）。phase-2（RBAC：三预置角色矩阵 + /admin/v1 判权 + 多账户用户管理 + V7 role 列；ADR-021 委托定案后置 v1.x）已交付。phase-3（部署形态 I：Docker all-in-one 镜像 + VM tar.gz/systemd + 部署冒烟 + all-in-one 成员自报补全）已交付（189ccd1 squash）。
 >
 > phase-4（部署形态 II：K8s/Helm chart 三服务独立编排 + Dockerfile.service 三单服务镜像 + 探针/DB 可选 + kind 冒烟与 CI 渲染断言）已交付（本 squash）。
+>
+> phase-5（滚动升级协议验证：proto 兼容契约门槛进 dev-test.sh all/CI + 未知字段前向兼容 IT + 3 节点滚动重启 IT；锚点 = 版本收尾 commit、ci fetch-depth 0）已交付（本 squash）。
 
 ## 当前 phase 步骤进度（版本 done 后清空本节）
 
 | 步骤 | 状态 | 备注 |
 |---|---|---|
-| worktree 开工 | done | 分支 v1.0-phase4-helm 自基线 ebbcd7c 起；骨架与索引已登记 |
-| 上下文加载 | done | 已读：roadmap §3 v1.0、架构 §2.3、tech-java.md（全文）、guidelines §7、v1.0 plan、phase-3 设计（形态 I 交付物）、all-in-one.md、三单服务 application.properties、smoke-deploy.sh、Dockerfile×2、ci.yml、产品文档 §成员三段式 |
-| 设计 | done | 制品落盘，用户 review 通过（2026-10-28） |
-| 实现 | done | Dockerfile.service + deploy/helm/artemis/（9 模板）+ smoke-deploy.sh helm 模式 + CI（镜像×2/helm job）；④ 回写探针 /readyz 定案 |
-| 测试 | done | dev-test.sh all BUILD SUCCESS（19min）；smoke-deploy.sh helm ALL PASS（kind 三服务就绪 + 探针 + console 401 + SDK 注册/订阅 instances=1 + uninstall）；⑤ 期修 smoke 脚本 sdk_classpath 捕获污染（mvn IT/JaCoCo 输出混入 $() 污染 cp：jar 缺失缓存误判 + -DskipTests 不跳 failsafe IT + 输出隔离 stderr 化） |
-| code-review | done | 内联替代 skill（子 agent 输出完整无挂起，沿用内联执行 max 口径）：10 findings（management 端点 http:// 双前缀 / auth ENABLED 键缺失 / TLS 探针 scheme / 脚本×3 / CI 断言 / TLS 配对守卫 / 文档漂移×3 / 名长预算） |
-| fix | done | 10/10 修；处置记录见 phase 文档「实现结果」 |
-| 回归测试 | done | 渲染断言全绿 + kind 冒烟 ALL PASS（instances=1）；Java 零变更 dev-test all 不重跑（⑤ 结果未失效） |
-| 验证 | done | 自动化（lint/渲染断言/冒烟×2/dev-test all）全过并记录；用户人工验证通过（2026-10-28） |
-| 文档同步 | done | 产品文档 v1.40 交付节 + docs/deploy/k8s.md + 三索引；零 ADR（§2.3 即落地对象）；CLAUDE.md 未过时 |
-| 完工 | done | 分支提交 a9f1456 → squash 合入 main（本提交） |
+| — | — | — |
 
 步骤状态枚举：pending | in-progress | done | skipped。
 
@@ -63,7 +55,7 @@
 | phase-2-rbac | done |
 | phase-3-docker-vm | done |
 | phase-4-helm | done |
-| phase-5-rolling-upgrade | planned |
+| phase-5-rolling-upgrade | done |
 | phase-6-capacity | planned |
 | phase-7-docs | planned |
 | phase-8-release | planned |

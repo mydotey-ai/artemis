@@ -27,7 +27,10 @@ jobs:
   java:
     runs-on: ubuntu-latest
     steps:
+      # 全历史：proto-compat-check.sh 需解析各版本收尾锚点 commit（浅克隆锚点不可达即显式红）
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # client/starter 测试经 toolchains fork JDK 8；构建与工具进程仍跑 JDK 25（tech-stack #27）
       - name: Set up JDK 8 (test toolchain)

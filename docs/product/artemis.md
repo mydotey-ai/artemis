@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.40    更新时间: 2026-10-28
+版本: 1.41    更新时间: 2026-10-28
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -35,7 +35,7 @@
 
 ```bash
 mvn -f java/pom.xml verify                 # 全量构建 + 测试（spotless + enforcer + 单测）
-java/scripts/dev-test.sh [unit|integration|all]   # 统一测试入口，默认 all
+java/scripts/dev-test.sh [unit|integration|all]   # 统一测试入口，默认 all（all = verify + proto 兼容检查）
 mvn -f java/server/pom.xml spotless:apply  # 提交前格式化（服务端线）
 mvn -f java/client/pom.xml spotless:apply  # 提交前格式化（SDK 线）
 docker build -t artemis-registry-server .  # registry-server 镜像（多阶段自包含）
@@ -374,10 +374,19 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **冒烟**：`smoke-deploy.sh helm`（kind 起集群 + 三镜像 load + helm install + pod 就绪 + port-forward + SDK 走通 + uninstall）；CI helm job 做 lint + 渲染断言（拓扑/env/变体/fail 场景退出码）。冒烟期顺带修复既有脚本 `sdk_classpath` 缺陷（新 worktree jar 缓存误判、`-DskipTests` 不跳 failsafe IT、`$()` 捕获污染 classpath）。
 - **文档**：`docs/deploy/k8s.md`（拓扑/values/探针/集群内外 SDK 接入/卸载与 PVC 语义）。
 
+**v1.0 phase-5（滚动升级协议验证）已交付**：
+
+- **验证口径**：滚动升级无感 = 三层正交前提——**契约**（proto wire 兼容纪律被遵守：field 类型/编号不变、删除编号+名字双 reserved、编号不复用）+ **行为**（服务端对含未知字段的「未来版本」消息正常处理，protobuf 前向兼容链路无破坏）+ **语义**（3 节点滚动重启客户端容灾无感）。真实两版本二进制混跑不做（正确性由前两层蕴含，仓库亦无历史发布物）。
+- **契约门槛**：`java/scripts/proto-compat-check.sh`（`dev-test.sh all` 内嵌、CI 自动执行）——数据面五组（common/registry/replication/projection/discovery，冻结范围同 [proto 契约规范](../dev/proto-contract.md) §2）相对各版本收尾锚点逐文件断言；锚点不可解析（浅克隆）显式红不静默跳过；CI checkout `fetch-depth: 0`。git tag 启用前契约版本锚点 = 版本收尾 commit（脚本锚点表集中维护）。
+- **前向兼容 IT**（`ProtoForwardCompatIT`）：心跳流/Replicate 注入 `UnknownFieldSet`（未用 field number × 两种 wire 类型）→ ack 正常 + 数据效果正确。
+- **滚动重启 IT**（`RollingRestartIT`）：3 节点逐节点停→同端口重启，优雅停机（drain 排水）与无排水（drainMs=0，Pod 强终止的进程内最近似）两形态；滚动全程存活节点注册表完整、`evictExpired` 误摘探针不减、终态清理探针跑满超 TTL 窗口证明 SDK 持续续约（不断流不换数据）。
+- **工程形态**：零产品代码变更（验证型 phase）；code-review 10 findings 处置（9 修 1 登记——3 节点 IT scaffolding 五处重复留待独立清理）；检查器负向自检 9 场景（三类破坏/名字未保留/合法演进/`deprecated` 选项/`to max`/注释花括号/伪锚点）。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.41 | 2026-10-28 | v1.0 phase-5 交付：滚动升级协议验证（proto 兼容契约门槛进 dev-test.sh all/CI + 前向兼容 IT + 3 节点滚动重启 IT）；构建注释同步 |
 | 1.40 | 2026-10-28 | v1.0 phase-4 交付：部署形态 II（K8s/Helm chart 三服务独立编排 + 三单服务镜像 + 探针 + DB 可选 + 冒烟与 CI 渲染断言） |
 | 1.39 | 2026-10-28 | v1.0 phase-3 交付：部署形态 I（Docker all-in-one 镜像 + VM tar.gz/systemd 安装包 + 冒烟脚本 + all-in-one 成员自报补全 + docs/deploy/） |
 | 1.38 | 2026-10-27 | v1.0 phase-2 交付：RBAC（三预置角色矩阵、/admin/v1 enforcement、多账户用户管理、ADR-021 委托定案后置 v1.x） |

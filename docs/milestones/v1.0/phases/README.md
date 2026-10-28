@@ -6,3 +6,4 @@
 | phase-2-rbac | [phase-2-rbac.md](phase-2-rbac.md) | [phase-2-rbac-test.md](phase-2-rbac-test.md) |
 | phase-3-docker-vm | [phase-3-docker-vm.md](phase-3-docker-vm.md) | [phase-3-docker-vm-test.md](phase-3-docker-vm-test.md) |
 | phase-4-helm | [phase-4-helm.md](phase-4-helm.md) | [phase-4-helm-test.md](phase-4-helm-test.md) |
+| phase-5-rolling-upgrade | [phase-5-rolling-upgrade.md](phase-5-rolling-upgrade.md) | [phase-5-rolling-upgrade-test.md](phase-5-rolling-upgrade-test.md) |

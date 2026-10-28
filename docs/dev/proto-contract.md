@@ -1,13 +1,13 @@
 # Proto 契约规范
 
-版本: 1.5    更新时间: 2026-10-12
+版本: 1.6    更新时间: 2026-10-28
 
 > 本文是 Artemis 各语言实现（Java / Rust / …）共同遵守的 proto 契约规范：契约组织、wire 兼容规则与变更流程。语言无关，是跨语言不变量的**单一来源**——各语言开发规范（如[Java 开发规范](coding-guidelines-java.md) §8）只保留本语言的生成代码使用纪律并引用本文，不复制规则本身。
 
 ## 1. 契约组织
 
 - 契约居仓库顶层 `proto/` 目录，六组：`common/`（公共数据模型）+ `registry/`、`replication/`、`projection/`、`discovery/`、`management/`（各 v1）。
-- `proto/` 是**语言无关纯目录**：不属于任何构建体系（非 Maven 模块、无 Cargo crate 产物）、不产 artifact；仓库 git tag 即契约版本，与各语言制品版本同源对齐（Java reactor 的 `${revision}` 与 tag 一致，SDK 版本即其携带契约的版本）。
+- `proto/` 是**语言无关纯目录**：不属于任何构建体系（非 Maven 模块、无 Cargo crate 产物）、不产 artifact；仓库 git tag 即契约版本，与各语言制品版本同源对齐（Java reactor 的 `${revision}` 与 tag 一致，SDK 版本即其携带契约的版本）。**git tag 启用前**，契约版本锚点 = 各版本收尾 commit（`java/scripts/proto-compat-check.sh` 锚点表集中维护，v1.0 phase-5 起 wire 兼容纪律经此脚本在 `dev-test.sh all`/CI 强制）。
 - 各语言实现按需引用 .proto 文件、各自生成代码（Java 生成矩阵见[Java 技术选型](tech-stack-java.md) §2.2；Rust prost/tonic 基线 v1.x 定）。同一 proto 组在多端（语言/独立编译单元）生成的类互不共享，**跨端只走 wire 协议序列化，不传递生成类**；语言内部的模块间共享边界由各语言规范定义（Java 见技术选型 §2.2）。
 - import 方向永远「内部协议 → 共享」（各组 import common），不出现环。
 
@@ -37,6 +37,7 @@
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.6 | 2026-10-28 | §1 补契约版本锚点落地口径：git tag 启用前 = 版本收尾 commit（proto-compat-check.sh 强制 wire 兼容纪律，v1.0 phase-5） |
 | 1.5 | 2026-10-12 | code-review 修复：错误码消息名 Error→ErrorInfo（避开 java.lang.Error 通配 import 歧义）；§1 Java 内联生成细节改指针 |
 | 1.4 | 2026-10-12 | 注册表纪律补大写蛇形；表格后列表结构修复 |
 | 1.3 | 2026-10-11 | §1 跨端/语言内共享边界拆分表述（跨端只走 wire；语言内边界由各语言规范定义，Java 服务端 common.v1 经 artemis-common 共享） |

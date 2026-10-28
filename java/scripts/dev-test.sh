@@ -10,7 +10,7 @@ usage() {
   echo "usage: dev-test.sh [unit|integration|all]" >&2
   echo "  unit        surefire *Test 单测（mvn test），快速迭代" >&2
   echo "  integration failsafe *IT 集成测试（test-compile 前置编译）" >&2
-  echo "  all         全量 verify：spotless + enforcer + 测试（默认，工作流 ⑤/⑧ 验收入口）" >&2
+  echo "  all         全量 verify：spotless + enforcer + 测试 + proto 兼容检查（默认，工作流 ⑤/⑧ 验收入口）" >&2
 }
 
 if [ "$#" -gt 1 ]; then
@@ -29,7 +29,9 @@ case "${mode}" in
     exec mvn -f "${reactor_dir}/pom.xml" test-compile failsafe:integration-test failsafe:verify
     ;;
   all)
-    exec mvn -f "${reactor_dir}/pom.xml" verify
+    # 契约脚本断言（v1.0 phase-5）：mvn verify 通过后执行 proto wire 兼容检查
+    mvn -f "${reactor_dir}/pom.xml" verify
+    exec "${script_dir}/proto-compat-check.sh"
     ;;
   *)
     usage
