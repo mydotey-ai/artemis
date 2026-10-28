@@ -1,0 +1,122 @@
+{{- if .Values.management.enabled }}
+{{- if and .Values.management.db.enabled (not .Values.management.db.url) -}}
+{{- fail "management.db.enabled 时 db.url 必填（jdbc:mysql://... 或 jdbc:postgresql://...）" -}}
+{{- end }}
+{{- /* 出站 TLS 与对端配对守卫：本 chart registry 未开 TLS 时，对它的出站 TLS 必然握手失败 */}}
+{{- if and .Values.management.tls.enabled .Values.registry.enabled (not .Values.registry.tls.enabled) -}}
+{{- fail "management.tls.enabled=true 但本 chart registry.tls.enabled=false（出站只读查询 TLS 拨明文端口必然失败）：成对开启，或关闭 management TLS" -}}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "artemis.fullname" . }}-management
+  labels:
+    {{- include "artemis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: management
+spec:
+  replicas: {{ .Values.management.replicas }}
+  selector:
+    matchLabels:
+      {{- include "artemis.selectorLabels" (dict "Release" .Release "component" "management") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "artemis.selectorLabels" (dict "Release" .Release "component" "management") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "artemis.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      {{- if .Values.management.tls.enabled }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ .Values.management.tls.secretName | required "management.tls.enabled 时 secretName 必填" }}
+      {{- end }}
+      containers:
+        - name: management
+          image: {{ include "artemis.image" (dict "Values" .Values "service" "management") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8081
+            - name: grpc
+              containerPort: 9094
+            - name: mgmt
+              containerPort: 9092
+          env:
+            # 独立部署默认 -1 不监听；K8s 形态显式启用（discovery 订阅规则流端口）
+            - name: ARTEMIS_MANAGEMENT_GRPC_PORT
+              value: "9094"
+            {{- if .Values.registry.enabled }}
+            # 只读事实查询：registry 内部 peer 端口（registry 关闭时经 extraEnv 显式配外置端点）
+            - name: ARTEMIS_MANAGEMENT_REGISTRY_ENDPOINT
+              value: {{ printf "%s-registry-peer.%s.svc:9093" (include "artemis.fullname" .) .Release.Namespace | quote }}
+            {{- end }}
+            {{- if .Values.discovery.enabled }}
+            # 订阅关系视图数据源：discovery 外部 HTTP（消费方 DiscoveryAdminClient 自拼 http:// 前缀，端点只给 host:port）
+            - name: ARTEMIS_MANAGEMENT_DISCOVERY_ENDPOINTS
+              value: {{ printf "%s-discovery.%s.svc:8090" (include "artemis.fullname" .) .Release.Namespace | quote }}
+            {{- end }}
+            {{- if .Values.management.db.enabled }}
+            - name: SPRING_DATASOURCE_URL
+              value: {{ .Values.management.db.url | quote }}
+            - name: SPRING_DATASOURCE_USERNAME
+              value: {{ .Values.management.db.username | quote }}
+            {{- if .Values.management.db.existingSecret }}
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.management.db.existingSecret }}
+                  key: password
+            {{- else }}
+            - name: SPRING_DATASOURCE_PASSWORD
+              value: {{ .Values.management.db.password | default "" | quote }}
+            {{- end }}
+            {{- end }}
+            - name: MANAGEMENT_SERVER_ADDRESS
+              value: 0.0.0.0
+            {{- include "artemis.authEnv" (dict "service" "management" "enabled" .Values.management.auth.enabled "auth" .Values.management.auth) | nindent 12 }}
+            {{- if .Values.management.tls.enabled }}
+            - name: SPRING_SSL_BUNDLE_PEM_ARTEMIS_KEYSTORE_CERTIFICATE
+              value: /etc/artemis/tls/cert-chain.pem
+            - name: SPRING_SSL_BUNDLE_PEM_ARTEMIS_KEYSTORE_PRIVATEKEY
+              value: /etc/artemis/tls/private-key.pem
+            - name: SPRING_GRPC_SERVER_SSL_ENABLED
+              value: "true"
+            - name: SPRING_GRPC_SERVER_SSL_BUNDLE
+              value: artemis
+            - name: SERVER_SSL_BUNDLE
+              value: artemis
+            # 出站 registry 只读查询 TLS
+            - name: ARTEMIS_MANAGEMENT_REGISTRY_TLS_ENABLED
+              value: "true"
+            - name: ARTEMIS_MANAGEMENT_REGISTRY_TLS_TRUST_CA_PATH
+              value: /etc/artemis/tls/registry-trust-ca.pem
+            {{- end }}
+            {{- with .Values.management.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: mgmt
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: mgmt
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: mgmt
+            periodSeconds: 5
+            failureThreshold: 24
+          {{- if .Values.management.tls.enabled }}
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/artemis/tls
+              readOnly: true
+          {{- end }}
+          resources:
+            {{- toYaml .Values.management.resources | nindent 12 }}
+{{- end }}

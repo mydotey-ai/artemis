@@ -1,0 +1,78 @@
+# Artemis Helm chart values（v1.0 部署形态 II）。端口/互连/探针见 docs/deploy/k8s.md。
+# 配置注入全 env（SCF relaxed 映射 ARTEMIS_* 与 Spring 标准键），与 all-in-one 容器形态同出口。
+
+image:
+  registry: "" # 例 "registry.example.com/"（含尾斜杠）；空 = 本地/kind 镜像名
+  servicePrefix: "artemis-"
+  tag: "local"
+  pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: "" # 留空 = <release>-artemis
+
+registry: # StatefulSet（有状态：快照 PVC + peer headless svc 稳定成员 DNS）
+  enabled: true
+  replicas: 1 # 扩缩即改：成员列表随渲染更新（静态成员，滚动重启生效；缩容陈旧条目属静态成员既有语义）
+  resources: {}
+  storage:
+    size: 1Gi
+    className: "" # 空 = 集群默认 StorageClass
+  # 完整成员列表覆盖（<id>@<peerHost>:<peerPort>@<sdkHost>:<sdkPort>,...，三段式）；
+  # 空 = 按 replicas 渲染（peer = pod DNS @ peer svc，external = external svc:9090）
+  membersOverride: ""
+  selfOverride: "" # 空 = pod 名（fieldRef metadata.name）
+  auth:
+    enabled: true # 产品默认开（单账户 HTTP Basic + gRPC）
+    username: "artemis"
+    password: "artemis" # eval 默认；生产必改（或 existingSecret）
+    existingSecret: "" # 非空时 username/password 从该 secret 的 username/password 键取
+  tls:
+    enabled: false # 启用时 secretName 必填，须含：cert-chain.pem / private-key.pem（外部证书，SAN 覆盖 svc 名）
+    # + peer-cert-chain.pem / peer-private-key.pem / peer-trust-ca.pem（内部 peer 通道，SAN 覆盖 pod DNS）
+    secretName: ""
+  extraEnv: [] # 任意 env 追加（逃生口，未预置的键经此配）
+
+discovery: # Deployment（无状态：bootstrap + 投影可重建）
+  enabled: true
+  replicas: 1
+  resources: {}
+  # 上游 registry 集群 map（JSON 字符串，透传 artemis.discovery.registry.clusters；多集群 union 自配）；
+  # 空 = {"default":"<本 chart registry peer pod 列表>"}；registry.enabled=false 时必填（fail）
+  clusters: ""
+  nodes: "" # SDK 节点目录；空 = <discovery-svc>.<ns>.svc:9095（外部接入经 NodePort/LB 时覆盖为可达端点）
+  auth:
+    enabled: false # 产品默认关（HTTP 管理面与 gRPC 共用）
+    username: ""
+    password: ""
+    existingSecret: ""
+  tls:
+    enabled: false # secret 须含：cert-chain.pem / private-key.pem（外部证书）
+    # + registry-trust-ca.pem / management-trust-ca.pem（上游出站信任，文件名见 docs/deploy/k8s.md）
+    secretName: ""
+  extraEnv: []
+
+management: # Deployment（无状态；DB 可选依赖）
+  enabled: true # 关闭时 discovery 不注入规则流端点（fail-open，治理过滤不生效）
+  replicas: 1
+  resources: {}
+  db:
+    enabled: false # false = 内存态（单机 eval 语义：摘除/逻辑实例重启丢失、RBAC 单管理员）；
+    # true = 持久化（RBAC 多账户/角色 + 摘除/逻辑实例/审计跨重启恢复，Flyway 自动 migration）
+    url: "" # jdbc:mysql://... 或 jdbc:postgresql://...（enabled 时必填）
+    username: ""
+    password: "" # 明文备选（existingSecret 优先，两者都空 = 空密码）
+    existingSecret: "" # 非空时 password 从该 secret 的 password 键取（免明文，优先于 password）
+  auth:
+    enabled: true
+    username: "artemis" # 内存态凭证；DB 态认证唯一源为账户表（ADR-021 接管，配置失效）
+    password: "artemis"
+    existingSecret: ""
+  tls:
+    enabled: false # secret 须含：cert-chain.pem / private-key.pem（HTTP console/Admin + gRPC 规则流）
+    # + registry-trust-ca.pem（出站 registry 只读查询信任）
+    secretName: ""
+  extraEnv: [] # 如 registry.enabled=false 时外置事实查询端点：artemis.management.registry.endpoint

@@ -1,0 +1,18 @@
+{{- if .Values.management.enabled }}
+# management svc：HTTP Admin/状态 API + console（8081）、gRPC 规则流（9094，discovery 订阅）。
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "artemis.fullname" . }}-management
+  labels:
+    {{- include "artemis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: management
+spec:
+  selector:
+    {{- include "artemis.selectorLabels" (dict "Release" .Release "component" "management") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8081
+    - name: grpc
+      port: 9094
+{{- end }}

@@ -5,4 +5,4 @@
 | 项 | 说明 | 文档 |
 |---|---|---|
 | `vm/` | VM 标准安装包模板（bin/app.sh + systemd unit + 配置模板），`java/scripts/build-dist.sh` 组装出 tar.gz | [docs/deploy/vm.md](../docs/deploy/vm.md) |
-| `helm/` | K8s Helm chart（v1.0 phase-4 落地） | — |
+| `helm/` | K8s Helm chart（三服务独立编排） | [docs/deploy/k8s.md](../docs/deploy/k8s.md) |

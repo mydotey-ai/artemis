@@ -1,0 +1,114 @@
+{{- if .Values.discovery.enabled }}
+{{- /* 上游 clusters：显式配置优先；否则渲染本 chart registry peer 列表；registry 关闭则必须显式配置 */}}
+{{- $clusters := .Values.discovery.clusters -}}
+{{- if not $clusters -}}
+{{- if .Values.registry.enabled -}}
+{{- $clusters = printf `{"default":"%s"}` (include "artemis.registry.peerEndpoints" .) -}}
+{{- else -}}
+{{- fail "discovery.clusters 必填（registry.enabled=false 时上游 registry 需显式配置，JSON map 字符串）" -}}
+{{- end -}}
+{{- end }}
+{{- /* 出站 TLS 与对端配对守卫：本 chart registry 未开 TLS 时，对它的出站 TLS 必然握手失败 */}}
+{{- if and .Values.discovery.tls.enabled .Values.registry.enabled (not .Values.registry.tls.enabled) (not .Values.discovery.clusters) -}}
+{{- fail "discovery.tls.enabled=true 但本 chart registry.tls.enabled=false（出站 TLS 拨明文端口必然失败）：成对开启，或经 discovery.clusters 指向外置 TLS registry" -}}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "artemis.fullname" . }}-discovery
+  labels:
+    {{- include "artemis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: discovery
+spec:
+  replicas: {{ .Values.discovery.replicas }}
+  selector:
+    matchLabels:
+      {{- include "artemis.selectorLabels" (dict "Release" .Release "component" "discovery") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "artemis.selectorLabels" (dict "Release" .Release "component" "discovery") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "artemis.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      {{- if .Values.discovery.tls.enabled }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ .Values.discovery.tls.secretName | required "discovery.tls.enabled 时 secretName 必填" }}
+      {{- end }}
+      containers:
+        - name: discovery
+          image: {{ include "artemis.image" (dict "Values" .Values "service" "discovery") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8090
+            - name: grpc
+              containerPort: 9095
+            - name: mgmt
+              containerPort: 9096
+          env:
+            - name: ARTEMIS_DISCOVERY_REGISTRY_CLUSTERS
+              value: {{ $clusters | quote }}
+            - name: ARTEMIS_DISCOVERY_NODES
+              value: {{ .Values.discovery.nodes | default (printf "%s-discovery.%s.svc:9095" (include "artemis.fullname" .) .Release.Namespace) | quote }}
+            {{- if .Values.management.enabled }}
+            # 治理链闭合：订阅 management 规则流（关闭 management 时不注入 = fail-open，沿用最后已知规则）
+            - name: ARTEMIS_DISCOVERY_MANAGEMENT_ENDPOINTS
+              value: {{ printf "%s-management.%s.svc:9094" (include "artemis.fullname" .) .Release.Namespace | quote }}
+            {{- end }}
+            - name: MANAGEMENT_SERVER_ADDRESS
+              value: 0.0.0.0
+            {{- include "artemis.authEnv" (dict "service" "discovery" "enabled" .Values.discovery.auth.enabled "auth" .Values.discovery.auth) | nindent 12 }}
+            {{- if .Values.discovery.tls.enabled }}
+            - name: SPRING_SSL_BUNDLE_PEM_ARTEMIS_KEYSTORE_CERTIFICATE
+              value: /etc/artemis/tls/cert-chain.pem
+            - name: SPRING_SSL_BUNDLE_PEM_ARTEMIS_KEYSTORE_PRIVATEKEY
+              value: /etc/artemis/tls/private-key.pem
+            - name: SPRING_GRPC_SERVER_SSL_ENABLED
+              value: "true"
+            - name: SPRING_GRPC_SERVER_SSL_BUNDLE
+              value: artemis
+            - name: SERVER_SSL_BUNDLE
+              value: artemis
+            # 出站上游 TLS：对 registry 为其 peer 端口、对 management 为其 gRPC 端口（与服务端端 TLS 配对）
+            - name: ARTEMIS_DISCOVERY_REGISTRY_TLS_ENABLED
+              value: "true"
+            - name: ARTEMIS_DISCOVERY_REGISTRY_TLS_TRUST_CA_PATH
+              value: /etc/artemis/tls/registry-trust-ca.pem
+            {{- if .Values.management.enabled }}
+            - name: ARTEMIS_DISCOVERY_MANAGEMENT_TLS_ENABLED
+              value: "true"
+            - name: ARTEMIS_DISCOVERY_MANAGEMENT_TLS_TRUST_CA_PATH
+              value: /etc/artemis/tls/management-trust-ca.pem
+            {{- end }}
+            {{- end }}
+            {{- with .Values.discovery.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: mgmt
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: mgmt
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: mgmt
+            periodSeconds: 5
+            failureThreshold: 24
+          {{- if .Values.discovery.tls.enabled }}
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/artemis/tls
+              readOnly: true
+          {{- end }}
+          resources:
+            {{- toYaml .Values.discovery.resources | nindent 12 }}
+{{- end }}

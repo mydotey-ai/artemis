@@ -1,0 +1,6 @@
+apiVersion: v2
+name: artemis
+description: Artemis 服务注册中心（registry / discovery / management 三服务独立编排）
+type: application
+version: 0.1.0
+appVersion: "0.1.0-SNAPSHOT"

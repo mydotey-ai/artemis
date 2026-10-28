@@ -8,6 +8,7 @@ on:
       - 'proto/**'
       - 'Dockerfile'
       - 'Dockerfile.all-in-one'
+      - 'Dockerfile.service'
       - 'deploy/**'
       - '.dockerignore'
       - '.github/workflows/**'
@@ -17,6 +18,7 @@ on:
       - 'proto/**'
       - 'Dockerfile'
       - 'Dockerfile.all-in-one'
+      - 'Dockerfile.service'
       - 'deploy/**'
       - '.dockerignore'
       - '.github/workflows/**'
@@ -65,3 +67,43 @@ jobs:
         run: docker build -t artemis-registry-server:ci .
       - name: Build all-in-one image
         run: docker build -f Dockerfile.all-in-one -t artemis-all-in-one:ci .
+      - name: Build discovery service image
+        run: docker build -f Dockerfile.service --build-arg SERVICE=discovery -t artemis-discovery:ci .
+      - name: Build management service image
+        run: docker build -f Dockerfile.service --build-arg SERVICE=management -t artemis-management:ci .
+
+  # K8s 全链路冒烟（kind）成本高，CI 只做 lint + template 渲染断言；集群冒烟归本地 smoke-deploy.sh helm
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Helm
+        run: |
+          curl -fsSL https://get.helm.sh/helm-v3.16.4-linux-amd64.tar.gz | tar -xz --strip-components=1 -C /usr/local/bin linux-amd64/helm
+          helm version --short
+      - name: Lint and render chart
+        run: |
+          helm lint deploy/helm/artemis
+          # 默认拓扑：StatefulSet×1 + Deployment×2 + Service×4，env 注入逐项断言
+          out=$(helm template artemis deploy/helm/artemis)
+          echo "$out" | grep -q "kind: StatefulSet"
+          [ "$(echo "$out" | grep -c 'kind: Deployment')" -eq 2 ]
+          [ "$(echo "$out" | grep -c 'kind: Service')" -eq 4 ]
+          echo "$out" | grep -q 'name: ARTEMIS_REGISTRY_CLUSTER_MEMBERS'
+          echo "$out" | grep -q '@artemis-registry-peer.artemis.svc:9093@artemis-registry.artemis.svc:9090'
+          echo "$out" | grep -q 'name: MANAGEMENT_SERVER_ADDRESS'
+          echo "$out" | grep -q 'path: /readyz'
+          # 变体渲染：扩缩成员表 / 组件裁剪 / 成员覆盖 / TLS 探针 scheme
+          helm template artemis deploy/helm/artemis --set registry.replicas=3 \
+            | grep -q 'artemis-registry-2.artemis-registry-peer'
+          helm template artemis deploy/helm/artemis --set management.enabled=false > /tmp/no-mgt.yaml
+          [ "$(grep -c 'kind: Deployment' /tmp/no-mgt.yaml)" -eq 1 ]
+          ! grep -q 'ARTEMIS_DISCOVERY_MANAGEMENT_ENDPOINTS' /tmp/no-mgt.yaml
+          helm template artemis deploy/helm/artemis --set-string 'registry.membersOverride=r0@h0:9093@e0:9090' \
+            | grep -q 'value: "r0@h0:9093@e0:9090"'
+          helm template artemis deploy/helm/artemis --set registry.tls.enabled=true --set registry.tls.secretName=t \
+            | grep -A3 'readinessProbe' | grep -q 'scheme: HTTPS'
+          # fail 场景：非法组合渲染必须失败（退出码非 0）
+          ! helm template artemis deploy/helm/artemis --set registry.enabled=false > /dev/null
+          ! helm template artemis deploy/helm/artemis --set management.db.enabled=true > /dev/null
+          ! helm template artemis deploy/helm/artemis --set discovery.tls.enabled=true --set discovery.tls.secretName=t > /dev/null

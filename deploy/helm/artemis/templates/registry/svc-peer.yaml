@@ -1,0 +1,19 @@
+{{- if .Values.registry.enabled }}
+# peer headless svc（StatefulSet serviceName）：成员稳定 DNS + peer 复制/bootstrap 互连 + management 只读查询。
+# publishNotReadyAddresses：成员在 ready 前（快照回放/bootstrap 中）就要互相寻址。
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "artemis.fullname" . }}-registry-peer
+  labels:
+    {{- include "artemis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: registry
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "artemis.selectorLabels" (dict "Release" .Release "component" "registry") | nindent 4 }}
+  ports:
+    - name: peer
+      port: 9093
+{{- end }}

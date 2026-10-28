@@ -1,0 +1,19 @@
+{{- if .Values.registry.enabled }}
+# registry external svc：SDK 数据面接入（gRPC 四操作/心跳 + HTTP /readyz、/cluster/nodes 节点目录）。
+# ClusterIP（集群内消费）；外部接入按需改 svc 类型（NodePort/LB）——SDK 侧节点目录地址须同步覆盖。
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "artemis.fullname" . }}-registry
+  labels:
+    {{- include "artemis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: registry
+spec:
+  selector:
+    {{- include "artemis.selectorLabels" (dict "Release" .Release "component" "registry") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+    - name: grpc
+      port: 9090
+{{- end }}

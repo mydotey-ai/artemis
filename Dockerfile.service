@@ -1,0 +1,34 @@
+# 三单服务参数化镜像（v1.0 部署形态 II，K8s/Helm 编排载体）：
+#   docker build -f Dockerfile.service --build-arg SERVICE=registry    -t artemis-registry:local .
+#   docker build -f Dockerfile.service --build-arg SERVICE=discovery   -t artemis-discovery:local .
+#   docker build -f Dockerfile.service --build-arg SERVICE=management  -t artemis-management:local .
+# 与根 Dockerfile（registry 单服务镜像）、Dockerfile.all-in-one（eval 单容器）并列；
+# 多阶段自包含（同既有模式）。配置出口见 docs/deploy/k8s.md（env relaxed 映射）。
+# registry 为有状态（快照 data/registry-snapshot.bin 相对工作目录，PVC 挂 /app/data）。
+
+ARG SERVICE=registry
+
+FROM maven:3.9-eclipse-temurin-25 AS build
+ARG SERVICE=registry
+WORKDIR /src
+COPY java ./java
+COPY proto ./proto
+# -DskipTests（非 maven.test.skip）：registry-server 依赖 registry-core 的 test-jar 测试设施，
+# 跳过 test-compile 会让该 artifact 不产出，依赖解析失败
+RUN mvn -B -f java/pom.xml -pl ":artemis-${SERVICE}-server" -am package -DskipTests
+
+FROM eclipse-temurin:25-jre
+ARG SERVICE=registry
+WORKDIR /app
+RUN useradd --system --uid 10001 --create-home artemis \
+    # registry 独有：快照目录（discovery/management 无状态不建）
+    && if [ "$SERVICE" = "registry" ]; then mkdir -p /app/data; fi \
+    && chown -R artemis:artemis /app
+COPY --from=build "/src/java/server/artemis-${SERVICE}-server/target/artemis-${SERVICE}-server-*-exec.jar" /app/app.jar
+USER artemis
+# 端口（EXPOSE 无法按 ARG 条件化，docker run -P 需要时用 -p 显式映射；K8s 端口以 chart containerPort 为准）：
+#   registry: HTTP 8080 / gRPC 9090 / 内部 peer 9093
+#   discovery: HTTP 8090 / gRPC 9095
+#   management: HTTP 8081（Admin/console）/ gRPC 9094（规则流）
+# 管理端口（actuator 探针，9091/9096/9092）不对外：经 env 覆盖监听地址后由 kubelet 直达 pod（docs/deploy/k8s.md）
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]

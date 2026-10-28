@@ -1,0 +1,129 @@
+{{- if .Values.registry.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "artemis.fullname" . }}-registry
+  labels:
+    {{- include "artemis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: registry
+spec:
+  replicas: {{ .Values.registry.replicas }}
+  # peer headless svc = StatefulSet serviceName（成员稳定 DNS：<pod>.<svc>.<ns>.svc）
+  serviceName: {{ include "artemis.fullname" . }}-registry-peer
+  selector:
+    matchLabels:
+      {{- include "artemis.selectorLabels" (dict "Release" .Release "component" "registry") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "artemis.selectorLabels" (dict "Release" .Release "component" "registry") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "artemis.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001 # 镜像内非 root 用户 artemis
+        fsGroup: 10001 # PVC 快照卷写权限
+      {{- if .Values.registry.tls.enabled }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ .Values.registry.tls.secretName | required "registry.tls.enabled 时 secretName 必填" }}
+      {{- end }}
+      containers:
+        - name: registry
+          image: {{ include "artemis.image" (dict "Values" .Values "service" "registry") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: grpc
+              containerPort: 9090
+            - name: peer
+              containerPort: 9093
+            - name: mgmt
+              containerPort: 9091
+          env:
+            - name: ARTEMIS_REGISTRY_CLUSTER_MEMBERS
+              value: {{ include "artemis.registry.members" . | quote }}
+            {{- if .Values.registry.selfOverride }}
+            - name: ARTEMIS_REGISTRY_CLUSTER_SELF
+              value: {{ .Values.registry.selfOverride | quote }}
+            {{- else }}
+            - name: ARTEMIS_REGISTRY_CLUSTER_SELF
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- end }}
+            # kubelet 探针经 pod 网络直达 actuator（产品默认 loopback 不变，集群部署显式改——
+            # application.properties 注释同指引）
+            - name: MANAGEMENT_SERVER_ADDRESS
+              value: 0.0.0.0
+            {{- include "artemis.authEnv" (dict "service" "registry" "enabled" .Values.registry.auth.enabled "auth" .Values.registry.auth) | nindent 12 }}
+            {{- if .Values.registry.tls.enabled }}
+            # 外部 gRPC/HTTP 走 Spring SSL bundle（框架键，见 application.properties TLS 注释）
+            - name: SPRING_SSL_BUNDLE_PEM_ARTEMIS_KEYSTORE_CERTIFICATE
+              value: /etc/artemis/tls/cert-chain.pem
+            - name: SPRING_SSL_BUNDLE_PEM_ARTEMIS_KEYSTORE_PRIVATEKEY
+              value: /etc/artemis/tls/private-key.pem
+            - name: SPRING_GRPC_SERVER_SSL_ENABLED
+              value: "true"
+            - name: SPRING_GRPC_SERVER_SSL_BUNDLE
+              value: artemis
+            - name: SERVER_SSL_BUNDLE
+              value: artemis
+            # 内部 peer 通道 TLS（证书 SAN 须覆盖成员 pod DNS）
+            - name: ARTEMIS_REGISTRY_INTERNAL_TLS_ENABLED
+              value: "true"
+            - name: ARTEMIS_REGISTRY_INTERNAL_TLS_CERT_CHAIN_PATH
+              value: /etc/artemis/tls/peer-cert-chain.pem
+            - name: ARTEMIS_REGISTRY_INTERNAL_TLS_PRIVATE_KEY_PATH
+              value: /etc/artemis/tls/peer-private-key.pem
+            - name: ARTEMIS_REGISTRY_INTERNAL_TLS_TRUST_CA_PATH
+              value: /etc/artemis/tls/peer-trust-ca.pem
+            {{- end }}
+            {{- with .Values.registry.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            # 外部就绪端点：认证白名单放行 + 优雅停机排水期 503（K8s 自动摘流量，registry 专属）。
+            # TLS 开启时 8080 变 HTTPS（SERVER_SSL_BUNDLE），探针须跟切 scheme（actuator 管理端口
+            # 独立监听不受 server TLS 影响，liveness/startup 无需处理）
+            httpGet:
+              path: /readyz
+              port: http
+              {{- if .Values.registry.tls.enabled }}
+              scheme: HTTPS
+              {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: mgmt
+          startupProbe:
+            # 快照回放 + peer bootstrap 宽裕窗口（5s × 36 = 3 分钟）
+            httpGet:
+              path: /actuator/health/liveness
+              port: mgmt
+            periodSeconds: 5
+            failureThreshold: 36
+          volumeMounts:
+            - name: data
+              mountPath: /app/data # registry 快照 data/registry-snapshot.bin 相对工作目录
+            {{- if .Values.registry.tls.enabled }}
+            - name: tls
+              mountPath: /etc/artemis/tls
+              readOnly: true
+            {{- end }}
+          resources:
+            {{- toYaml .Values.registry.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.registry.storage.className }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.registry.storage.size }}
+{{- end }}

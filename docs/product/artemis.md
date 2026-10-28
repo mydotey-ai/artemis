@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.39    更新时间: 2026-10-28
+版本: 1.40    更新时间: 2026-10-28
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -365,10 +365,20 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **部署冒烟**：`java/scripts/smoke-deploy.sh [docker|vm|all]`（独立于 dev-test.sh 的非 mvn 形态）——起服 + 端口就绪 + console 默认认证 401 + **SDK 走通**（single-file harness：注册 + 订阅发现断言）；端口映射场景以 `ARTEMIS_REGISTRY_CLUSTER_MEMBERS`/`ARTEMIS_DISCOVERY_NODES` 覆盖宿主端点。
 - **文档**：`docs/deploy/`（docker.md / vm.md，phase-4 Helm 与 phase-6 容量基线随交付补入）。
 
+**v1.0 phase-4（部署形态 II：K8s/Helm）已交付**：
+
+- **三单服务镜像**：根 `Dockerfile.service`（`ARG SERVICE` 参数化 registry/discovery/management，与既有两镜像并列；CI 三镜像 + all-in-one 全构建）。EXPOSE 不可按 ARG 条件化，K8s 端口以 chart containerPort 为准。
+- **Helm chart**（`deploy/helm/artemis/`，配置全 env 注入与容器形态同出口，零新配置键）：registry StatefulSet（peer headless svc 稳定成员 DNS + external ClusterIP svc + PVC 快照卷 + `self` 经 fieldRef）+ discovery/management Deployment（无状态）；三服务 `enabled` 开关独立裁剪、治理链 chart 内默认闭合；成员表按 `replicas` 渲染三段式条目（`membersOverride` 显式优先）、discovery 上游 clusters/节点目录/互连端点默认渲染可覆盖。
+- **探针**：registry readiness 用外部 `/readyz`（排水期 503 对接 K8s 摘流量；TLS 开启时 scheme HTTPS）+ 三服务 liveness/startup 走 actuator 管理端口（env 覆盖 `MANAGEMENT_SERVER_ADDRESS=0.0.0.0`，产品默认 loopback 不变）。
+- **values 口径**：DB 可选（`management.db.enabled`，默认内存态；true 时 `SPRING_DATASOURCE_*` 透传、密码可走 existingSecret，不内置子 chart）、TLS/凭证透出（`ARTEMIS_*_AUTH_ENABLED` 必发、tls secretName 挂载既有键面）、fail-fast 守卫（上游缺配/db 缺 url/TLS 不配对渲染期报错）。
+- **冒烟**：`smoke-deploy.sh helm`（kind 起集群 + 三镜像 load + helm install + pod 就绪 + port-forward + SDK 走通 + uninstall）；CI helm job 做 lint + 渲染断言（拓扑/env/变体/fail 场景退出码）。冒烟期顺带修复既有脚本 `sdk_classpath` 缺陷（新 worktree jar 缓存误判、`-DskipTests` 不跳 failsafe IT、`$()` 捕获污染 classpath）。
+- **文档**：`docs/deploy/k8s.md`（拓扑/values/探针/集群内外 SDK 接入/卸载与 PVC 语义）。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.40 | 2026-10-28 | v1.0 phase-4 交付：部署形态 II（K8s/Helm chart 三服务独立编排 + 三单服务镜像 + 探针 + DB 可选 + 冒烟与 CI 渲染断言） |
 | 1.39 | 2026-10-28 | v1.0 phase-3 交付：部署形态 I（Docker all-in-one 镜像 + VM tar.gz/systemd 安装包 + 冒烟脚本 + all-in-one 成员自报补全 + docs/deploy/） |
 | 1.38 | 2026-10-27 | v1.0 phase-2 交付：RBAC（三预置角色矩阵、/admin/v1 enforcement、多账户用户管理、ADR-021 委托定案后置 v1.x） |
 | 1.37 | 2026-10-27 | v1.0 phase-1 交付：TLS 传输安全（内外通道可启、Spring bundle/SCF 键分界、SDK gRPC+https 同锚、默认明文不变） |
