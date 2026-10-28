@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.41    更新时间: 2026-10-28
+版本: 1.42    更新时间: 2026-10-28
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -363,7 +363,7 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **VM 标准安装包**：`deploy/vm/` 模板仓内化（`bin/app.sh` 九命令运维脚本 + `artemis.service` unit + 全注释 `artemis.properties`）+ `java/scripts/build-dist.sh` 出 `artemis-<version>.tar.gz`；`app.sh install` 一键 systemd 托管（journalctl 日志、优雅停机与 unit `TimeoutStopSec` 对齐）。配置文件置包根（SCF 工作目录语义零特判），无 logs/ 目录（stdout → journal）。
 - **all-in-one 成员自报补全**（实现期发现的 SDK 可接入性缺口）：launcher 在未配置时默认注入 `cluster.members`（单成员，external 端点 `127.0.0.1:<grpcPort>`）与 `cluster.self`（独立注入、显式配置优先）——此前 `/cluster/nodes` 无 external 端点，SDK 前置寻址（ADR-020）空列表无法接入。跨机/容器端口映射接入经 env 覆盖 members（见 [all-in-one.md](../api/all-in-one.md) v2.3）。
 - **部署冒烟**：`java/scripts/smoke-deploy.sh [docker|vm|all]`（独立于 dev-test.sh 的非 mvn 形态）——起服 + 端口就绪 + console 默认认证 401 + **SDK 走通**（single-file harness：注册 + 订阅发现断言）；端口映射场景以 `ARTEMIS_REGISTRY_CLUSTER_MEMBERS`/`ARTEMIS_DISCOVERY_NODES` 覆盖宿主端点。
-- **文档**：`docs/deploy/`（docker.md / vm.md，phase-4 Helm 与 phase-6 容量基线随交付补入）。
+- **文档**：`docs/deploy/`（docker.md / vm.md；phase-4 Helm 与 phase-6 容量基线已随各 phase 交付补入）。
 
 **v1.0 phase-4（部署形态 II：K8s/Helm）已交付**：
 
@@ -382,10 +382,18 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **滚动重启 IT**（`RollingRestartIT`）：3 节点逐节点停→同端口重启，优雅停机（drain 排水）与无排水（drainMs=0，Pod 强终止的进程内最近似）两形态；滚动全程存活节点注册表完整、`evictExpired` 误摘探针不减、终态清理探针跑满超 TTL 窗口证明 SDK 持续续约（不断流不换数据）。
 - **工程形态**：零产品代码变更（验证型 phase）；code-review 10 findings 处置（9 修 1 登记——3 节点 IT scaffolding 五处重复留待独立清理）；检查器负向自检 9 场景（三类破坏/名字未保留/合法演进/`deprecated` 选项/`to max`/注释花括号/伪锚点）。
 
+**v1.0 phase-6（容量验证）已交付**：
+
+- **压测工具**：`java/client/artemis-bench`（SDK 驱动 driver：四角色 plan/registry/subscriber/join，档位 dev/small/medium/large/custom 两层规模参数 + 资源模型预算）+ `java/scripts/bench.sh`（独立入口不进 CI：jemalloc 强制预检、内存预检、拓扑拉起、driver 分片、5s 采样、两级 watchdog、副本一致性汇总）；服务端用各 `*-server` 可执行 jar 真实部署产物。
+- **容量基线**（[capacity-baseline.md](../deploy/capacity-baseline.md)）：small 档（1 万实例）实测——注册风暴 30s ramp 到位、稳态 10 分钟零丢失（续约率 2100/s 吻合理论 2000）、订阅推送 p50=5ms/p95=7ms（每订阅者独立配对）；3 节点副本一致（三节点全量 1 万）；容量公式（registry ≈65KB/实例，10 万外推口径）与预判九条逐条结论。
+- **表外新发现 2 条**（压测核心产出）：3 节点拓扑订阅推送实时性退化（观察率 37%、延迟分钟级靠对账兜底，单拓扑 p95=7ms 对照——机制排查后置 v1.x）；RENEW 组批合并使复制流量低于线性外推。
+- **出数口径降级**：large 档（10 万）本机预检不可行（预算 14.1G > 可用），按设计以 small 实测 + 外推出数，10 万直测复现命令随基线文档（需 ≥16C/32G 独立机）。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.42 | 2026-10-28 | v1.0 phase-6：压测工具（artemis-bench + bench.sh）与容量基线交付（small 实测 + 外推口径 + 预判对照），表外新发现 2 条 |
 | 1.41 | 2026-10-28 | v1.0 phase-5 交付：滚动升级协议验证（proto 兼容契约门槛进 dev-test.sh all/CI + 前向兼容 IT + 3 节点滚动重启 IT）；构建注释同步 |
 | 1.40 | 2026-10-28 | v1.0 phase-4 交付：部署形态 II（K8s/Helm chart 三服务独立编排 + 三单服务镜像 + 探针 + DB 可选 + 冒烟与 CI 渲染断言） |
 | 1.39 | 2026-10-28 | v1.0 phase-3 交付：部署形态 I（Docker all-in-one 镜像 + VM tar.gz/systemd 安装包 + 冒烟脚本 + all-in-one 成员自报补全 + docs/deploy/） |

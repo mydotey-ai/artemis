@@ -50,3 +50,7 @@ target/
 
 # build-dist.sh 打包暂存目录（VM 安装包产物，不入库）
 build/
+java/scripts/bench-report/
+
+# shade 生成物（bench fat jar 构建副产物）
+java/client/artemis-bench/dependency-reduced-pom.xml

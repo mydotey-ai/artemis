@@ -15,6 +15,7 @@
   <modules>
     <module>artemis-client</module>
     <module>spring-boot-starter-artemis-client</module>
+    <module>artemis-bench</module>
   </modules>
 
   <properties>

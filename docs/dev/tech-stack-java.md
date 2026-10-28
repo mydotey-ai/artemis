@@ -1,6 +1,6 @@
 # Java 技术选型
 
-版本: 1.29    更新时间: 2026-10-27
+版本: 1.30    更新时间: 2026-10-28
 
 > 本文是新一代 Artemis Java 实现的技术选型基线：语言与运行时、工程结构、全量技术组件清单与依赖冲突策略。设计依据为[架构设计](../arch/artemis-next-architecture.md)（§3 技术栈策略、§7 关键决策 D8），开发规范见[Java 开发规范](coding-guidelines-java.md)。Rust 实现（v1.x 混合集群）直接消费仓库顶层 `proto/` 契约目录（见[proto 契约规范](proto-contract.md)），不受本文 Java 组件约束。
 
@@ -122,6 +122,7 @@ Java 各消费模块从仓库顶层 `proto/`（组织与治理见[proto 契约�
 | 29 | SDK 分发 | starter 自动装配 | `AutoConfiguration.imports` + `spring.factories` 双注册 | starter | 覆盖 SB 2.7+ 与老 SB 2.x；编译目标 Java 8 |
 | 30 | SDK 分发 | client 依赖纪律 | grpc-netty-shaded + grpc-stub + grpc-protobuf（传递 protobuf-java 3.25.x）+ SCF（scf-simple，传递 scf-core/lang-extension）+ SLF4J API + micrometer-core（#34） | artemis-client | grpc-netty-shaded **不传递** stub/protobuf 集成类，生成代码必需 grpc-stub/grpc-protobuf；冲突策略见 §5 |
 | 35 | 框架 | Spring Boot 2.x（starter 基线） | Spring Boot **2.7.18**（2.x 末版，Java 8 兼容；`spring-boot-autoconfigure` compile、`spring-boot-test` test，client 线自钉、不 import SB BOM） | spring-boot-starter-artemis-client（v0.1 phase-8 起） | starter 自动装配基线：配置经 SCF（不引 `@ConfigurationProperties`）、`initMethod=start`/`destroyMethod=close` 管生命周期、Boot `MeterRegistry` 注入回落 global；兼容 SB 2.7+（AutoConfiguration.imports）与老 2.x（spring.factories），自动配置类只用 2.x 全系 API（不用 `@AutoConfiguration`）；与 #7 服务端 SB 4.1 线互不传导 |
+| 36 | 构建 | 压测 fat jar 打包 | maven-shade-plugin **3.6.0** | artemis-bench（v1.0 phase-6 起，工具模块不发布） | driver 可执行 jar（bench.sh 经 `java -jar` 起分片）；**必须**配 `ServicesResourceTransformer`（grpc/netty SPI 经 META-INF/services 注册，shade 不合并则 NameResolverProvider 丢失 → 地址解析失败）；服务端线可执行 jar 一律 spring-boot repackage（#7/#33），shade 仅此一处 |
 
 生效期暗含在类别中：#13–16 期 3（v0.4）引入；v0.1 实际依赖面为语言、构建、SB、gRPC、Lombok、SCF、可观测、测试与质量工具。
 
@@ -189,6 +190,7 @@ shaded 版将 netty 重打包进 `io.grpc.netty.shaded.*` 命名空间，与宿�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.30 | 2026-10-28 | v1.0 phase-6：组件总表 +36 maven-shade-plugin（artemis-bench 压测 fat jar；ServicesResourceTransformer 为 grpc SPI 必配） |
 | 1.29 | 2026-10-27 | v1.0 phase-1：#8 用途补 artemis-common 直接依赖 grpc-netty（common.tls TLS 装配） |
 | 1.27 | 2026-10-25 | v0.4 phase-2 设计定案：#13 ORM 决断落定（MyBatis-Plus 3.5.17 boot4-starter，实测验证 + JdbcTemplate 回退预案），§6 待定项移除 |
 | 1.26 | 2026-10-25 | v0.4 phase-1 交付：#21 Testcontainers 补 2.0 版本线与模块/包名变化、无 Docker 跳过形态 |

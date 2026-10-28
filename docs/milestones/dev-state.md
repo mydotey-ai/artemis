@@ -19,9 +19,9 @@
 
 | 项 | 值 |
 |---|---|
-| phase | — |
-| 步骤 | — |
-| 分支 / worktree | — |
+| phase | phase-6-capacity |
+| 步骤 | worktree 开工 |
+| 分支 / worktree | v1.0-phase6-capacity @ .claude/worktrees/v1.0-phase6-capacity |
 
 > v0.1–v0.4 已收尾（验收对照见各 `plan.md`）。v0.5（治理面 II）于 2026-10-26 启动，基线 c87dc2a 已提交。phase-1（route-rule 资源模型与持久化）已交付（e961ebb）。phase-2（两段式权重发布与回滚）已交付。
 >
@@ -37,13 +37,25 @@
 >
 > phase-4（部署形态 II：K8s/Helm chart 三服务独立编排 + Dockerfile.service 三单服务镜像 + 探针/DB 可选 + kind 冒烟与 CI 渲染断言）已交付（本 squash）。
 >
+> phase-6（容量验证：artemis-bench + bench.sh + /bench-java-test + 容量基线 small 实测/外推；表外发现 3 节点订阅推送实时性退化）已交付（本 squash）。
+>
 > phase-5（滚动升级协议验证：proto 兼容契约门槛进 dev-test.sh all/CI + 未知字段前向兼容 IT + 3 节点滚动重启 IT；锚点 = 版本收尾 commit、ci fetch-depth 0）已交付（本 squash）。
 
 ## 当前 phase 步骤进度（版本 done 后清空本节）
 
 | 步骤 | 状态 | 备注 |
 |---|---|---|
-| — | — | — |
+| worktree 开工 | pending | |
+| 上下文加载 | pending |
+| 设计 | pending |
+| 实现 | pending |
+| 测试 | pending |
+| code-review | pending |
+| fix | pending |
+| 回归测试 | pending |
+| 验证 | pending |
+| 文档同步 | pending |
+| 完工 | pending |
 
 步骤状态枚举：pending | in-progress | done | skipped。
 
@@ -56,6 +68,6 @@
 | phase-3-docker-vm | done |
 | phase-4-helm | done |
 | phase-5-rolling-upgrade | done |
-| phase-6-capacity | planned |
+| phase-6-capacity | done |
 | phase-7-docs | planned |
 | phase-8-release | planned |
