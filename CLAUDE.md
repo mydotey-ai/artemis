@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 当前状态
 
-设计已定案：架构设计（`docs/arch/artemis-next-architecture.md`，关键决策以 ADR 记录于 `docs/decisions/`）、版本路线图（`docs/product/artemis-next-roadmap.md`）、Java 技术选型与开发规范（`docs/dev/`）均完成评审。脚手架（v0.1 phase-1）已建成 `java/` Maven reactor（`server/` 服务端线 + `client/` SDK 线两目录分组，SDK 独立 parent/版本/依赖管理；`java/pom.xml` 为纯聚合器）与 `proto/` 六组契约骨架，开发经 `/dev-java` 工作流按版本路线图推进——进度与 phase 状态的唯一状态源是 `docs/milestones/dev-state.md`，本文件不复述进度与版本细节。产品文档见 `docs/product/artemis.md`。
+v0.1–v1.0 已交付（v1.0 GA = 生产就绪：注册发现集群闭环 + 治理面完整 + TLS/RBAC + 三种部署形态 + 容量基线 + 滚动升级验证 + 文档站 + SDK 发布配置）。`java/` Maven reactor（`server/` 服务端线 + `client/` SDK 线两目录分组，SDK 独立 parent/版本/依赖管理；`java/pom.xml` 为纯聚合器）与 `proto/` 六组契约经七个版本演进稳定，后续经 `/dev-java` 工作流按版本路线图推进（v1.x：多语言 SDK、Rust 混合集群）——进度与 phase 状态的唯一状态源是 `docs/milestones/dev-state.md`，本文件不复述进度与版本细节。产品文档见 `docs/product/artemis.md`（快速上手 [quick-start.md](docs/product/quick-start.md)）。
 
 ## 构建与测试（Java）
 

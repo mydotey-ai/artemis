@@ -45,11 +45,11 @@ phase-8 说明：client 线独立 parent/版本线（tech-java.md）本就为独
 
 | roadmap 验收要点 | 对应测试 | 结果 |
 |---|---|---|
-| 压测报告公开 | | |
-| 三种形态各自一条命令/一套流程拉起（Docker / VM） | | |
-| 三种形态各自一条命令/一套流程拉起（K8s/Helm） | | |
-| 集群滚动升级无感 | | |
-| 安全审计通过 | | |
+| 压测报告公开 | phase-6：bench.sh small 档实测（10 分钟稳态零丢失、订阅推送 p50=5ms/p95=7ms、3 节点副本一致）+ [容量基线](../../deploy/capacity-baseline.md) 公开（内存公式与 10 万外推口径、复现命令） | 通过 |
+| 三种形态各自一条命令/一套流程拉起（Docker / VM） | phase-3：smoke-deploy.sh docker（`docker run` 单容器三服务就绪 + 401 认证探活 + SDK 走通）；vm（build-dist.sh tar.gz 结构断言 + app.sh start 起服 + 配置覆盖 + SDK 走通） | 通过 |
+| 三种形态各自一条命令/一套流程拉起（K8s/Helm） | phase-4：helm lint/template 渲染断言（CI helm job）+ kind 集群 helm install 三服务就绪探针通过 + port-forward SDK 注册→订阅发现走通 | 通过 |
+| 集群滚动升级无感 | phase-5：proto-compat-check.sh（dev-test.sh all/CI 内嵌，5/5 版本锚点）+ ProtoForwardCompatIT（心跳/复制未知字段前向兼容）+ RollingRestartIT（3 节点优雅/无排水两形态滚动重启注册表完整、无误摘、SDK 不断流） | 通过 |
+| 安全审计通过 | phase-1：TLS 全链路 IT（外部 gRPC/HTTP + 内部 peer/规则流 + 无信任锚拒绝）与 fail-fast 单测；phase-2：RBAC 三角色 × Permission 笛卡尔积矩阵单测 + /admin/v1 判权路由 + 未授权 403 + 凭证变更即时失效 | 通过 |
 
 ## 更新历史
 

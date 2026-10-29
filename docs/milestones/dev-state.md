@@ -11,17 +11,12 @@
 | v0.3 | done | |
 | v0.4 | done | |
 | v0.5 | done | |
-| v1.0 | in-progress | 当前版本 |
+| v1.0 | done | |
 
 状态枚举：planned | in-progress | acceptance | done（planned = 启动产物已写、基线未提交）。
 
 ## 当前版本（版本 done 后清空本节）
 
-| 项 | 值 |
-|---|---|
-| phase | — |
-| 步骤 | — |
-| 分支 / worktree | — |
 
 > v0.1–v0.4 已收尾（验收对照见各 `plan.md`）。v0.5（治理面 II）于 2026-10-26 启动，基线 c87dc2a 已提交。phase-1（route-rule 资源模型与持久化）已交付（e961ebb）。phase-2（两段式权重发布与回滚）已交付。
 >
@@ -43,31 +38,17 @@
 >
 > phase-7（文档站：快速开始/配置参考/运维手册 + README 门户 + 告警示例三件套 + check-docs.sh 守门与 docs.yml CI；修复 phase-3 smoke env 拼写空转假绿与 4 处存量断链）已交付（本 squash）。
 >
-> phase-8（SDK 发布 Maven Central：client 线 release profile + Central 元数据 + release-java.md 流程 + release-dry-run.sh 21 断言演练；starter 更名 artemis-client-spring-boot-starter；两轮 code-review 27 findings 全处置）已交付（本 squash）。v1.0 八个 phase 全部交付，下次 /dev-java 进入版本收尾（验收对照）。
+> phase-8（SDK 发布 Maven Central：client 线 release profile + Central 元数据 + release-java.md 流程 + release-dry-run.sh 21 断言演练；starter 更名 artemis-client-spring-boot-starter；两轮 code-review 27 findings 全处置）已交付（本 squash c808c5e）。
+>
+> **v1.0（GA 生产就绪）已收尾（2026-10-29）**：八个 phase 全部交付，验收对照五条全过（压测报告公开 / Docker+VM / K8s-Helm / 滚动升级无感 / 安全审计，见 [plan.md](v1.0/plan.md) 验收对照表）；文档终检完成（CLAUDE.md 当前状态更新）。下一版本按 roadmap 为 v1.x（生态与多语言，按需排期）。
 
 ## 当前 phase 步骤进度（版本 done 后清空本节）
 
-| 步骤 | 状态 | 备注 |
-|---|---|---|
-| worktree 开工 | done | 分支 v1.0-phase8-release 自基线 0e2790a 起；骨架与索引已登记 |
-| 上下文加载 | done | 已读：roadmap §3 v1.0、plan v1.0 phase-8 说明、tech-java.md、tech-stack #28/#36/#31、guidelines §7/§9/§11、架构（无 SDK 发布章节，工程面）、client 线三 pom、Central Portal 插件文档与 repo1 版本核实、本机 GPG/Maven 环境核查 |
-| 设计 | done | review 通过（2026-10-29），定案 D1–D6 |
-| 实现 | done | D7：starter 更名 artemis-client-spring-boot-starter（git mv 目录 + artifactId + modules + 现行文档 9 文件替换，历史里程碑文档不改；包名/装配注册不涉名） |
-| 测试 | done | 改名后 dry-run 21 断言全绿（新坐标）+ dev-test.sh all 全绿（verify + proto 兼容 5/5） |
-| code-review | done | 第二轮 max 15 findings：12 修复 / 2 驳回 / 1 转 ⑩（明细见 phase doc 实现结果第二轮记录） |
-| fix | done | 含恢复核验顺序缺陷当场修正（dryrun11） |
-| 回归测试 | done | dry-run 21 断言 + 恢复核验 + dev-test.sh all 全绿（verify + proto 兼容 5/5 + check-docs ok） |
-| 验证 | done | 人工验证通过（2026-10-29，用户确认） |
-| 文档同步 | done | 产品文档 1.44 + release-java.md 新建 + tech-stack 1.31 + guidelines 1.27 + tech-java.md 规则 + 改名触及四文档版本头补登 + plan 1.1；无 ADR、CLAUDE.md 无过时 |
-| 完工 | done | squash 收尾完成 |
-
-步骤状态枚举：pending | in-progress | done | skipped。
+（无进行中 phase。）
 
 ## phase 总览（当前版本，版本 done 后清空；只记状态，主题/工作量以 plan 为准）
 
-| phase | 状态 |
-|---|---|
-| phase-1-tls | done |
+（无。）
 | phase-2-rbac | done |
 | phase-3-docker-vm | done |
 | phase-4-helm | done |
