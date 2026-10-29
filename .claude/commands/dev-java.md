@@ -117,7 +117,7 @@
 
 按 `.claude/rules/doc.md`「文档更新机制」执行。
 
-**产出**：**产品文档 `docs/product/artemis.md` 同步更新（必须步骤）——本 phase 交付的对外可见能力（产品定位、核心概念、操作语义、配置与使用等）落入产品文档，与开发进度同步递补；文档不存在则首个收尾的 phase 建立**；API 变更 → `docs/api/` 对应文档；架构变更 → `docs/arch/` + **重大决策在 `docs/decisions/` 新增 ADR**（`adr-<序号>-<名称>.md`，一决策一文件）并登记架构 §7 总览表与 `decisions/README.md`；各级索引同步；**CLAUDE.md 若因本 phase 过时（构建命令、模块结构、当前状态——尤其 phase-1 脚手架）则同步更新**。变更清单登记于 phase 设计文档「文档同步」节。
+**产出**：**产品文档 `docs/product/artemis.md` 同步更新（必须步骤）——仅当本 phase 交付新的对外可见能力（新能力域、操作语义或默认行为变化）时更新：按能力维度增量编辑「功能总览」对应小节与「核心概念」（语义有变则改写原文，新增能力域才加小节）；禁止追加时间序交付记录块（phase 交付明细归 phase 设计文档、进度归 `docs/milestones/dev-state.md`）；工程过程信息（单测/IT 数量、code-review findings、实现取舍）不进产品文档**；API 变更 → `docs/api/` 对应文档；架构变更 → `docs/arch/` + **重大决策在 `docs/decisions/` 新增 ADR**（`adr-<序号>-<名称>.md`，一决策一文件）并登记架构 §7 总览表与 `decisions/README.md`；各级索引同步；**CLAUDE.md 若因本 phase 过时（构建命令、模块结构、当前状态——尤其 phase-1 脚手架）则同步更新**。变更清单登记于 phase 设计文档「文档同步」节。
 
 ### ⑪ 完工
 
@@ -201,7 +201,7 @@ java/ 模块与 proto 组。
 
 ## 文档同步（⑩ 填）
 
-变更文档清单；产品文档 `docs/product/artemis.md` 本 phase 增量为必含项（规则见 ⑩），review 定案触及的原始文档逐条登记同步落点。
+变更文档清单；产品文档 `docs/product/artemis.md` 同步为必检项（规则见 ⑩：仅新的对外可见能力需落档，纯内部重构/验证型 phase 允许「无增量」并在此说明原因），review 定案触及的原始文档逐条登记同步落点。
 
 ## 更新历史
 

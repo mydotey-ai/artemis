@@ -1,455 +1,151 @@
 # Artemis 产品文档
 
-版本: 1.44    更新时间: 2026-10-29
+版本: 2.0    更新时间: 2026-10-29
 
-> 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
+> 本文是 Artemis 的产品总览：产品定位、架构、核心概念与功能地图，并导航到快速开始、部署与 API 文档。上手从[快速开始](quick-start.md)进入；产品规划见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
 ## 1. 产品定位
 
-开源服务注册中心，对标 Nacos：具备原产品（支撑过 10 万+ 实例）的核心能力并现代化，单集群 10 万实例级。成功标准与迭代策略见[路线图 §1](artemis-next-roadmap.md#1-定位与成功标准)。
+Artemis 是开源服务注册中心，对标 Nacos：具备原产品（在携程支撑过 10 万+ 服务实例）的核心能力并现代化重设计，目标单集群 10 万实例级。核心取舍：
 
-## 2. 核心概念
+- **AP 可用性优先**：对等节点异步复制 + 租约心跳，网络分区时宁可返回陈旧数据不拒绝服务；数据面纯内存，不依赖外部存储。
+- **注册与发现分离**：registry（注册面）与 discovery（发现面）独立部署、独立扩缩；发现侧单节点可聚合多个 registry 集群。
+- **数据面与管理面双轨**：注册发现数据（内存 + 复制 + 快照）与治理元数据（DB 持久化）分离，数据面零 DB 依赖。
+- **零依赖起步**：单进程 all-in-one + 内存态治理即可完整体验，生产按规模拆分部署。
+
+成功标准与迭代策略见[路线图 §1](artemis-next-roadmap.md#1-定位与成功标准)。
+
+## 2. 架构总览
+
+三个可独立部署的服务组成产品：
+
+| 服务 | 角色 | 数据 | 形态 |
+|---|---|---|---|
+| registry | 注册面：接收注册/心跳，维护权威注册表 | 纯内存 + 快照落盘，对等复制 | 集群（1..N 对等节点） |
+| discovery | 发现面：消费 registry 分发流，提供查询/订阅 | 只读投影副本，不组集群 | 单节点或多实例（各自独立聚合） |
+| management | 治理面：摘除/灰度/逻辑实例/账户与审计 | MySQL / PostgreSQL 或内存态 | 单实例 |
+
+- **数据流**：业务实例 → registry（心跳即注册）；registry → discovery（全量快照 + 增量变更流的投影分发）；management → discovery（治理规则流 + 逻辑实例流）；消费方 → discovery（订阅/查询）。
+- **管理流**：management 经 registry 内部只读端口查询事实（服务/实例/租约/保护态/配置）。
+- 三服务可合并为单进程 all-in-one（[all-in-one.md](../api/all-in-one.md)），治理链默认闭合、DB 可选。
+- 端口约定与全部配置键见[配置参考](../deploy/config-reference.md)。
+
+## 3. 核心概念
 
 - **服务注册与发现**：实例向注册中心注册并周期心跳续约，消费方订阅获取服务实例集。
 - **namespace**：多租户隔离单元，服务的内禀属性。
 - **服务与实例标识**：服务由 `(namespace, service)` 标识（`ServiceKey`）；实例由 `instance_id` 在服务内标识（`InstanceKey`）。
-- **实例状态**：客户端自报（服务端不做主动探测）；实例数据由客户端上报，服务端只存事实。
-- **投影分发（registry → discovery）**：registry 向 discovery 推送实例事实（全量快照 + 新增/变更/移除三值变更流）；discovery 侧投影是只读副本，discovery 不组集群。
-- **多集群聚合**：单 discovery 节点可同时订阅多个 registry 集群，各源投影本地独立维护、查询/订阅时刻合并（默认 union，可按来源 cluster 过滤）；聚合只发生在本地，无跨源污染（ADR-002）。
-- **逻辑实例（静态实例）**：第三方/异构服务（不经注册体系）由管理面维护为静态实例，经 management 持久化与专属订阅流下发，discovery 以保留来源 cluster `logical` 进入统一发现视图——与真实实例 union 出现在查询/订阅/对账中；无心跳无租约（status 为管理面静态事实），四级摘除对其同样生效。
+- **租约**：注册的事实形态——心跳续约租约（默认 TTL 30s，单调时钟判定不受系统校时影响），过期自动清理；实例状态客户端自报，服务端只存事实、不做主动探测。
+- **自我保护**：续约量异常下跌（网络分区/客户端批量异常）时暂停过期清理，防大规模误摘；节点级兜底 + 服务级权威两层判定。
+- **投影分发（registry → discovery）**：registry 向 discovery 推送实例事实（全量快照 + 增量变更流）；discovery 侧投影是只读副本，discovery 不组集群。
+- **多集群聚合**：单 discovery 节点可同时订阅多个 registry 集群，各源投影本地独立维护、查询/订阅时刻合并（默认 union，可按来源 cluster 过滤）；聚合只发生在本地，无跨源污染。
+- **逻辑实例（静态实例）**：第三方/异构服务不经注册体系，由管理面维护为静态实例，以保留来源 cluster `logical` 进入统一发现视图——与真实实例 union 出现在查询/订阅/对账中；无心跳无租约，摘除对其同样生效。
+- **推拉结合**：订阅通道 = 实时推增量 + 定期拉全量 + checksum 对账兜底，增量丢失可显式检测与自愈。
 
-数据模型与操作语义以仓库顶层 `proto/` 契约（单一来源：[proto 契约规范](../dev/proto-contract.md)）为准；本版契约的设计细节见 [phase-1 设计文档](../milestones/v0.1/phases/phase-1-scaffold.md)。
+数据模型与操作语义以仓库顶层 `proto/` 契约为单一来源（[proto 契约规范](../dev/proto-contract.md)）。
 
-## 3. 开发者入口
-新用户从 [快速开始](quick-start.md) 进入（10 分钟注册 + 发现闭环）；本节面向仓库开发者。
+## 4. 功能总览
 
-### 仓库结构
+### 4.1 服务注册与发现
 
-单 monorepo，顶层按语言分目录：
+- **注册模型**：register / update / deregister 三操作语义明确（无条件覆盖 / 幂等 upsert / 幂等意图注销），心跳流全量上报对账——缺席实例自动补注册、内容变化覆盖，客户端崩溃后无需显式恢复。
+- **发现订阅**：server-stream 推送，首条全量基线 + 稳态实时增量；按 services / labels / clusters 选择器订阅，labels 订阅推送即视图语义（进出视图由服务端翻译，SDK 直接 apply）。
+- **兜底与新鲜度**：checksum 对账（默认 60s）显式检测增量丢失，全量刷新（15min）为最终兜底；查询/对账响应携带上游新鲜度（`SYNCED` / `DISCONNECTED` 陈旧标记），消费方可感知数据降级。
+- **SDK 侧容灾**：本地视图不可变快照零拷贝读、磁盘快照冷启动回放，server 全挂时最后视图继续服务。
 
-| 目录 | 内容 |
-|---|---|
-| `proto/` | 语言无关 proto 契约（六组：`common` 公共数据模型 + `registry`/`replication`/`projection`/`discovery`/`management`），非构建体系、不产 artifact |
-| `java/` | Java 实现：Maven 单 reactor，服务端（`release=25`）与 SDK/starter（`release=8`）同一 reactor 混合编译 |
+### 4.2 集群与高可用
 
-### 构建与测试
+- **对等复制（无主）**：心跳续约即向 peer 扇出维持副本；删除不跨节点传播——收不到续约的租约全集群分别过期，分区恢复自动补注册；单节点部署零复制开销。
+- **新节点 bootstrap**：加入/重启优先从就绪 peer 全量同步（分片流 + 整体替换），无 peer 时回退本地快照，否则空表就绪（心跳即注册自愈）。
+- **优雅停机与滚动升级**：停机先标记 `DOWN`（SDK 选址降权）→ 排水等待 → 终刷快照，客户端无感换址；proto wire 兼容纪律 + 未知字段前向兼容由 CI 契约门槛保障，3 节点滚动重启不断流。
+- **快照与恢复**：注册表默认 5min 原子落盘，重启只回放时效内（默认 1h）快照，TTL 从回放时刻重新起算；缺失/损坏/超期统一空表启动不拒绝服务。
 
-```bash
-mvn -f java/pom.xml verify                 # 全量构建 + 测试（spotless + enforcer + 单测）
-java/scripts/dev-test.sh [unit|integration|all]   # 统一测试入口，默认 all（all = verify + proto 兼容检查）
-mvn -f java/server/pom.xml spotless:apply  # 提交前格式化（服务端线）
-mvn -f java/client/pom.xml spotless:apply  # 提交前格式化（SDK 线）
-docker build -t artemis-registry-server .  # registry-server 镜像（多阶段自包含）
+### 4.3 弹性与保护
+
+- **两层自我保护**：服务级窗口为权威（该服务峰值达 `minCount` 后按服务判定，保护中的服务保留租约、其余照常清理），节点级全局窗口兜底网络分区/小服务；显式 deregister 不受影响；健康后超时自动回落（防客户端迁移造成永久保护）。
+- **集群语义**：各节点只按本地收到的心跳独立判定，保护态不复制不持久化。
+- **容量与已知限制**：见[§6 性能与容量](#6-性能与容量)。
+
+### 4.4 流量治理（management）
+
+治理能力经管理面 API（[admin-api.md](../api/admin-api.md)）与内嵌 console 操作，规则经版本化规则流下发 discovery，生效水位可观测（`GET /admin/v1/status/rules`，含各活订阅已应用版本）。
+
+- **四级摘除**：INSTANCE / SERVER / ZONE / GROUP（后三级按实例 metadata 键 `server`/`zone`/`group` 取值匹配，实时生效、新注册实例天然命中）；操作记录即状态（EJECT 可叠加 / RECOVER 反向对消，不删历史），全部治理操作进审计表。
+- **route-rule 两段发布**：编辑列与生效列物理分离——编辑通道永不触碰线上权重（修复「编辑清空已发布权重」缺陷模式）；`release` 生效并落 append-only 发布记录，`rollback` 指向历史记录一键还原，`diff` 发布预览。
+- **canary 一键用法**：`POST /admin/v1/canary/{ns}/{svc}`（selector + weight）一个 API 完成金丝雀部署——weight 0 = 金丝雀实例摘出（dark launch）、10000 = 稳定组全量切流，`DELETE` 结束灰度；金丝雀身份以实例 metadata 表达（如 `version=canary`），全程零 IP 维护。
+- **逻辑实例**：第三方服务静态实例纳入统一发现视图（见 §3）。
+- **console**：内嵌原生单文件 SPA（management 外部端口根路径，零前端依赖），服务/实例视图、摘除、路由规则发布闭环、订阅关系、审计流、自我保护态七视图；与 Admin API 同源认证。
+
+### 4.5 安全
+
+- **认证**：各服务默认开启 HTTP Basic 单账户（eval 默认凭证 `artemis`/`artemis`，生产必改）；registry/discovery 外部端口与内部 peer 端口凭证分域互不通用；management DB 态下账户唯一源为账户表（PBKDF2 哈希存储，支持改密与多账户）。
+- **RBAC**：management 预置 ADMIN / OPERATOR / VIEWER 三角色，`/admin/v1` 逐端点判权、未登记路径默认 deny（401 未认证 / 403 越权分层）；角色→权限矩阵为产品语义。
+- **TLS**：显式启用、默认明文（eval 零依赖路径不变）——外部端口经 Spring SSL bundle，内部通道经 SCF 键；server-auth（加密 + 服务端身份校验），证书 PEM 文件轮换重启生效。
+
+### 4.6 可观测
+
+- **指标**：各服务管理端口 `/actuator/prometheus`（实例数、心跳、复制、bootstrap、订阅推送、自我保护等）；SDK 侧 Micrometer 指标随宿主应用暴露。
+- **告警**：`deploy/alerts/` 提供 Prometheus 规则 7 条（节点失联/保护态/复制健康）+ scrape 配置 + Alertmanager 路由示例；处置路径见[运维手册](../deploy/operations.md)。
+- **状态 API**：租约明细、自我保护统计（节点级 + 服务级）、配置状态（敏感值脱敏）、持久化形态、规则生效水位、上游新鲜度与订阅关系。
+- **日志与追踪**：结构化 JSON 日志；OpenTelemetry trace 可选启用。
+
+### 4.7 SDK
+
+Java 8 SDK（零 Spring 依赖），注册与发现统一，坐标（版本线独立于服务端，首版 1.0.0）：
+
+```xml
+<dependency>
+    <groupId>org.mydotey.ai.artemis</groupId>
+    <artifactId>artemis-client</artifactId>
+    <version>1.0.0</version>
+</dependency>
 ```
 
-环境前提：JDK 25（编译/工具进程）与 JDK 8（client 测试 JVM，经 Maven toolchains；模板 `java/toolchains.xml.example`，复制到 `~/.m2/toolchains.xml` 并改 `jdkHome`）。
+- **注册侧 `RegistryClient`**：fire-and-forget（本地集同步更新后异步上报，失败内部重试 + 心跳自愈，调用方不处理操作结果）；close 即优雅下线，实例即刻消失。
+- **发现侧 `DiscoveryClient`**：按选择器独立订阅、本地视图 union、磁盘快照冷启动兜底。
+- **地址容灾**：三级地址管线（配置 url → HTTP 前置寻址 → 节点目录）+ 节点观测态优先级选址 + 熔断换址 + 连接 TTL 定期轮换——节点死亡客户端无感切换。
+- **Spring Boot**：`artemis-client-spring-boot-starter`（2.7+）双侧自动装配、生命周期托管、MeterRegistry 注入。
+- 用法见 [sdk-java.md](../api/sdk-java.md) / [sdk-java-discovery.md](../api/sdk-java-discovery.md)；多语言 SDK 按路线图 v1.x 推进。
 
-### 模块
+## 5. 部署形态
 
-| 模块 | 目标 | 职责 |
+| 形态 | 适用 | 入口 |
 |---|---|---|
-| `artemis-common` | 25 | 服务端公共规范/工具（SCF 配置工具/通用 source）；proto 生成 `common.v1` + `projection.v1` + `management.v1`（服务端共享） |
-| `artemis-registry-core` / `-server` | 25 | registry 内核 / Spring Boot 装配 |
-| `artemis-discovery-core` / `-server` | 25 | discovery 投影内核 / Spring Boot 装配 |
-| `artemis-management-core` / `-server` | 25 | 治理面内核 / Spring Boot 装配 |
-| `artemis-client` | 8 | 注册 + 发现统一 SDK（零 Spring） |
-| `artemis-client-spring-boot-starter` | 8 | client 的 Spring Boot 集成（双侧自动装配、生命周期托管、MeterRegistry 注入） |
-| `artemis-dist` | 25 | all-in-one 组合入口：同 JVM 起 registry + management + discovery 三上下文，产出单包可执行 jar |
+| Docker all-in-one | 体验/开发/单机小规模 | 一条 `docker run` 起三服务（[docker.md](../deploy/docker.md)） |
+| VM 安装包 | 虚拟机/物理机 systemd 托管 | `artemis-<version>.tar.gz` + `app.sh` 运维脚本（[vm.md](../deploy/vm.md)） |
+| Kubernetes Helm | 生产容器编排 | chart 三服务独立编排、DB/TLS 可选（[k8s.md](../deploy/k8s.md)） |
+| 单服务镜像 | 按角色独立部署/扩缩 | registry / discovery / management 各自镜像 |
 
-## 4. 交付状态
+部署共性：配置全 env 可注入（relaxed 映射）、DB 可选（未配置即内存态）、TLS/认证透传、探针与优雅停机对齐编排语义。运维（启停升级/监控接入/告警处置/排障/数据恢复）见[运维手册](../deploy/operations.md)，全量配置键见[配置参考](../deploy/config-reference.md)。
 
-**v0.2（registry 集群）已交付**（2026-10-23 版本收尾，验收对照见 `docs/milestones/v0.2/plan.md`）；**v0.3（discovery）已交付**（2026-10-24 版本收尾，验收对照见 `docs/milestones/v0.3/plan.md`）；v0.4（治理面 I）进行中；进度以 `docs/milestones/dev-state.md` 为准。
+## 6. 性能与容量
 
-**phase-1（脚手架 + proto 契约骨架）已交付**：`java/` 十模块 Maven reactor 骨架（parent + 各 core/server/client/starter）与 `proto/` 六组契约骨架（v0.1 定稿 `common.v1` + `registry.v1`，其余四组占位）；`mvn -f java/pom.xml verify` 全绿，enforcer 模块边界断言（core 禁 Spring、client 禁服务端模块）生效。
+small 档实测（3 节点 registry + 1 万实例，[容量基线](../deploy/capacity-baseline.md)）：
 
-**phase-2（注册模型四操作 + 租约过期清理 + gRPC 装配）已交付**：
+| 指标 | 结果 |
+|---|---|
+| 注册风暴 | 30s ramp 全部到位 |
+| 稳态续约 | 10 分钟零丢失（续约率 2100/s 吻合理论值） |
+| 订阅推送延迟 | p50 = 5ms / p95 = 7ms（每订阅者独立配对） |
+| 副本一致性 | 3 节点全量一致 |
+| 内存公式 | registry ≈ 65KB/实例；10 万实例外推口径与直测复现命令见基线文档 |
 
-- **注册表服务**：`registry.v1` 四操作（register 无条件覆盖 / deregister 意图幂等 / update 幂等 upsert）与心跳全量上报对账（逐实例续约 + 缺席自动注册 + 内容变化覆盖，不做集合 diff）落地；批量部分失败语义（逐实例 `INVALID_ARGUMENT` 明细，weight ≤ 0 归一 100）。
-- **租约与过期**：心跳续约租约，默认 TTL **30s**（原产品 20s），过期清理周期默认 **1s**；TTL 判定用**单调时间源**——系统校时（NTP 跳变）不影响过期正确性。
-- **接入**：gRPC 服务（Spring Boot 官方 starter 装配，默认端口 9090；心跳为 bidi-stream 逐请求 ack，`seq` 归属 + `server_time_ms` 服务器时间基准）；同 key 变更事件有序派生（v0.2 phase-2 起由变更事件扇出消费）。
-- **工程形态**：registry-core 按 DDD 四层组织（ADR-015：application / domain / infrastructure，gRPC 接入在 server 模块）；37 单测 + 6 服务级集成测试（进程内起真实 gRPC 服务端到端验证）。
+已知限制：3 节点拓扑下订阅推送实时性退化（观察率 37%，部分事件靠对账分钟级收敛；单拓扑 p95 = 7ms 对照），机制排查后置 v1.x。
 
-**phase-3（自我保护 + 服务端快照 + readiness 门控）已交付**：
+## 7. 版本与路线
 
-- **自我保护基础版**：按全局续约滑动窗口统计（窗口 10s），历史峰值达启用下限（50）后，当前窗口续约量低于峰值的 85% 即进入保护态；保护态暂停整轮租约过期清理（防网络分区/客户端异常时大规模误摘），显式 deregister 不受影响。
-- **服务端快照与重启回放**：内存注册表默认每 **5min** 落盘到 `data/registry-snapshot.bin`（原子写：临时文件 fsync 后 rename），快照带落盘时间戳；重启只回放**时效内**（默认 ≤ **1h**）快照，实例 TTL 从回放时刻重新起算；缺失/损坏/超期快照统一丢弃并空表启动（不拒绝启动）。时钟回拨宽容上限 1min，超前超限按超期处置。
-- **readiness 门控**：启动数据源就绪（v0.1 = 回放完成或确认无有效快照）前不接客户端流量，gRPC 返回 `UNAVAILABLE`；无快照时空表直接就绪（心跳即注册，客户端自愈），不做跨节点等待。
-- **工程形态**：56 内核单测 + 5 服务端单测 + 7 服务级集成测试（含重启回放端到端、readiness 正常路径）。
+当前 **v1.0 GA（生产就绪）**：注册发现集群闭环（复制 / bootstrap / 优雅停机 / 滚动升级验证）+ 完整治理面（摘除 / 灰度 / 逻辑实例 / console / RBAC）+ TLS + 三种部署形态 + 容量基线。
 
-**phase-4（配置规范化 + registry-server 装配）已交付**：
+- 版本规划与后置项：[路线图](artemis-next-roadmap.md)（v1.x：多语言 SDK、Rust 混合集群等）
+- 开发进度与 phase 状态：[dev-state.md](../milestones/dev-state.md)（唯一状态源）
+- API 全集：[API 参考门户](../api/README.md)
 
-- **配置（SCF）**：每服务统一装配 `ConfigurationManager` + `StringProperties`，业务配置项由使用它的类就地定义。source 优先级：Spring Environment（命令行 `--artemis.registry.*=` / Spring 属性）> 系统属性 > 环境变量（`ARTEMIS_REGISTRY_*` 映射）> 工作目录 `artemis.properties`（运行中变更自动重载）。动态项：租约 TTL、自我保护窗口/阈值、清理与快照周期、认证开关与凭证（v0.2 起）、management 查询 deadline；静态项：监听端口/地址、快照路径/回放时效、集群成员与自身标识、management 端点（v0.2 起）。越界数值回落默认并记日志；配置文件不可读/格式错误启动失败。
-- **端口**：外部 gRPC **9090**、外部 HTTP **8080**、管理 HTTP **9091**（默认仅绑本机）。管理端口承载 actuator。
-- **认证**：默认开启单账户 HTTP Basic（默认 `artemis`/`artemis`，生产须修改；`artemis.registry.auth.enabled=false` 可关闭）。gRPC 与外部 HTTP 生效；外部 `/readyz` 与 gRPC 健康探针放行。
-- **可观测**：管理端口 `/actuator/prometheus`（实例数、心跳、清理、保护态指标）与 `/actuator/health/readiness`；外部 `/readyz`；结构化 JSON 日志；OpenTelemetry trace 接线（默认不导出 OTLP，配置 endpoint 后开启）。
-- **成员抽象**：`ClusterMembers` 静态实现（逗号分隔 `host:port`，支持括号 IPv6），v0.2 接入复制与 readiness。
-- **工程形态**：common 8 + core 77 + server 22 单测、13 服务级集成测试。
+## 8. 参与开发
 
-**phase-5（registry 内部只读查询 RPC）已交付**：
-
-- **契约归属**：查询 service 定义在 `management.v1`（管理面契约组，不随数据面冻结、client SDK 不生成）；服务端由 artemis-common 单源生成，registry 实现、management 消费。
-- **查询能力**：服务列表（可按 namespace 过滤）、实例快照、租约明细（age/剩余 TTL；可按 namespace/service 过滤，单次上限 10000 条并标记 truncated）、自我保护统计、配置状态（key/value/source/静态标记/默认值/doc，按 key 升序）。
-- **安全**：敏感配置（password/passwd/pwd/secret/token/credential/apikey/accesskey/privatekey）的 value 与默认值均输出 `******`，registry 永不返回明文凭证；查询复用外部 gRPC 端口与默认认证；v0.1 与 SDK 共用单账户凭证（RBAC 随 v1.0、内部端口分离随 v0.2）为已知限制。
-- **工程形态**：common 8 + core 89 + server 22 单测、20 服务级集成测试。
-
-**phase-6（management-service 内存态管理面）已交付**：
-
-- **独立服务**：management-service 独立进程（外部 HTTP **8081**、管理端口 **9092**），默认 Basic 认证；启动不依赖 registry 可用，registry 故障时查询 API 返回 503。
-- **实例管理 Admin API**：服务列表 / 服务详情 / 实例摘除 / 恢复（`/admin/v1`）。摘除记录归 management（内存态、重启丢失），**不修改 registry** 的注册数据与租约；详情默认返回已应用摘除过滤的**有效视图**，`includeEjected=true` 可展开被摘除实例；摘除/恢复幂等。
-- **状态 API**：租约明细 + 自我保护统计、registry 配置状态（敏感值 `******`），数据经 registry 只读查询透传。
-- **出站查询**：management → registry 走 gRPC 只读查询（v0.1 复用外部端口；v0.2 起改连内部 peer 端口，端点无默认值，单次 deadline 默认 3s 且动态可调，入站上限 16 MiB）；registry 不可用或端点未配置映射为 503。
-- **契约**：Admin/状态 API 为 HTTP/JSON（[admin-api.md](../api/admin-api.md)），不新增 proto；`BasicAuth` 上移 `artemis-common` 供两服务复用。
-- **工程形态**：management-core 19 单测；management-server 16 单测 + 11 服务级集成测试（同 JVM 起真实 registry + management，覆盖有效视图/事实不变/恢复/幂等/认证/状态 API）。
-
-**phase-7（Java 8 SDK 注册侧）已交付**：
-
-- **公开 API**：`ArtemisClient`（v0.3 phase-8 起更名 `RegistryClient`；`start`/`register`/`update`/`deregister`/`close`）+ 不可变值类型 `ServiceId`/`InstanceId`/`ServiceInstance`/`InstanceStatus`；入口 `ArtemisClients.newClient(...)`（phase-8 起 `newRegistryClient`，无 builder）。完整用法见 [sdk-java.md](../api/sdk-java.md)。
-- **操作语义**：fire-and-forget——本地集同步更新后异步上报，失败内部重试 + 心跳自愈，调用方不处理操作结果；重试前重读本地集，防陈旧状态重放。
-- **心跳与容错**：gRPC bidi 流全量上报（默认 5s），seq/ack、指数退避重连、ack 看门狗与 keepAlive 感知半开连接；地址经前置寻址发现管线（v0.2 phase-5 升级为三级容灾 + TTL 轮换，见下）。
-- **生命周期**：`start`/`close` 幂等；close 先停心跳、等待在途上报，再全量注销——优雅下线实例即刻消失；零非 daemon 线程遗留。
-- **配置**：全部经 SCF `artemis.client.*`（地址/凭证/重试/心跳/重连），环境变量容器友好映射；注册侧不做磁盘快照（崩溃后业务重新注册 + 心跳幂等收敛）。
-- **可观测**：Micrometer 指标（操作失败/耗时、心跳失败、重连、连接态、本地实例数，带 client 标签），缺省挂 `Metrics.globalRegistry`，starter 将自动接 Boot `MeterRegistry`。
-- **工程形态**：client 24 单测（JDK 8 运行时）；registry-server 侧 `ClientSdkIT` 5 例端到端（注册可见/续约/更新/优雅下线/错误凭证）。
-
-**phase-8（Spring Boot starter + CI + Dockerfile）已交付**：
-
-- **starter**：`artemis-client-spring-boot-starter`（Java 8 / Spring Boot 2.7+）自动装配——`spring.factories`（老 2.x）+ `AutoConfiguration.imports`（2.7+）双注册；配置经 Spring Environment 进 SCF（application.properties/YAML、命令行、系统属性/环境变量，键写法 camelCase/kebab/snake 均可）；`initMethod=start` / `destroyMethod=close` 托管生命周期；自动注入 Boot `MeterRegistry`（无 registry 或多个同型 bean 时回落 `Metrics.globalRegistry`）；`artemis.client.enabled=false` 可关闭，宿主自定义 `RegistryClient` 时让位。用法见 [sdk-java.md](../api/sdk-java.md#spring-boot-自动装配)。
-- **CI**：GitHub Actions 按路径触发（`java/**`、`proto/**`、Dockerfile/workflow 变更）；`java` job 以 JDK 25 构建、经 Maven toolchains fork JDK 8 跑 client/starter 测试，强制 spotless:check + enforcer + 单测/集成测试；`docker` job 构建镜像。
-- **镜像**：仓库根多阶段 Dockerfile（`maven:3.9-eclipse-temurin-25` → `eclipse-temurin:25-jre`），`docker build .` 一条命令产出 registry 单服务镜像；非 root 运行，快照目录 `/app/data` 可写；暴露外部 gRPC 9090 / HTTP 8080。
-
-**v0.2 phase-1（peer 协议与静态多节点成员）已交付**：
-
-- **复制契约**：`replication.v1` 一次定稿成员/节点状态、增量变更批量投递（按 service 聚合，unary 响应即确认）、全量 bootstrap（server-stream 分片）；本 phase 实现 `GetNodeStatus`，`Replicate`/`Bootstrap` 在 phase-2/3 实现前返回 `UNIMPLEMENTED`。
-- **双 gRPC 监听**：外部端口仅承载 SDK；新增内部 peer 端口（默认 **9093**，固定端口，地址无默认值——未配置时绑所有网卡）。内部端口承载 peer 复制/节点状态与 management 只读查询，使用独立认证账户（默认关闭；启用后与外部账户互不通用）。关闭认证的部署需以网络策略隔离内部端口。
-- **静态多节点成员**：`artemis.registry.cluster.members=<node-id>@<host>:<port>,...`（支持括号 IPv6），`artemis.registry.cluster.self` 显式标识本节点；非法条目/重复 id/self 未命中启动失败。节点对外端点在 phase-3 扩展为三段式成员条目（见 phase-3 交付节）。
-- **配置动态性**：自我保护窗口、清理/快照周期、认证开关与凭证、management 查询 deadline 支持运行期变更（SCF 监听/每次取值）；监听地址与集群拓扑等启动期属性变更需重启。
-- **工程形态**：双监听/认证隔离/内部查询迁移/3 节点进程内成员互见 IT；proto、架构、开发规范与 API 文档同步。
-
-**v0.2 phase-2（变更事件扇出）已交付**：
-
-- **副本租约语义（继承原产品）**：副本与事实源是同一种租约——心跳纯续约发 `RENEW` 批量扇出维持 peer 副本；TTL 过期清理本地各自发生、产生的 DELETE **不扇出**（删除不跨节点传播，收不到续约的租约全集群分别过期）；复制入站零事件（防回环）、`RENEW` 到达而本地副本已被清理时自动补注册重建（分区恢复路径）。多节点配置（`cluster.members` + `cluster.self`）时启用扇出；单节点零开销（事件出口为 no-op）。
-- **扇出管线**：变更事件（NEW/UPDATE/DELETE/RENEW）经全局有界队列 → 聚合线程按 service 聚合批量（同实例变更合并、产生序保持、单批上限拆分）→ 每 peer 独立有界队列串行投递；投递失败全抖动指数退避重发同批（保序）；**确定性失败**（批次非法整批拒绝、滚动升级窗口 `UNIMPLEMENTED`、凭证不匹配）丢批续投不阻塞队头。队列满丢弃（全局丢当条、peer 队列丢最旧）+ 计数，丢失由自愈链兜底（变更再扇出 / 客户端 TTL 轮换 / bootstrap）。
-- **复制配置**（`artemis.registry.replication.*`，SCF）：`queueCapacity`（全局事件队列，静态，默认 16384）、`peerQueueCapacity`（per-peer 批队列，静态，默认 4096）、`maxBatchChanges`（单批上限，动态，默认 1024）、`retryInitialMs`/`retryMaxMs`（退避基数/上限，动态，默认 1s/60s）、`sendTimeoutMs`（投递 deadline，动态，默认 5s）。
-- **复制指标**（`/actuator/prometheus`）：`artemis.registry.replication.batches.sent|failed|rejected|dropped`（tag `peer`，前二者为投递结果、rejected 为确定性失败丢批、dropped 为 peer 队列满丢最旧）、`events.dropped`（全局队列满）、入站侧 `batches.received` / `applied.changes`。
-- **工程形态**：副本租约语义与扇出编排单测 + 3 节点进程内 IT（任一节点写入全节点最终一致、RENEW 维持、猝死全清理、过期重建、缺席 peer 退避收敛、指标）；proto `CHANGE_TYPE_RENEW=5`（兼容追加）。
-
-**v0.2 phase-3（peer 全量 bootstrap 与节点状态 API）已交付**：
-
-- **peer 全量 bootstrap**：新节点加入/重启时若存在已就绪（`UP`）peer，异步从候选 peer 拉取全量注册表（server-stream 分片，按序列化字节预算），校验/归一后**整体替换**（零事件、TTL 从应用起算）——同步成功才 ready。失败按全抖动指数退避重试（默认 1s→10s），每轮依次尝试全部 `UP` 候选；**一旦确认过数据源，后续 peer 全部不可达也保持 not ready、不降级本地快照**。无 `UP` peer 时回退本地有效快照，否则空表 ready（分支②/③）。
-- **not ready 语义**：外部写流量由 readiness 拦截；内部 `Replicate`/`Bootstrap` 返回 `UNAVAILABLE`（发送侧保序重试，避免覆盖全量同步、也禁止未就绪节点充当数据源）；快照调度器在 not ready 期间不落盘（防止空表覆盖可回退快照）。
-- **成员配置**：`<node-id>@<peer-host>:<peer-port>@<external-host>:<external-port>`（集群模式三段必填；host 支持括号 IPv6）。对外端点显式配置以支持多网卡/NAT/K8s，节点状态 API 原样返回。
-- **节点状态 API**：外部 gRPC `artemis.replication.v1.NodeStatusService/GetNodeStatus`（保留外部认证；readiness 按方法名豁免，便于观察 `STARTING`）。返回 `self` 就绪态 + 全部成员的 peer/external 端点与**观测态**；观测态由后台探测维护——默认每 **5s**（`probeIntervalMs`）用虚拟线程**并发探测全部 peer**，单 peer/整轮超时默认 **1s**（`probeTimeoutMs`），失败/超时/nodeId 不匹配 = `UNKNOWN`，每轮整体重建。探测只服务 API/观测，不参与复制扇出门控；SDK（phase-5）以该列表为候选地址来源，优先 `UP`、连接失败/熔断兜底。
-- **配置（SCF）**：`artemis.registry.cluster.probeIntervalMs`、`probeTimeoutMs`（动态）；`artemis.registry.bootstrap.retryInitialMs`、`retryMaxMs`、`statusTimeoutMs`、`timeoutMs`、`shardBytes`（动态）；`artemis.registry.bootstrap.maxInboundMessageBytes`（静态）。
-- **指标**：`artemis.registry.bootstrap.attempts|failures|synced.instances`、`artemis.registry.cluster.probe.rounds`、`artemis.registry.cluster.probe.failures{peer}`、`artemis.registry.cluster.peers.up`（经 `/actuator/prometheus`）。
-- **工程形态**：探测并发/超时/恢复、启动分支、整体替换、bootstrap 分片等单测；集群 IT 覆盖新节点加入全量同步、重启优先 peer、无 UP peer 回退快照、已就绪 peer 同步失败重试恢复、对外节点状态 API（含停节点标记 UNKNOWN）。
-
-**v0.2 phase-5（SDK 三级地址容灾与连接 TTL 轮换）已交付**：
-
-- **三级地址管线**：配置 url（`artemis.client.registry.addresses`，生产配域名/LB）→ HTTP 前置寻址 `GET /cluster/nodes`（Basic 认证，protobuf bytes，稳态 5min 刷新）取得节点列表 → 选址池按观测态优先级随机（`UP` > `UNKNOWN`/`STARTING` > `DOWN`，状态只作优先级不作排除）。拉取失败保留旧列表（不清空）、指数退避重试；未就绪节点寻址应答 503（SDK 重试其它 url / 单域名退避重试原址）。
-- **熔断换址**：断流/开流失败/ack 超时计入当前地址连续失败（仅心跳引擎驱动，归因无竞态），达阈值（默认 3）熔断并立即重新前置寻址；全部熔断仍全量随机（降权不清零）。当前节点死亡无感换址，心跳全量上报使新节点 upsert 自愈——业务实例不过期。
-- **连接 TTL 轮换**（ADR-006 分布式对账）：心跳流按 TTL（默认 10min ± 20% 抖动）主动换址重建，开流全量上报修复新节点丢失的事件残留；健康换址不计失败不进熔断。
-- **配置与可观测**：`registry.connection.ttlMs`、`registry.address.refreshIntervalMs/retryBaseMs/retryMaxMs/circuitThreshold/circuitOpenMs`（均动态可调）；指标 `rotation`、`address.circuit.opened{address}`、`nodelist.refresh{outcome}`。
-- **工程形态**：client 44 单测（选址/熔断/寻址/轮换压测）+ registry-server `SdkFailoverIT`/`ClusterNodesHttpIT`（3 节点真实集群 + 真实 SDK 端到端容灾）；API 文档（sdk-java / node-status-api）同步。
-
-**v0.2 phase-4（自我保护 2.0：节点级兜底 + 服务级权威）已交付**：
-
-- **两层判定**：保留节点级全局窗口（原 10s/85%/下限 50 语义）作为网络分区/小服务/纯副本兜底；新增每服务窗口，服务峰值达 `minCount` 后服务级状态权威，否则回落节点级。过期清理按服务判定：保护中的服务保留租约，其余服务照常清理；显式 deregister 不受影响。
-- **显式状态与回落**：每窗口维护 `NORMAL/PROTECTING`、`protectingSince`、迁移计数与结构化日志；状态只由 1s 清理调度中的周期评估器写入。节点健康时服务峰值 `maxCountResetMs`（默认 10min）未抬升即回落，限制客户端迁移造成的永久保护；节点级保护中不回落。动态调整窗口时以新口径重建峰值基线，避免误触发。
-- **可观测（有界基数）**：节点级沿用 `artemis.registry.self.protection|renewals|max`；服务级 `artemis.registry.self.service.protection{namespace,service}` 仅在保护中注册，另有 `...count` 与 `...transitions{to=protecting|normal}`。服务级明细经 API 查询，不常驻指标。
-- **状态 API**：registry 内部 `management.v1.GetSelfProtectionStatus`（management 透传 `GET /admin/v1/status/protection`）默认只返回保护中服务，支持 namespace/service 过滤、10000 条上限、`node_fallback` 与节点级统计；指定 namespace+service 时该服务总是返回。`GetLeaseStatus` 保持节点级语义不变。
-- **集群语义**：各节点只按本地收到的心跳独立判定；保护态不复制、不持久化，也不抑制复制。3 节点进程内 IT 验证节点独立保护、指标标签与超时退出。
-- **工程形态**：registry-core 单测覆盖双层窗口/状态机/回落/指标/查询/回收竞态，registry-server 服务级与 3 节点集群 IT，management client/Admin 端点端到端；全量 `dev-test.sh all` 绿。
-
-**v0.2 phase-6（优雅停机与集群验收收尾）已交付**：
-
-- **节点优雅停机**：停机序列在 Spring `ContextClosedEvent` 第一时机执行（先于 gRPC 端口关闭）——先标记自身 `DOWN`（节点状态 API 与 peer 探测可见），排水等待（`artemis.registry.shutdown.drainMs`，默认 **10s**，`0` = 不等待），再终刷快照，最后停端口。排水期间不接新流量（新 RPC `UNAVAILABLE`、`/readyz` 与 `/cluster/nodes` 返回 503、`Replicate`/`Bootstrap` 拒绝），**已建立的心跳流继续服务到端口关闭**（续约照常）；端口关闭即断流信号，客户端凭容灾无感换址（断流重连 + 熔断 + TTL 轮换），**不做连接迁移**。
-- **DOWN 传播**：就绪门升级为三态（未就绪 / 就绪 / DOWN，DOWN 终态不复活）；`DOWN` 优先于 `UP` 自报，经节点状态 API 与 `/cluster/nodes` 对外可见，SDK 选址池降权（`UP > UNKNOWN/STARTING > DOWN`）。
-- **终刷与重启恢复**：仅**曾就绪**的节点在停机时终刷快照（未就绪时注册表为空/残缺，跳过以免覆盖可回退旧快照）；单节点重启回放终刷数据，集群节点重启优先从就绪 peer 全量 bootstrap——两条路径均收敛到停机前状态。
-- **SDK 优雅下线时序**：starter 监听 `ContextClosedEvent` 自动 `close()`——停心跳 → 等在途上报 → 全量注销 → 释放，发生在容器关闭第一时机（程序仍可用、早于宿主停流与 bean 销毁）；`destroyMethod=close` 保留为幂等兜底。
-- **部署注意**：gRPC 关停宽限期显式设为 **1s**（框架默认 30s 会与排水叠加）。K8s 等编排环境 `terminationGracePeriodSeconds` 须 ≥ `drainMs` + 1s + 余量，否则 SIGKILL 会截断排水（截断后仍由客户端容灾 + peer 副本兜底）。
-- **工程形态**：新增 11 例单测（就绪门三态、停机序列编排、DOWN 自报、未就绪不终刷、DOWN 不 bootstrap、starter 事件关闭）与 `GracefulShutdownIT` 4 例集群 IT（排水窗口取证、无感换址、终刷回放、停机后重启收敛）；全量 `dev-test.sh all` 绿。
-
-**v0.3 phase-1（projection.v1 契约 + registry 侧数据分发）已交付**：
-
-- **分发契约**：`projection.v1` 定义于 registry 内部 peer 端口——`Bootstrap`（全量快照 server-stream，按字节预算分片，默认 1MB，与 peer bootstrap 共用配置）与 `Watch`（变更流 server-stream）；变更仅三值 `NEW/UPDATE/DELETE`（纯续约不推送、TTL 清理映射为删除）。
-- **消费方安全序**：`Watch` 登记订阅后立即返回一条空批作为建立确认；消费方「先 Watch → 收到确认 → Bootstrap」，重叠窗口变更被全量覆盖幂等吸收，无丢失。推送为 at-most-once，断流/慢消费者由服务端断开，消费方重 Bootstrap 收敛。
-- **registry 侧实现**：注册表事件统一出口（写路径与租约清理同锁有序派发）；异步组批（同实例后到覆盖、按 service 聚合、批量上限）→ 每订阅者有界队列 + 串行推送；慢消费者/推送失败断流并计数。复制扇出发送侧过滤清理事件（删除不跨节点传播语义不变）。
-- **边界**：契约只承载实例事实，registry 自我保护态（stale）等内部概念不下发（排障面仍由 management 状态 API 提供）。
-- **工程形态**：内部端口 readiness 门控（未就绪 `UNAVAILABLE`）；10 单测 + 8 服务级 IT（全量/分片、变更流、清理删除、断流重连 re-bootstrap）；决策记录 [ADR-018](../decisions/adr-018-projection-distribution-contract.md)。
-
-**v0.3 phase-2（discovery 投影内核与查询）已交付**：
-
-- **投影模型**：discovery 侧按 `(cluster, namespace, service)` 组织只读投影——cluster 为来源标识（投影边界注入，ADR-014），phase-2 单集群起步（多集群聚合 phase-5）。存储 per-service 条目（`ConcurrentHashMap` + 不可变实例集，读路径无锁零克隆）；**条目存在性 = 服务存在性（≥1 实例）**，实例全部下线即删条目（与 registry 空服务回收语义收敛）。
-- **上游消费**：消费 phase-1 `projection.v1` 分发流——「Watch 建立确认 → Bootstrap 全量覆盖 → 变更流应用」安全序（覆盖先于一切事件应用，无丢失）；断流/失败/慢消费（事件队列满）整轮重来：关会话 → 全抖动指数退避（1s→10s）→ 重新 Watch+Bootstrap 全量覆盖幂等自愈（每轮端点轮换，watch 与 bootstrap 同端点保同源视图）。watch 长流启用 keepalive 检测半开连接。
-- **readiness**：首轮投影同步完成前查询 `UNAVAILABLE`（空数据不作真相）；同步后上游断连不降 ready——投影继续服务（陈旧换可用），新鲜度标记出口随 phase-4。
-- **查询 API**：`discovery.v1 DiscoveryQueryService/Query`（unary，外部端口 gRPC 9095，BasicAuth 默认关闭）——选择器 `services`（精确集合，空=全部）+ `labels`（实例 metadata 全键值过滤，分组语义 ADR-013）；响应携带 cluster 来源标识。契约详见 [discovery-query-api.md](../api/discovery-query-api.md)。
-- **配置（SCF，`artemis.discovery.*`）**：上游集群 map `registry.clusters`（**必填**，详见 phase-5 节；phase-2 初版为 `upstream.clusterId` + `upstream.endpoints` 两键，phase-5 已替换）、`upstream.auth.*`、`upstream.establishTimeoutMs/bootstrapTimeoutMs/reconnectBackoffMinMs/MaxMs`、`projection.queueCapacity`（默认 8192）。
-- **工程形态**：discovery-core 16 单测（投影存储/消费安全序/选择器/mapper）+ `DiscoveryProjectionIT` 4 例（进程内真实 registry + discovery 双 context 端到端：稳态注册→查询亚秒可见、更新/删除反映、registry 重启 re-bootstrap 覆盖陈旧、未同步 UNAVAILABLE）；code-review 修复 4 项中高危（陈旧 DELETE no-op、keepalive、旧轮回调隔离 per-round 队列、DISCONNECTED 门控）。
-
-**v0.3 phase-3（discovery 订阅契约与推送）已交付**：
-
-- **推拉结合模型（ADR-019，取代 ADR-007 订阅通道快照形态）**：订阅通道 = 实时推增量（本 phase）+ 定期拉全量（Query 已有）+ hash 对账（phase-4）——稳态带宽 O(变更数) 而非 O(服务实例数 × 变更数)，增量丢失由 checksum 对账显式检测（原产品局限 #3「无版本/世代」的现代化）。
-- **订阅契约**：`discovery.v1 DiscoverySubscriptionService.Subscribe`（server-stream）——首条空事件 = 建立确认，随后逐 service 推送全 `NEW` 基线；稳态推视图语义增量变更批（per-service 分条、单流按产生序有序、一流多目标、事件携带来源 cluster）。
-- **labels 视图语义翻译（服务端）**：labels 订阅收到的即视图语义——实例进出 labels 视图（UPDATE 改 metadata）由服务端显式翻译为 `NEW`/`DELETE`，SDK 收到即 apply，无需自行判断匹配态。
-- **上游解耦**：registry↔discovery 断连重连对订阅方透明——断连期间流静默（陈旧换可用），重连覆盖差异以 **diff 增量续推**（旧投影 vs 新快照 diff，消失服务全 `DELETE`、registry 全冷重启推全删），流不断。
-- **at-most-once**：慢消费者（outbound 背压）服务端断流 `RESOURCE_EXHAUSTED` + 注销，重订阅重新基线自愈；推送指标（active/push/closed.slow-consumer）就地内建。
-- **工程形态**：discovery-core 28 单测（投影 diff、翻译矩阵四象限、表锁基线/扇出互斥）+ `DiscoverySubscriptionIT` 7 例（确认/基线、增量亚秒可见、双流隔离、labels 视图、上游重启 diff 续推流不断、未就绪 UNAVAILABLE、cancel 注销）；code-review 双轨（skill max + 内联）10 findings，核心修复 = 订阅基线与批「扇出+应用」表锁串行化（消除僵尸复活/确认被抢/变更丢失三竞态）。契约详见 [discovery-subscription-api.md](../api/discovery-subscription-api.md)。
-
-**v0.3 phase-4（discovery 兜底对账与新鲜度）已交付**：
-
-- **hash 对账（ADR-019 三件套之三，原产品局限 #3「漏推最久 15min 才纠正、丢失不可检测」的现代化）**：`discovery.v1 DiscoveryReconciliationService/Checksum`（unary，外部端口）拉取 per-service **视图 checksum 表**——SDK 定期与本地视图逐 service 比对，不一致触发 `Query` 全量拉，增量丢失显式检测、漂移窗口 = 对账周期。响应**缺项 = 权威空**（SDK 本地空 + 表缺即一致；丢失的 `NEW` 必致表项出现）。
-- **canonical 规则跨语言稳定（单一来源 [discovery-reconciliation-api.md](../api/discovery-reconciliation-api.md) §3，含 golden vector）**：per-instance FNV-1a-32 + XOR 结合——实例集与 metadata **双重抗序**（不定义跨语言排序规则），唯一顺序敏感点收窄到单实例标量字段位置序列；碰撞 ~2⁻³² 由 15min 全量刷新兜底。
-- **缓存分型**：checksum 随投影条目缓存（写入时计算）；无 labels 请求响应零计算，labels 视图响应对算（仅 labels 订阅方、对账周期频率）。
-- **新鲜度标记（局限 #15「缓存无新鲜度元信息」修复）**：查询与对账响应携带 `UpstreamStatus`（per-cluster：`SYNCED` 实时 / `SYNCING`、`DISCONNECTED` 投影冻结陈旧）——非 `SYNCED` 即可能陈旧，消费方感知数据降级。registry 自我保护态不进新鲜度（内部概念）；订阅流不携带（D-S7 流与上游解耦，降级感知经拉取面）。
-- **三层兜底轮询（资产 #8）契约面收口**：空服务层被对账吸收（缺项 = 权威空）、15min 全量刷新为对账失效的最终兜底、推送失败先重订阅再轮询兜底——服务端零新增配置与指标，SDK 侧节奏归 phase-8。
-- **工程形态**：单测 8 用例（canonical 抗序/字段敏感、条目缓存一致性、labels 视图、状态上报、proto 映射）+ `DiscoveryReconciliationIT` 5 例（SDK 角色独立实现 canonical 规则驱动端到端：表随注册/更新/注销一致演变、篡改本地视图对账检测后全量拉收敛、registry 关停 DISCONNECTED 标记可见且陈旧换可用、重启双面收敛、labels 视图指纹、未就绪拒绝）；code-review 双轨 6 findings（核心修复 = 快照先于读表，防「陈旧数据 + SYNCED」夸大新鲜度竞态）。
-
-
-**v0.3 phase-5（discovery 多集群聚合）已交付**：
-
-- **多集群聚合（ADR-002/014）**：单 discovery 节点独立订阅 1..N 个 registry 集群——每 cluster 独立投影表、独立同步器（端点轮换限于本集群端点）、独立退避重连与上游状态（**跨源隔离**：某集群断连只冻结该源投影并标记其新鲜度，其余集群不受影响）。聚合只在本地发生，无跨源污染。
-- **union 语义**：查询/订阅/对账默认返回全部来源 cluster 的并列条目（同 `ServiceKey` 多集群并存即并列，不冲突消解）；条目携带来源 `cluster`（ADR-014 投影边界注入）。
-- **选择器 cluster 维度**：`discovery.v1` 三 request（`QueryRequest`/`SubscribeRequest`/`ChecksumRequest`）新增 `clusters` 字段（wire 兼容只增）——空 = 全部（union），非空 = 精确集合；未知 cluster 名静默无命中（部署拓扑不耦合 SDK），空白名 `INVALID_ARGUMENT`。新鲜度列表同样按选择器过滤。
-- **上游配置**（`artemis.discovery.registry.clusters`，静态）：JSON map `{"cluster-a":"r1:9093,r2:9093","cluster-b":"r3:9093"}`——键 = clusterId、值 = 该集群端点逗号分隔列表；未配置/JSON 非法/集群名空白/端点非法均拒绝启动。集群集合启动定死（对齐 registry 静态成员哲学），上游认证全局共享（per-cluster 凭证待真实需求）。
-- **readiness 全量门**：**全部**配置上游完成首轮同步才放行查询——任一上游缺席即 union 不完整（空数据不作真相）；断连仍不降 ready（陈旧换可用）。
-- **工程形态**：discovery-core/server 单测（选择器过滤/就绪门/配置解析/mapper）+ `DiscoveryMultiClusterIT` 6 例（进程内 2 个真实 registry 集群 + 1 discovery：union 并列、cluster 过滤、订阅归因与过滤、对账过滤、新鲜度独立性、readiness 全量门）；三个既有 discovery IT 切换新配置键回归单集群语义；API 文档同步（[查询](../api/discovery-query-api.md)/[订阅](../api/discovery-subscription-api.md)/[对账](../api/discovery-reconciliation-api.md) 三文补 `clusters`）。
-
-**v0.3 phase-6（management 摘除规则订阅与 discovery 过滤）已交付**：
-
-- **摘除规则流**（`management.v1 EjectionRuleService/WatchEjections`，server-stream）：management 内部 gRPC 端口（条件启用——配置 `artemis.management.grpc.port` 才监听，默认不监听可独立运行；独立认证默认关闭）。首条全量快照（message presence 区分空集）→ 其后增量按产生序；服务端单锁全序免快照竞态；at-most-once（v0.4 phase-5 起携带版本 + ack，见下 phase-5 节）、慢消费者 isReady 断流；management 内存态重启清零，discovery 重连空快照即摘除消失（期 1 设计内行为）。
-- **discovery 过滤器链 SPI**（继承资产 #7，架构 §4.2）：`DiscoveryFilter`（实例可见性谓词）+ 链（逐 filter fail-open——单 filter 异常放行不中断发现服务）。查询/订阅推送/对账 checksum **三出口一致过滤**（过滤后视图口径——checksum 不过滤会使 SDK 对账永久不一致）；checksum 零计算路径保留（规则无效果时读条目缓存）。
-- **摘除过滤语义**：规则按 `(namespace, service, instanceId)` 匹配**所有来源 cluster** 同键实例（跨 cluster 生效）；投影存储保持 registry 事实（未过滤），过滤只发生在视图构成时刻（与 phase-5 聚合同构）。规则变更以**视图语义直投**推送订阅者（摘除 → `DELETE` 携带实例完整数据、恢复 → `NEW`），labels/clusters/services 订阅过滤照常。
-- **fail-open / 最后已知规则**：management 不可用时 discovery 沿用最后已知规则继续过滤（规则缓存只在收到事件时替换、断连不清空），退避重连（默认 1s→10s）恢复后重新全量覆盖收敛。
-- **0..1 可选**：discovery 未配置 `artemis.discovery.management.endpoints` 时不订阅不过滤（空链直通零开销，不建连接不启线程）。
-- **工程形态**：management-core `EjectionStore.findAll` + `EjectionRuleDispatcher`（单锁全序分发）；discovery-core 规则同步引擎 + 过滤链；单测 15 例（规则模型/链/翻译矩阵/出口过滤/断流保持/分发全序/配置）+ `EjectionRuleStreamIT` 4 例（规则流契约）+ `DiscoveryEjectionFilterIT` 3 例（registry + discovery + management 三服务端到端：摘除过滤/恢复收敛/management 停机沿用最后规则/重启空快照收敛/未配置不过滤）；API 文档新建 [ejection-rule-stream-api.md](../api/ejection-rule-stream-api.md)、discovery 三 API 与 admin API 同步。
-
-**v0.3 phase-7（discovery 发现管理 API）已交付**：
-
-- **只读发现管理面**（治理期 2，架构 §5.1）：discovery 外部 HTTP 端口（默认 8090）新增 `/admin/v1` JSON API——`subscriptions`（订阅关系）、`services`（服务视图列表/详情）、`upstreams`（上游新鲜度 + 规则源状态）。复用 discovery 外部账户（`artemis.discovery.auth.*`，默认关闭）；**不做 readiness 门控**，启动期即可排障，未同步由状态字段自解释。
-- **订阅关系（调用方视角，原产品局限 #18 修复）**：订阅登记时分配进程内单调 `id`、记录选择器、gRPC 远端地址（单账户下唯一可靠调用方标识）与登记时刻；只保留活跃订阅，流取消/断流即消失（无历史/审计，审计归 v0.4 期 3）。
-- **服务视图**：列表按 `(cluster, namespace, service)` 聚合并支持 namespace/cluster 过滤；详情逐 cluster 返回可见实例。口径 = **摘除过滤后的有效发现视图**（与查询/推送/对账一致）；未过滤事实与摘除记录仍归 management 有效视图职责（ADR-016）。
-- **上游状态/规则源状态**：`/admin/v1/upstreams` 输出各 registry 来源 `SYNCING/SYNCED/DISCONNECTED`，以及 management 规则源 `DISABLED/SYNCING/SYNCED/DISCONNECTED`（phase-6 D-E9 出口；断连/停机时规则冻结、最后已知规则继续生效）。
-- **工程形态**：无 proto/wire 变更、无新增配置键；discovery-core 12 单测（订阅快照/视图聚合与过滤/规则源状态转移）+ `DiscoveryAdminIT` 6 例（认证、订阅出现与取消移除、视图/详情、上游与规则源状态、客户端错误）。契约详见 [discovery-admin-api.md](../api/discovery-admin-api.md)。
-
-**v0.3 phase-8（消费方 SDK + discovery 静态节点目录）已交付**：
-
-- **发现侧 Java 8 SDK**（并入既有 `artemis-client`）：`DiscoveryClient.subscribe(DiscoverySelector, listener)` 按选择器（services/labels/clusters，空集 = 全部）建立**独立订阅**（各自流/视图/对账/快照），client 级共享地址寻址、gRPC 连接、applier、调度与监听队列。本地视图为来源 cluster 的 union，不可变快照 + 零拷贝读；推送为视图语义，SDK 直接 apply。
-- **同步与兜底**（ADR-019 推拉结合）：订阅确认后 bootstrap 全量 Query 整体替换视图（期间推送缓冲后重放，断连期间消失的服务可被删除且不制造空窗）；稳态实时增量 + **60s checksum 对账**（不一致触发全量刷新）+ **15min 全量刷新**；server 全挂时最后视图继续服务。监听回调有界队列（满丢最旧 + 计数）。
-- **磁盘快照**：每订阅 `<dir>/<clientId>/selector-<fingerprint>.snapshot`，**随视图变更异步落盘**（合并写 + close 终写、原子替换）；冷启动回放、server 全挂兜底；不过期，`DiscoveryStatus.isSnapshotReplay()` 暴露降级。
-- **发现专属地址容灾**（与 registry 同管线，ADR-020）：HTTP 引导地址 → discovery 静态节点目录 → 历史最近成功优先 + 随机 + 熔断换址；慢消费者断流不熔断/不换址。配置键与 registry 对称（`artemis.client.discovery.*`）。
-- **discovery 静态节点目录**：`artemis.discovery.nodes`（`host:port` 列表，无节点 id/self，地址即标识；未配置 = 空目录）+ 外部 HTTP `GET /cluster/nodes`（`discovery.v1 DiscoveryNodesResponse` protobuf、复用外部 Basic、未就绪 503）。仍是部署声明：不组集群、无节点间协议、无存活探测（ADR-020 修订 ADR-002）。
-- **统一 client 身份**：`artemis.client.clientId`（默认 `default`），注册/发现共用，作为指标 `client` 标签与快照目录隔离键；注册侧公开接口更名 `ArtemisClient` → `RegistryClient`、`newClient` → `newRegistryClient`（starter 自动配置类名保持 `ArtemisClientAutoConfiguration`）。
-- **契约与文档**：`discovery.v1` 增 `DiscoveryNode`/`DiscoveryNodesResponse`（只增，无新 service）；新增 [discovery-nodes-api.md](../api/discovery-nodes-api.md)、[sdk-java-discovery.md](../api/sdk-java-discovery.md)，注册侧 [sdk-java.md](../api/sdk-java.md) 同步更名/clientId。
-- **工程形态**：client 63 单测 + 7 进程内 fake discovery IT（真实 gRPC + 真实 HTTP 节点目录：推送、断连收敛、换址、快照回放、全挂兜底、checksum 自愈、多订阅隔离）；discovery-server 9 单测 + 2 节点目录 HTTP IT；全量 `dev-test.sh all` 绿。发现侧 Spring Boot starter 自动装配随 phase-9 交付（见下）。
-
-**v0.3 phase-9（发现侧 starter + all-in-one 打包）已交付**：
-
-- **starter 双用途**（`artemis-client-spring-boot-starter` 不变）：注册/发现两侧按「对应 `addresses` 是否配置」独立装配、可共存——只做发现的消费方不必配 registry 地址；缺地址不再 fail-fast（v0.1 语义修订），已配置但非法仍构造期 fail-fast；两侧独立让位宿主自定义 `RegistryClient`/`DiscoveryClient` bean。SCF 配置桥 `artemisClientStringProperties` 同名 bean 让位（接管 source 链）、异名共存时 client `@Qualifier` 按名绑定不误注入；关停监听只关 starter 自建 bean、关闭失败不阻断另一侧。发现侧只建 client 不代建订阅。用法见 [sdk-java.md](../api/sdk-java.md) / [sdk-java-discovery.md](../api/sdk-java-discovery.md)。
-- **all-in-one 单进程**（新增 `artemis-dist` 模块）：`artemis-dist-<version>-exec.jar` 单包起 registry + discovery——同 JVM 两个独立 Spring 上下文、端口全独立（registry 9090/8080/9091/9093、discovery 9095/8090/9096）、彼此走标准网络协议不进程内直连（ADR-001）；上游固定同进程 registry、多集群聚合不在该形态提供；组合端口经 `artemis.dist.*`（SCF：系统属性 > 环境变量 > 工作目录 `artemis.properties`，非法 fail-fast）；启动失败回滚不留半启进程、SIGTERM 按 discovery → registry 优雅关停。单服务入口与打包不变。详见 [all-in-one.md](../api/all-in-one.md)。
-- **工程形态**：starter 17 单测（双侧条件/让位/接管/共存/关闭语义）；dist 3 服务级 IT（双端口起停、registry 注册 → discovery 网络可见、幂等关停）；单包冒烟（7 端口监听 + 双 actuator 200 + SIGTERM 11s 优雅退出）；全量 `dev-test.sh all` 绿。
-
-**v0.4 phase-1（management DB 接入基座）已交付**：
-
-- **DB 可选装配（双轨）**：DB 是 management 的可选依赖——未配置 `spring.datasource.url` 时保持内存态运行（零 DB 装配，registry/discovery 完全不感知）；配置后 HikariCP 连接池 + Flyway migration 启动期执行。**MySQL 8.x / PostgreSQL 16+ 双方言**为产品承诺：脚本按 vendor 目录（`db/migration/{mysql,postgresql}`）各自维护，当前 V1 空基线、业务表自 V2 起随各 phase 追加；双方言驱动均随包分发，按 url 自动选择。
-- **配置**：`spring.datasource.*`（url/username/password）、`spring.datasource.hikari.*`（连接池）、`spring.flyway.*`（migration）均为 Spring Boot 标准配置键；url 配置为空串时启动显式失败（不静默退化为内存态）。
-- **状态 API**：`GET /admin/v1/status/persistence` 返回运行形态 `{"mode":"MEMORY|DATABASE","databaseProduct":"MySQL|PostgreSQL","schemaVersion":"1"}`（受 Basic 认证保护；`spring.flyway.enabled=false` 时 `schemaVersion` 为 null）。见 [admin-api.md](../api/admin-api.md)。
-- **运行时语义（过渡期）**：DB 态下业务（摘除等）仍为内存实现，持久化随 phase-2（账户）起逐表接管；registry/discovery 主类显式排除数据源自动装配（组合部署装配边界，同 JVM 组合形态不受 DB 依赖混入影响）。
-- **工程形态**：双方言 IT（Testcontainers 2.0 真实容器起停 + migration 断言，无 Docker 环境自动跳过）+ 内存态装配单测；ORM（MyBatis-Plus，技术选型 #13）决断推迟首个业务表 phase（phase-2）。
-
-**v0.4 phase-2（账户体系与统一认证接管）已交付**：
-
-- **单管理员 DB 账户**：首个业务表 `artemis_account`（V2，双方言——PG `timestamptz` / MySQL `datetime(6)`）；密码 PBKDF2-HMAC-SHA256 哈希存储（JDK 内置，600k iterations、随机 salt、常量时间比较，哈希串自描述格式），明文不落库不落日志。ORM 采用 MyBatis-Plus 3.5.17（boot4 starter，技术选型 #13 决断，SB 4.1 实测兼容；core 保持零 MyBatis/Spring 依赖，端口 + 实现分层）。
-- **统一认证接管（ADR-021）**：接管 = **管理访问面收敛**——DB 态下 Admin API 认证唯一源为账户表，`artemis.management.auth.username/password` 配置凭证失效（首启一次性物化 seed 进表，已配置自定义凭证的部署升级无缝；表非空永不覆盖）；registry/discovery 本地单账户零改动（SDK 数据面与管理凭证分域，全面委托随 v1.0 RBAC）。内存态行为不变（配置凭证，支持运行期轮换）。
-- **改密 API**：`PUT /admin/v1/account/password`（DB 态闭环，默认密码消除出口；旧凭证即时失效；新密码 ≥ 8 字符）；内存态返回 409（凭证事实源是配置）。见 [admin-api.md](../api/admin-api.md)。
-- **语义细节**：成功凭证 60s 服务端缓存（正确路径每分钟一次哈希开销，错误路径每次全额计算）；认证后端不可用 fail-closed（401 拒绝 / API 503）；默认密码在用时启动 WARN（ADR-009 延续）。
-- **工程形态**：core 哈希器/裁决服务单测 + server 过滤器三态/端点单测；双方言 `AccountFlowIT`（seed 默认登录 → 改密接管生效 → 跨重启账户保留 + 配置凭证失效，Testcontainers 真实容器）。
-
-**v0.4 phase-3（四级摘除持久化与审计）已交付**：
-
-- **四级摘除**：摘除目标四级——INSTANCE（`(namespace, service, instanceId)` 定位）与 SERVER / ZONE / GROUP（以实例 metadata 键 `server` / `zone` / `group` 取值匹配，全局生效不绑服务，ADR-013 延伸）；实例不带对应键则不参与该级摘除。规则经既有摘除规则流下发 selector，discovery 按实例 metadata **实时匹配**——新注册实例天然命中。
-- **操作记录即状态**：下线 = 追加 EJECT 记录（可叠加，各带原因与操作者）；恢复 = 追加 RECOVER 反向记录（FIFO 对消，不删历史——原产品「恢复即删」的改进）；生效判定 = 每目标 EJECT 与 RECOVER 计数差 > 0。规则流增量仅在目标生效态翻转时推送（叠加/部分对消不推）。
-- **持久化（V3，双方言）**：`artemis_ejection_record`（操作时间线，自增主键 = 序）+ `artemis_audit_log`（治理操作审计）。DB 态下 management 重启后摘除经规则流快照重下发恢复（roadmap v0.4 验收要点闭环）；内存态行为不变（重启丢失，期 1 语义）。
-- **统一 ejection API**：`POST /admin/v1/ejections`（四级一套请求体）/ `POST /admin/v1/ejections/recover` / `GET /admin/v1/ejections`（时间倒序 + limit）/ `GET /admin/v1/audit-logs`（operation 过滤 + limit）——替换 v0.1 实例级端点。见 [admin-api.md](../api/admin-api.md)。
-- **审计**：全部治理操作可审计——摘除/恢复以记录表自身为完整留痕 + 审计表摘要行（尽力而为，摘除状态源唯一在记录表）；改密等其余治理操作全量进审计表。操作者取认证用户名。
-- **规则流契约**：`EjectionRule`/`EjectionRecovered` wire 兼容扩展（scope + target_value，缺省 INSTANCE 承载 v0.3 既有事件）；快照 = 有效规则集。见 [ejection-rule-stream-api.md](../api/ejection-rule-stream-api.md)。
-- **工程形态**：对消/命中判定纯函数（内存/DB 两态共享语义）单测；双方言 `EjectionPersistenceIT`（四级落库 + 审计 + 跨重启快照恢复）；三服务端到端 selector 过滤（zone 级摘除跨服务命中）。
-
-**v0.4 phase-4（逻辑实例）已交付**：
-
-- **模型与 API**：逻辑实例 = `(namespace, service, instanceId)` 唯一标识的静态实例（host/port/status/weight/metadata；protocol/url 等扩展属性走 metadata，D13 哲学延伸）；`PUT /admin/v1/logical-instances`（upsert，内容相同幂等 no-op）、`DELETE`（幂等）、`GET`（namespace/service 过滤 + limit）。归一同注册入口（status 缺省 UP、weight ≤ 0 → 100）。变更写审计摘要行（`LOGICAL_INSTANCE_UPSERT/DELETE`）。
-- **持久化（V4，双方言）**：`artemis_logical_instance`（唯一键三元组；instanceId 上限 255——MySQL 组合唯一索引键长 3072 字节限；metadata TEXT 存 JSON）；内存态/DB 态双轨。DB 态 management 重启后逻辑实例经流快照重下发恢复。
-- **下发通道**：management.v1 新增 `LogicalInstanceService.WatchLogicalInstances`（与摘除规则流同内部 gRPC 端口；快照 + 增量、at-most-once、无版本/ack——数据语义快照自愈，规则版本化归 phase-5 规则流）。见 [logical-instance-stream-api.md](../api/logical-instance-stream-api.md)。
-- **discovery 统一发现视图**：逻辑实例以保留 cluster `logical` 进入投影（复用既有投影同步/查询/订阅/对账全套）——与真实实例 union；摘除对逻辑实例同样生效（instance 级按键、selector 级按 metadata）；management 不可用时沿用最后已知逻辑实例（fail-open），不门控 discovery readiness；上游 cluster id 撞保留名启动失败。
-- **工程形态**：dispatcher/store/应用用例/映射单测；`LogicalInstanceStreamIT`（流契约）+ `DiscoveryLogicalInstanceIT`（三服务端到端：union/推送/摘除过滤/fail-open/0..1）+ 双方言 `LogicalInstancePersistenceIT`（跨重启重下发，无 Docker 环境跳过）。
-
-**v0.4 phase-5（规则下发闭环）已交付**：
-
-- **规则版本化**：摘除规则流事件（快照与增量）携带规则集状态版本 = **触发生效态翻转的记录 sequence**（DB 自增主键 / 内存计数器，零新增状态；叠加/对消无翻转不推亦不产生版本）。版本是**水位/观测语义，非顺序协议**——跳号合法、等/旧号增量幂等重放，正确性骨干仍是 at-most-once + 断流重连快照全量覆盖自愈。
-- **生效 ack 上行**：`EjectionRuleService` 增 `AckEjections` unary（discovery 应用规则后上报已应用版本；失败容忍，重连快照后重新 ack 收敛）；ack 走当前 watch 所在端点（订阅登记在该 management 进程）。
-- **生效水位 API**：`GET /admin/v1/status/rules`——当前版本 + 各**活订阅**已应用版本（appliedVersion/lastAckAt/atLatest）+ 已生效节点数（appliedLatestCount）。水位只反映活订阅（断流即清除，不冒充已生效、免无界滞留），内存观测态不持久化（重启经重连重建）；订阅条目带代际令牌，同 id 重连的迟到旧流注销不误删新条目。
-- **内存/DB 双态语义**：内存态 management 重启版本随记录归零（快照全量替换 + 重新 ack 后水位重新一致）；DB 态版本跨重启单调延续（sequence 持久）。
-- **discovery 本地对照**：`/admin/v1/upstreams` 增 `management.appliedVersion`（本节点已应用版本，-1 = 尚未应用）。
-- **工程形态**：`lastFlipSequence` 纯函数与 AckRegistry（代际令牌）单测 + 同步器 ack 行为单测；`EjectionRuleStreamIT`（版本 + ack 水位契约）+ `DiscoveryRuleAckLoopIT`（三服务端到端：水位可见 / management 重启重连重新 ack / 双 discovery 节点生效计数）+ 双方言 `EjectionPersistenceIT` 增版本跨重启延续断言。见 [ejection-rule-stream-api.md](../api/ejection-rule-stream-api.md)。
-
-**v0.4 phase-6（console 只读版）已交付**：
-
-- **console 页面**：management 内嵌**原生单文件**静态 SPA（`static/index.html`，零依赖零构建、无独立前端部署单元，架构 §5.3），入口 = 外部端口根路径 `http://<host>:8081/`；认证与 Admin API 同源（ADR-021 单管理员 DB 账户，Basic 挑战，eval 关闭认证时直接可达）。
-- **页面能力**：服务列表（keyword 模糊搜索 + 分页，每页 20）、服务详情（注册/有效/摘除计数 + 实例表——地址/status/weight/metadata/摘除标注与原因、`includeEjected` 切换、实例分页）；hash 路由可刷新可分享。操作面（发布/摘除操作、订阅关系视图、审计流、自我保护态展示）已随 v0.5 phase-5 console 管理版交付（见下）。
-- **API 扩展（additive）**：`GET /admin/v1/services` 增 `keyword`（大小写不敏感 substring，命中 namespace/service 任一）/`offset`/`limit`（clamp 1..1000，缺省全量），响应增 `total`（过滤后总数）；`GET /admin/v1/services/{ns}/{svc}` 增 `offset`/`limit` 作用于实例视图（计数始终全量）——响应体 ∝ 页大小而非总量（10 万实例语义）。见 [admin-api.md](../api/admin-api.md)。
-- **工程形态**：过滤/切片/total 单测（含 5000 服务构造的分页上界）+ `ManagementConsoleIT`（同 JVM registry + management：页面可达与 401、搜索分页、实例分页端到端）；IT 基建抽取共用（`RegistryFixture` 顶层化、`ManagementHttpIT` 基类）。
-
-**v0.4 phase-7（三服务 all-in-one 完整形态）已交付**：
-
-- **组合结构**：`artemis-dist-<version>-exec.jar` 单包起三服务完整形态——同 JVM 三个独立 Spring 上下文（启动序 registry → management → discovery、关闭序反序、失败反序回滚），端口全独立（registry 9090/8080/9091/9093、management 9094/8081/9092、discovery 9095/8090/9096），彼此走标准网络协议不进程内直连（ADR-001）；v0.3 双服务 jar 被完整形态取代。
-- **治理链默认闭合**：discovery 固定订阅同进程 management（规则流 + 逻辑实例流）、management 固定查询同进程 registry 内部端口——组合期命令行注入，不可经工作目录覆盖；组合端口经 `artemis.dist.*`（+3 键，SCF 静态、非法 fail-fast）。
-- **DB 双轨保持**：未配置 `spring.datasource.url` 时 management 内存态（单机 eval 零 DB）；配置后（Spring 标准途径，仅 management 上下文消费）双方言持久化接管。
-- **v0.4 验收要点端到端**（all-in-one 形态）：三服务单进程起停、摘除规则流闭环 + 生效水位、逻辑实例 union（cluster 正交）、console 页面与分页 API、DB 态跨组合重启摘除重下发（Testcontainers PG）。见 [all-in-one.md](../api/all-in-one.md)。
-
-**v0.5 phase-1（route-rule 资源模型与持久化）已交付**：
-
-- **资源模型**（本版全部治理能力的规则载体）：`route-rule` = 服务内命名资源，一组有序目标按权重分流——目标 = 实例 metadata **等值选择器**（多键 AND，空 selector = 兜底目标）+ **两段双权重**（`weight` 生效列 / `unreleasedWeight` 编辑列，release 拷贝动作 phase-2）+ 状态 ACTIVE/INACTIVE；动作词汇 = 权重分配（不保留原产品 strategy：就近访问由宿主 RPC 框架执行，注册中心只表达切分意图）；分组不进数据模型（ADR-013），canary 占位命名策略归 phase-4。
-- **V5 双方言持久化**：`artemis_route_rule`（唯一键 (namespace, service, name)，targets JSON 列、双方言零方言层差异）；表只存当前态——回滚所需历史由 phase-2 release 记录承载；双轨沿用 DataSource 判据，跨重启保留（双方言 IT 验证）。
-- **CRUD API**（资源导向，一个端点一个意图）：POST 201/409、GET 列表与单条、PUT 全量替换（404/键路径一致 400）、DELETE 幂等 204；域约束（name `[A-Za-z0-9._-]+`、targets 1–10、selector 键值上限、权重 0–10000、序列化 UTF-8 ≤ 60KB）信任边界一次校验；变更全量进审计表。见 [admin-api.md](../api/admin-api.md) §4.10。
-- **工程形态**：CRUD 无读-判-写复合段零新增锁（insert-if-absent / 条件替换原子语义 + DB 唯一键）；code-review 6 findings 修复（PUT 缺 name NPE、DB 行数判定对齐内存态、UTF-8 字节上限、码点计量等）；7 单测 + 4 IT（双方言重启用例 ×2）。
-
-**v0.5 phase-2（两段式权重发布与回滚）已交付**：
-
-- **两段状态机**（继承资产 §5-5 现代化）：生效列 `weight` 唯一写入口 = release / rollback——编辑通道（create/update）物理不触碰生效值（create 初始 0、update 按 selector 等值继承，等值重复 target 拒绝），从根上修复原产品「编辑清空已发布权重」缺陷模式；结构（selector 集合）单份直改（明示边界：结构变更直接生效，权重值变更走两段）。
-- **发布与回滚（资源 `release`，一个 API 一个运维意图）**：`POST .../release` 拷贝编辑列生效 + 落 append-only 发布记录（快照）；`POST .../rollback` 指向历史记录的反向 release——两列写回源快照完全恢复该发布时刻状态；`GET .../diff` 发布预览（基 = 最新/指定发布快照，结构增删与权重变更全量可见）、`GET .../releases` 历史列表（一键回滚的输入源）。见 [admin-api.md](../api/admin-api.md) §4.11。
-- **规则流下发 + 生效水位**：独立 `management.v1 RouteRuleService`（快照/增量 + envelope version + `AckRouteRules`，形态复用 v0.4 版本化规则流）；流内容 = ACTIVE 集、版本 = dispatcher tick（重启归零经重连快照收敛）；生效水位出口 `GET /admin/v1/status/rules` 增 routeRules 节（与摘除流独立版本域）；discovery 侧缓存消费 + `/upstreams` 对照（fail-open）。**执行（selector 过滤）见下 phase-3**。见 [route-rule-stream-api.md](../api/route-rule-stream-api.md)。
-- **V6 双方言持久化**：`artemis_route_rule_release`（append-only，索引 (namespace, service, rule_name, id)；记录保留不随规则删除级联）——DB 态 release 记录跨重启保留、重启后按历史 releaseId 回滚仍生效；两写无跨表事务（生效优先：update → 流通知 → 记录 append，失败重试幂等补录）。
-- **工程形态**：`routeRuleLock` 写推成对串行（防流上乱序，ejectionLock 先例）；code-review 11 findings（修 7 / 接受 4：无存量兼容 ×2、结构债 phase-3 收 ×2）；两写失败流通知缺口与记录坏行放大两高优修复；14 单测 + 5 IT（端到端灰度「一个 API 完成」与回滚视图还原——roadmap v0.5 验收要点前两条落地）。
-
-**v0.5 phase-3（分组路由执行）已交付**：
-
-- **执行语义（Group filter，权重二值承接）**：route-rule 在 discovery 过滤器链的执行点落地——实例可见 ⟺ 命中目标中任一**生效列 `weight` > 0**（0 = 摘出发现视图；比例切分归调用方侧消费，注册中心只表达与执行「谁承接流量」）；非空 selector（多键 AND 等值匹配实例 metadata）命中、未命中任何 selector 的实例归兜底目标（空 selector，至多一条）；命中 0 权重目标的实例**不归兜底**；服务多规则 AND、无规则全可见；逻辑实例（`logical` cluster）与真实实例同判定。与摘除过滤 AND 叠加（正交），查询/推送/对账 checksums 三出口一致口径，逐 filter fail-open。
-- **规则变化视图直投**：规则流事件应用 = 表锁内「过滤器整集替换 + 新旧可见性对称差扇出」成对——退出视图发 DELETE、进入发 NEW（与投影扇出/基线互斥，ejection 同型）；受影响服务 = 规则覆盖服务集（服务内资源，无 selector 全局波及）；fail-open 断流不清缓存（最后已知规则继续）。
-- **两段发布联动语义（运维须知）**：release 使生效权重跨越 0 → 视图变化 + 直投；未跨 0 的权重调整不影响视图（水位照常推进）；rollback 同构反向。**创建规则未 release 时生效列全 0 = 该服务全部实例摘出**（创建 = 定义结构、release = 生效的严格执行语义）——安全姿势 = INACTIVE 创建（流不下发）→ release → activate。
-- **纵深防御**：空 targets 规则（上游不变量破坏）视为无治理意图全可见——规则数据损坏不得静默摘除整个服务；多兜底目标取首个生效（确定性降级）。
-- **工程形态**：结构债 #9 收口（ejection/route-rule 两同步器抽 `ManagementRuleSynchronizer` 共享骨架，ejection 既有测试原样通过为安全网）+ #10 收口（两规则流 source 抽 `ManagementRuleChannels` 共享 channel/轮换/认证设施）；零 proto/API/配置变更；code-review 7 findings 全修；17 单测 + 4 IT（三出口一致 / 无兜底摘出 / 回滚还原 / 逻辑实例）。
-
-**v0.5 phase-4（canary 一键用法）已交付**：
-
-- **预置派生（架构 §5.2，不新增独立资源类型）**：`POST /admin/v1/canary/{ns}/{svc}`（body = `selector` + `weight`）一个 API 完成金丝雀部署——management 派生保留名 `canary` 规则（canary 目标 + 兜底目标 `10000 - weight`，两列一致即已发布态，deploy 本身就是一次 release）+ 落 RELEASE 记录 + 规则流下发；`DELETE` 同路径 = 结束灰度（删规则 = 无治理意图 = 全实例回归，幂等；发布记录保留）。金丝雀身份以实例 metadata 表达（ADR-013 世界：部署侧打标，如 `version=canary`——取代原产品 IP 列表绑定，全程零 IP 维护）。见 [admin-api.md](../api/admin-api.md) §4.12。
-- **weight 运维语义**（配 phase-3 二值承接）：0 = 金丝雀实例摘出视图（dark launch）；1–9999 = 两组均可见、比例意图由调用方消费；10000 = 稳定组摘出（全量切流）；中途调整 = 再次 POST（全量替换派生 targets，重圈定时旧组回归兜底）。查询/历史/预览/回滚零新端点——既有 route-rule API 对 `canary` 规则直接可用（`.../route-rules/{ns}/{svc}/canary/*`）。
-- **保留名 `canary` 定稿**（phase-1 留白项）：CRUD 通道 create/update 拒绝（400），canary 通道独占；每服务一组（多组灰度/复杂圈定 = route-rule 手工用法）；与服务既有手工规则叠加时多规则 AND。
-- **工程形态**：proto / discovery / 配置 / store 零变更（canary 规则即普通 ACTIVE route-rule，phase-2 流与 phase-3 Group filter 原样消费——改动全部收敛在 management 两侧块）；`routeRuleLock` 写序对齐 release（生效优先 + 记录幂等补录）；code-review 4 findings 全修（e2e 尾断言真化、文档错误映射表述修正等）；单测 5 + 管理 IT 6 + 端到端 IT 1（canary API 驱动视图切分——roadmap v0.5 验收要点「canary 流量切分」落地）。
-
-**v0.5 phase-5（console 管理版）已交付**：
-
-- **操作面（零新端点）**：console SPA 升管理版——操作全部驱动既有治理 REST API（`/admin/v1/*`，plan 预告的执行确认）：服务详情页**实例摘除/恢复**（reason 记审计）+ **canary 一键部署/结束灰度**；摘除记录页四级一套（scope/value/reason 新建 + EJECT 行恢复）；路由规则页**两段发布闭环**（新建/编辑 targets → diff 预览 → 发布 → 发布记录一键回滚 → 删除；编辑回传 `status` 保持 INACTIVE 语义——review 修复）。原产品局限 #16/#17（表直透 API、console 缺操作闭环）修复收尾（架构 §8）。
-- **订阅关系视图（调用方视角）**：management → discovery 只读组合通道（架构 §2.1 依赖 0..N 首条落地，HTTP）——`SubscriptionQueryPort`（domain，`RegistryQueryPort` 先例）+ `DiscoveryAdminClient`（RestClient，共享命名虚拟线程并行、per-source fail-open）逐源拉取 discovery `/admin/v1/subscriptions`，出口 `GET /admin/v1/subscriptions`：**逐源并列不跨源去重**（节点互为独立投影，源列即排障维度）、单源失败 error 承载不拖垮视图；配置 `artemis.management.discovery.*`（endpoints/auth/timeoutMs，静态，命名与 discovery 侧对称）。见 [admin-api.md](../api/admin-api.md) §4.13。
-- **视图面**：操作审计流（operation 过滤 + 时间倒序）、自我保护态（节点级统计卡 + 服务明细，includeNormal 切换）两页新增；SPA 保持原生单文件零构建（架构 §5.3），hash 路由七视图（服务列表/详情、摘除记录、路由规则、订阅关系、审计、保护态）。
-- **all-in-one 组合注入**：launcher 注入 `artemis.management.discovery.endpoints`（同进程 discovery HTTP 端口，0/随机不注入）——eval 单包形态订阅视图开箱可用。
-- **工程形态**：proto / discovery 产品代码零变更；code-review 8 findings 全修（高优 1：编辑表单丢 status 静默激活 INACTIVE 规则；含编码边界、all-in-one 端口守卫、executor 命名纪律）；1 单测（组合隔离/排序）+ `ManagementConsoleOpsIT` 5 用例（console 操作闭环）+ `DiscoveryConsoleSubscriptionsIT` 2 用例（三服务端到端：真实订阅可见/断流移除/坏源隔离）。
-
-**v1.0 phase-1（TLS 传输安全）已交付**：
-
-- **总原则**：显式启用、默认明文（与默认认证哲学一致——eval 零依赖路径不变）；仅 server-auth TLS（加密 + 服务端身份校验，mTLS 客户端证书校验随 RBAC 后置 phase-2）；证书 = PEM 文件路径（X.509 链 + PKCS#8 私钥），轮换 = 换文件重启生效。
-- **配置分界**：外部端口（registry/discovery/management 的 gRPC 与 HTTP）经 **Spring SSL bundle** 框架键启用（`spring.ssl.bundle.pem.*` + `spring.grpc.server.ssl.bundle` / `server.ssl.bundle`，零代码）；程序化通道经 **SCF 静态键**——内部 peer `artemis.registry.internal.tls.*`（入站证书 + 出站信任同组对称）、discovery 上游 `artemis.discovery.registry.tls.*` / `artemis.discovery.management.tls.*`、management 出站查询 `artemis.management.registry.tls.*`、SDK `artemis.client.tls.*`（registry/discovery gRPC 与 https 前置寻址共用一组，键表见 [sdk-java.md](../api/sdk-java.md) §3）。坏配置（enabled 但路径缺失/不可读/非合法 PEM）启动即 fail-fast。
-- **行为**：未启用通道与既有明文行为逐位一致；客户端自定义 trustCa 时 gRPC 与 HTTP 同锚（支持多证书 CA bundle），未配置用 JVM 默认信任库（公网 CA）；不提供跳过校验开关——证书须带 SAN 覆盖目标地址；actuator 管理端口不做 TLS（本机绑定 + 网络策略隔离）；all-in-one 跨服务 loopback 通道启用 TLS 需证书含 localhost SAN。
-- **工程形态**：`artemis-common` 新增 `tls` 设施（`TlsSettings` 绑定 + `GrpcTlsContexts` 装配，入站经 spring-grpc factory 构造参数 KeyManagerFactory 接入——安全设置冻结约束的实现期定案）；code-review 7 findings 处理（6 修 1 归文档：含 SDK https 多证书 bundle 解析崩溃修复、坏 CA 绕过启动校验修复）；common/client 单测 16 + `RegistryTlsIT` 3（SDK over TLS + 双节点 peer TLS 复制 + 明文/无信任锚拒绝）+ `DiscoveryTlsIT` 1（三服务全 TLS：投影/规则流/console https）。
-
-**v1.0 phase-2（RBAC）已交付**：
-
-- **权限模型**：预置角色 **ADMIN / OPERATOR / VIEWER** × 资源 × 动作——角色→权限矩阵为代码常量（产品语义，自定义角色待真实需求），账户→角色映射 DB 持久化（V7 迁移账户表 `role` 列，v0.4 存量单管理员升级即 ADMIN，行为无回退）。资源词汇 = 治理资源归并：release/canary 归 `route-rule:write`、订阅视图与排障面归 `service:read`，加 `audit:read`（ADMIN/OPERATOR）与 `user:manage`（仅 ADMIN）；VIEWER = 四资源读，OPERATOR = 读 + 治理写 + 审计读，ADMIN = 全权。
-- **enforcement**：management 外部 HTTP `/admin/v1` 认证后判权——401（未认证）与 403（已认证越权）分层，路由逐端点显式登记、**未登记路径默认 deny**（fail-closed）；console 走同一 REST 面天然覆盖；自助改密任何已认证用户可用（不进矩阵）。内存态保持单管理员配置凭证全权（无判权），用户管理端点 409；内部 gRPC 规则流端口为 discovery 服务凭证域，不属 RBAC 面。
-- **多账户用户管理**（DB 态 REST）：`GET/POST /admin/v1/users`、`PUT .../role`、`PUT .../password`（admin 重置）、`DELETE`、`GET /admin/v1/roles`；保护规则 = 最后 ADMIN 不可降级/删除、不可删自己；建户/改角色/重置密码/删户全量进审计表；认证缓存按用户名键控，改密/重置/改角色/删户即时清槽（权限变更即时生效）。改密语义升级：以认证主体定位账户（多账户化）。契约见 [admin-api.md](../api/admin-api.md) §5。
-- **ADR-021 委托定案**：各服务管理面对 management 账户的认证委托**继续后置 v1.x**——RBAC 资源全部位于 management 本地管理访问面，registry 零依赖资产与 failover 代价的否决理由依然成立；mTLS 客户端证书校验随委托一并评估（ADR-021 v1.1）。
-- **工程形态**：单测 176（management-core 133 + server 43，含权限矩阵全笛卡尔积、路由登记、缓存失效、保护规则）+ 双方言 Docker IT（`RbacIT` 4/4×2：seed 角色/矩阵允许拒绝/401 分层/审计；内存态 `UserAdminMemoryModeIT`）；code-review 2 low 接受并注释（最后 ADMIN check-then-act 竞态、缓存回填竞态 ≤60s——已知限制见 [admin-api.md](../api/admin-api.md) §8）；另修复 `RouteRulePersistenceIT` 既有审计断言顺序依赖。
-
-**v1.0 phase-3（部署形态 I：Docker + VM）已交付**：
-
-- **Docker all-in-one 镜像**：根 `Dockerfile.all-in-one`（多阶段自包含，与 registry 单服务镜像并列；CI docker job 双镜像构建）——一条 `docker run` 起全功能三服务（对外六端口：registry 8080/9090、management 8081/9094、discovery 8090/9095；peer 与管理端口 loopback 不外暴）；配置外置零新机制（SCF env relaxed 映射 / 挂载工作目录 `artemis.properties` / `SPRING_DATASOURCE_*` 双轨）。
-- **VM 标准安装包**：`deploy/vm/` 模板仓内化（`bin/app.sh` 九命令运维脚本 + `artemis.service` unit + 全注释 `artemis.properties`）+ `java/scripts/build-dist.sh` 出 `artemis-<version>.tar.gz`；`app.sh install` 一键 systemd 托管（journalctl 日志、优雅停机与 unit `TimeoutStopSec` 对齐）。配置文件置包根（SCF 工作目录语义零特判），无 logs/ 目录（stdout → journal）。
-- **all-in-one 成员自报补全**（实现期发现的 SDK 可接入性缺口）：launcher 在未配置时默认注入 `cluster.members`（单成员，external 端点 `127.0.0.1:<grpcPort>`）与 `cluster.self`（独立注入、显式配置优先）——此前 `/cluster/nodes` 无 external 端点，SDK 前置寻址（ADR-020）空列表无法接入。跨机/容器端口映射接入经 env 覆盖 members（见 [all-in-one.md](../api/all-in-one.md) v2.3）。
-- **部署冒烟**：`java/scripts/smoke-deploy.sh [docker|vm|all]`（独立于 dev-test.sh 的非 mvn 形态）——起服 + 端口就绪 + console 默认认证 401 + **SDK 走通**（single-file harness：注册 + 订阅发现断言）；端口映射场景以 `ARTEMIS_REGISTRY_CLUSTER_MEMBERS`/`ARTEMIS_DISCOVERY_NODES` 覆盖宿主端点。
-- **文档**：`docs/deploy/`（docker.md / vm.md；phase-4 Helm 与 phase-6 容量基线已随各 phase 交付补入）。
-
-**v1.0 phase-4（部署形态 II：K8s/Helm）已交付**：
-
-- **三单服务镜像**：根 `Dockerfile.service`（`ARG SERVICE` 参数化 registry/discovery/management，与既有两镜像并列；CI 三镜像 + all-in-one 全构建）。EXPOSE 不可按 ARG 条件化，K8s 端口以 chart containerPort 为准。
-- **Helm chart**（`deploy/helm/artemis/`，配置全 env 注入与容器形态同出口，零新配置键）：registry StatefulSet（peer headless svc 稳定成员 DNS + external ClusterIP svc + PVC 快照卷 + `self` 经 fieldRef）+ discovery/management Deployment（无状态）；三服务 `enabled` 开关独立裁剪、治理链 chart 内默认闭合；成员表按 `replicas` 渲染三段式条目（`membersOverride` 显式优先）、discovery 上游 clusters/节点目录/互连端点默认渲染可覆盖。
-- **探针**：registry readiness 用外部 `/readyz`（排水期 503 对接 K8s 摘流量；TLS 开启时 scheme HTTPS）+ 三服务 liveness/startup 走 actuator 管理端口（env 覆盖 `MANAGEMENT_SERVER_ADDRESS=0.0.0.0`，产品默认 loopback 不变）。
-- **values 口径**：DB 可选（`management.db.enabled`，默认内存态；true 时 `SPRING_DATASOURCE_*` 透传、密码可走 existingSecret，不内置子 chart）、TLS/凭证透出（`ARTEMIS_*_AUTH_ENABLED` 必发、tls secretName 挂载既有键面）、fail-fast 守卫（上游缺配/db 缺 url/TLS 不配对渲染期报错）。
-- **冒烟**：`smoke-deploy.sh helm`（kind 起集群 + 三镜像 load + helm install + pod 就绪 + port-forward + SDK 走通 + uninstall）；CI helm job 做 lint + 渲染断言（拓扑/env/变体/fail 场景退出码）。冒烟期顺带修复既有脚本 `sdk_classpath` 缺陷（新 worktree jar 缓存误判、`-DskipTests` 不跳 failsafe IT、`$()` 捕获污染 classpath）。
-- **文档**：`docs/deploy/k8s.md`（拓扑/values/探针/集群内外 SDK 接入/卸载与 PVC 语义）。
-
-**v1.0 phase-5（滚动升级协议验证）已交付**：
-
-- **验证口径**：滚动升级无感 = 三层正交前提——**契约**（proto wire 兼容纪律被遵守：field 类型/编号不变、删除编号+名字双 reserved、编号不复用）+ **行为**（服务端对含未知字段的「未来版本」消息正常处理，protobuf 前向兼容链路无破坏）+ **语义**（3 节点滚动重启客户端容灾无感）。真实两版本二进制混跑不做（正确性由前两层蕴含，仓库亦无历史发布物）。
-- **契约门槛**：`java/scripts/proto-compat-check.sh`（`dev-test.sh all` 内嵌、CI 自动执行）——数据面五组（common/registry/replication/projection/discovery，冻结范围同 [proto 契约规范](../dev/proto-contract.md) §2）相对各版本收尾锚点逐文件断言；锚点不可解析（浅克隆）显式红不静默跳过；CI checkout `fetch-depth: 0`。git tag 启用前契约版本锚点 = 版本收尾 commit（脚本锚点表集中维护）。
-- **前向兼容 IT**（`ProtoForwardCompatIT`）：心跳流/Replicate 注入 `UnknownFieldSet`（未用 field number × 两种 wire 类型）→ ack 正常 + 数据效果正确。
-- **滚动重启 IT**（`RollingRestartIT`）：3 节点逐节点停→同端口重启，优雅停机（drain 排水）与无排水（drainMs=0，Pod 强终止的进程内最近似）两形态；滚动全程存活节点注册表完整、`evictExpired` 误摘探针不减、终态清理探针跑满超 TTL 窗口证明 SDK 持续续约（不断流不换数据）。
-- **工程形态**：零产品代码变更（验证型 phase）；code-review 10 findings 处置（9 修 1 登记——3 节点 IT scaffolding 五处重复留待独立清理）；检查器负向自检 9 场景（三类破坏/名字未保留/合法演进/`deprecated` 选项/`to max`/注释花括号/伪锚点）。
-
-**v1.0 phase-6（容量验证）已交付**：
-
-- **压测工具**：`java/client/artemis-bench`（SDK 驱动 driver：四角色 plan/registry/subscriber/join，档位 dev/small/medium/large/custom 两层规模参数 + 资源模型预算）+ `java/scripts/bench.sh`（独立入口不进 CI：jemalloc 强制预检、内存预检、拓扑拉起、driver 分片、5s 采样、两级 watchdog、副本一致性汇总）；服务端用各 `*-server` 可执行 jar 真实部署产物。
-- **容量基线**（[capacity-baseline.md](../deploy/capacity-baseline.md)）：small 档（1 万实例）实测——注册风暴 30s ramp 到位、稳态 10 分钟零丢失（续约率 2100/s 吻合理论 2000）、订阅推送 p50=5ms/p95=7ms（每订阅者独立配对）；3 节点副本一致（三节点全量 1 万）；容量公式（registry ≈65KB/实例，10 万外推口径）与预判九条逐条结论。
-- **表外新发现 2 条**（压测核心产出）：3 节点拓扑订阅推送实时性退化（观察率 37%、延迟分钟级靠对账兜底，单拓扑 p95=7ms 对照——机制排查后置 v1.x）；RENEW 组批合并使复制流量低于线性外推。
-- **出数口径降级**：large 档（10 万）本机预检不可行（预算 14.1G > 可用），按设计以 small 实测 + 外推出数，10 万直测复现命令随基线文档（需 ≥16C/32G 独立机）。
-
-**v1.0 phase-7（文档站）已交付**：
-
-- **四类文档**：[快速开始](quick-start.md)（10 分钟注册 + 发现闭环，命令与 smoke-deploy.sh docker 同源）、[配置参考](../deploy/config-reference.md)（三服务 + all-in-one 全量配置键，键与默认值从代码穷举）、[API 参考](../api/README.md)（既有 14 文档聚合，门户直链）、[运维手册](../deploy/operations.md)（启停升级/监控接入/告警处置表/排障路径/数据恢复）；根 README 门户化。
-- **告警示例**（`deploy/alerts/`，arch §6 承诺兑现）：Prometheus 规则 7 条（节点失联双视角 critical ×2、保护态双级 warning ×2、复制/bootstrap 机械健康 ×3，counter 带 `_total` 后缀）+ scrape 配置 + Alertmanager 路由桩；`ArtemisNodePeersLost` 单节点部署需移除（peers.up 恒 0）已在文件与手册注明。
-- **文档守门**：`java/scripts/check-docs.sh`（markdown 相对链接存在性——含未跟踪文件；告警配置可加载性——promtool/amtool 真校验，缺失退化为行级形状断言）+ 独立 CI workflow [docs.yml](../../.github/workflows/docs.yml)（按路径触发不连带语言 job）。
-- **存量缺陷修复**：smoke docker env 覆盖用例变量名拼错（`ARTHEMIS_DIST_*`）+ TCP 探测空转（docker userland-proxy 对未监听端口也接受连接）→ 正确拼写 + HTTP 语义断言（匿名 `/cluster/nodes` 401）；4 处存量断链；code-review 15 findings 全处置。
-
-**v1.0 phase-8（SDK 发布 Maven Central）已交付**：
-
-- **发布配置**：client 线三组件（`artemis-client-parent` pom / `artemis-client` / `artemis-client-spring-boot-starter`，各带 sources + javadoc + GPG 签名）经 `release` profile（`-Prelease` 显式激活，日常构建零开销）发布 Maven Central（Central Portal，central-publishing 插件注入 deploy）；压测工具 artemis-bench 不发布（excludeArtifacts 排除 + 模块跳过发布件构建双保险）；服务端线不发 Central（镜像/Helm/dist jar 交付）。
-- **starter 更名**：`spring-boot-starter-artemis-client` → `artemis-client-spring-boot-starter`（第三方 starter 命名约定，`spring-boot-starter-*` 前缀为 Spring 官方保留；Central 坐标发布不可撤回，发布前为唯一低成本窗口）——纯 Maven 层更名（目录/artifactId/引用文档），Java 包名与自动装配注册不变。
-- **发布流程与 dry-run**：[release-java.md](../dev/release-java.md) 单一来源（前置条件/九步流程/故障表）；`java/scripts/release-dry-run.sh` 全链路本地演练（隔离测试密钥 + 临时版本号 + 不可达上传端点出 bundle，21 项断言：组件集合/签名可验证/版本自动恢复），独立入口不进 dev-test.sh。首次发布版本 **1.0.0**、tag 约定 `sdk-java-<version>`（与仓库版本 tag 语义分离）；实际发布由维护者凭 Portal 账号执行，发布后 SDK 可经 Central 坐标直接消费。
+源码为多语言 monorepo（`proto/` 语言无关契约 + `java/` Maven reactor）。构建命令、模块边界与技术选型见仓库根 `CLAUDE.md` 与 `docs/dev/`（[tech-stack-java.md](../dev/tech-stack-java.md)、[coding-guidelines-java.md](../dev/coding-guidelines-java.md)）。
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
-| 1.44 | 2026-10-29 | v1.0 phase-8 交付：SDK 发布 Maven Central 配置（release profile + Central Portal）、starter 更名 artemis-client-spring-boot-starter、发布流程与 dry-run 演练 |
-| 1.43 | 2026-10-29 | v1.0 phase-7 交付：文档站（快速开始/配置参考/运维手册/README 门户）+ 告警示例三件套 + check-docs.sh 与 docs CI；smoke env 假绿缺陷修复 |
-| 1.42 | 2026-10-28 | v1.0 phase-6：压测工具（artemis-bench + bench.sh）与容量基线交付（small 实测 + 外推口径 + 预判对照），表外新发现 2 条 |
-| 1.41 | 2026-10-28 | v1.0 phase-5 交付：滚动升级协议验证（proto 兼容契约门槛进 dev-test.sh all/CI + 前向兼容 IT + 3 节点滚动重启 IT）；构建注释同步 |
-| 1.40 | 2026-10-28 | v1.0 phase-4 交付：部署形态 II（K8s/Helm chart 三服务独立编排 + 三单服务镜像 + 探针 + DB 可选 + 冒烟与 CI 渲染断言） |
-| 1.39 | 2026-10-28 | v1.0 phase-3 交付：部署形态 I（Docker all-in-one 镜像 + VM tar.gz/systemd 安装包 + 冒烟脚本 + all-in-one 成员自报补全 + docs/deploy/） |
-| 1.38 | 2026-10-27 | v1.0 phase-2 交付：RBAC（三预置角色矩阵、/admin/v1 enforcement、多账户用户管理、ADR-021 委托定案后置 v1.x） |
-| 1.37 | 2026-10-27 | v1.0 phase-1 交付：TLS 传输安全（内外通道可启、Spring bundle/SCF 键分界、SDK gRPC+https 同锚、默认明文不变） |
-| 1.36 | 2026-10-27 | v0.5 phase-5 交付：console 管理版（操作面零新端点 + 订阅关系组合视图 + 审计/保护态页面 + all-in-one 订阅源注入）；v0.4 phase-6 操作面状态句更新 |
-| 1.35 | 2026-10-27 | v0.5 phase-4 交付：canary 一键用法（selector + weight 派生保留名规则 + 发布 + 下发，DELETE 结束）、weight 运维语义、保留名 canary 定稿、零 proto/discovery 变更 |
-| ------ | ------ | ------ |
-| 1.34 | 2026-10-27 | v0.5 phase-3 交付：Group filter 执行语义（selector 匹配 + 权重二值承接 + 兜底）+ 规则变化视图直投 + 三出口一致 + 结构债 #9/#10 收口；phase-2 节「执行归 phase-3」状态句更新 |
-| 1.33 | 2026-10-27 | v0.5 phase-2 交付：两段状态机（编辑通道收紧）+ release/rollback/diff/releases + RouteRuleService 规则流与 routeRules 水位 + V6 发布记录持久化 |
-| 1.32 | 2026-10-26 | v0.5 phase-1 交付：route-rule 资源模型（等值选择器 + 两段双权重）+ V5 双方言持久化 + 资源导向 CRUD 与审计 |
-| 1.31 | 2026-10-26 | v0.4 phase-7 交付：三服务 all-in-one 完整形态（治理链默认闭合 + DB 双轨 + 组合键 +3）+ 四要点端到端；模块表 dist 行更新 |
-| 1.30 | 2026-10-26 | v0.4 phase-6 交付：console 只读版——内嵌原生单文件 SPA（根路径入口、与 Admin API 同认证）+ 服务列表 keyword 模糊/分页/total + 详情实例分页 |
-| 1.29 | 2026-10-26 | v0.4 phase-5 交付：规则下发闭环——版本化规则流（版本 = 翻转记录 sequence）+ discovery ack 上行 + 生效水位 API（`GET /admin/v1/status/rules`）+ discovery 本地应用版本对照；phase-6 节「无版本/ack」表述修正 |
-| 1.28 | 2026-10-25 | v0.4 phase-4 交付：逻辑实例（静态实例）——模型/CRUD/V4 双方言持久化 + 专属下发流 + discovery 保留 cluster `logical` 统一发现视图（union/摘除生效/fail-open） |
-| 1.27 | 2026-10-25 | v0.4 phase-3 交付：四级摘除（metadata selector 实时匹配）+ 操作记录即状态（叠加/反向对消）+ V3 双方言持久化与审计 + 统一 ejection API + 跨重启重下发恢复 |
-| 1.26 | 2026-10-25 | v0.4 phase-2 交付：单管理员 DB 账户 + 统一认证接管（ADR-021：管理访问面收敛、配置凭证 seed 物化）、改密 API |
-| 1.25 | 2026-10-25 | v0.4 phase-1 交付：management DB 可选装配（MySQL/PG 双方言 + Flyway + 双轨运行）、`GET /admin/v1/status/persistence`；交付状态首段 v0.3 收尾修正 |
-| 1.24 | 2026-10-24 | v0.3 phase-9 交付：starter 双用途条件装配（缺地址不 fail-fast、配置桥同名让位/按名绑定）、`artemis-dist` all-in-one 单包（同 JVM 双上下文、`artemis.dist.*`）；新建 api/all-in-one.md |
-| 1.23 | 2026-10-24 | v0.3 phase-8 交付：发现侧 Java 8 SDK（订阅/缓存/快照/兜底/地址容灾）、discovery 静态节点目录（ADR-020）、`RegistryClient` 更名与 `clientId`；新建 api/sdk-java-discovery.md、api/discovery-nodes-api.md |
-| 1.22 | 2026-10-24 | v0.3 phase-7 交付：discovery 只读发现管理面（订阅关系/服务视图/上游与规则源状态）；新建 api/discovery-admin-api.md |
-| 1.21 | 2026-10-24 | v0.3 phase-6 交付：management 摘除规则流 + discovery 过滤器链（三出口一致过滤、跨 cluster 规则、fail-open/最后已知规则、0..1 可选） |
-| 1.20 | 2026-10-24 | v0.3 phase-5 交付：多集群聚合（union + cluster 选择器过滤、跨源隔离、JSON map 上游配置、readiness 全量门） |
-| 1.19 | 2026-10-24 | v0.3 phase-4 交付：hash 对账（canonical 规则单一来源 + golden vector）、新鲜度标记；新建 api/discovery-reconciliation-api.md |
-| 1.18 | 2026-10-24 | v0.3 phase-3 交付：推拉结合订阅推送（ADR-019：增量流 + labels 视图翻译 + diff 续推）；新建 api/discovery-subscription-api.md |
-| 1.17 | 2026-10-23 | v0.3 phase-2 交付：discovery 投影内核（消费安全序/自愈重连/readiness）与 discovery.v1 查询 API；新建 api/discovery-query-api.md |
-| 1.16 | 2026-10-23 | v0.3 phase-1 交付：projection.v1 分发契约与 registry 侧投影数据源；核心概念补「投影分发」 |
-| 1.15 | 2026-10-23 | v0.2 版本收尾：交付状态更新为已交付（验收对照见 v0.2/plan.md），下一版本 v0.3 |
-| 1.14 | 2026-10-23 | v0.2 phase-6 交付：节点优雅停机（DOWN 标记 → drain → 终刷 → 停端口）、就绪门三态与 DOWN 传播、SDK starter ContextClosedEvent 自动注销、K8s 排水配置注意 |
-| 1.13 | 2026-10-23 | v0.2 phase-5 交付：SDK 三级地址容灾（HTTP 前置寻址 + 观测态优先级选址 + 熔断换址）与连接 TTL 轮换；`GET /cluster/nodes` 发现端点（未就绪 503）；SDK 配置键与指标递补 |
-| 1.12 | 2026-10-21 | v0.2 phase-4 交付：自我保护 2.0（节点级兜底 + 服务级权威、显式状态与超时回落）、有界指标、`GetSelfProtectionStatus` 与 Admin 状态端点、集群独立判定 |
-| 1.11 | 2026-10-21 | v0.2 phase-3 交付：peer 全量 bootstrap（异步/退避/整体替换/not ready 语义）、三段式成员配置、对外节点状态 API 与后台并发探测、配置与指标；修正 phase-1 交付节对外端点表述 |
-| 1.10 | 2026-10-21 | v0.2 phase-2 交付：变更事件扇出（副本租约继承原产品：RENEW 续约复制、清理不扇出、缺席补注册）、扇出管线与退避重试、复制配置项与指标；修正 v0.1 phase-2 节事件出口表述 |
-| 1.9 | 2026-10-20 | v0.2 phase-1 交付：replication.v1、双 gRPC 监听与认证隔离、静态多节点成员/自身识别、配置动态性；当前版本转 v0.2 |
-| 1.8 | 2026-10-19 | phase-8 交付节：Spring Boot starter 自动装配、CI 流水线、多阶段 Docker 镜像；开发者入口补镜像构建命令 |
-| 1.7 | 2026-10-19 | phase-7 交付节：Java 8 注册侧 SDK（fire-and-forget、心跳自愈、生命周期、SCF 配置、Micrometer 指标）；新增 SDK API 文档 |
-| 1.6 | 2026-10-19 | phase-6 交付节：management-service 独立进程、Admin API（有效视图/摘除/恢复）、状态 API、出站只读查询与错误语义；管理面 API 文档链接 |
-| 1.5 | 2026-10-19 | phase-5 交付节：内部只读查询能力/脱敏/上限/契约归属（management.v1，client 不生成）；common 生成组同步 |
-| 1.4 | 2026-10-18 | phase-5 交付：registry 内部只读查询 RPC（服务/实例/租约/配置状态，敏感值脱敏）；phase 编号按 ADR-016 重排（管理面 phase-6） |
-| 1.3 | 2026-10-18 | phase-4 交付：SCF 配置（分层 source/热加载/动态与静态项）、默认 Basic 认证、三端口分离、Prometheus/JSON 日志/OTel、HTTP readiness、成员抽象 |
-| 1.2 | 2026-10-18 | phase-3 交付：自我保护基础版（10s 窗口/85%/下限 50）、快照落盘回放（5min / maxAge 1h / 路径默认）、readiness 门控与 UNAVAILABLE 语义 |
-| 1.1 | 2026-10-14 | phase-2 交付：注册四操作 + 心跳对账 + 租约 TTL/清理默认值（30s/1s，单调钟判定）+ gRPC 接入 |
-| 1.0 | 2026-10-12 | 初版（首个收尾 phase 建立）：产品定位、核心概念、开发者入口、交付状态 |
+| 2.0 | 2026-10-29 | 重写为产品总览文档：按能力维度组织（架构总览 / 功能地图 / 部署形态 / 性能容量）；「交付状态」phase 日志节退役——进度唯一源为 `docs/milestones/dev-state.md`，phase 明细在 `docs/milestones/`；开发者入口压缩为「参与开发」一节。1.x 版本为 phase 交付日志形态，历史可溯 git |
