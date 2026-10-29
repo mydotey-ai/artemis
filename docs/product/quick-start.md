@@ -1,6 +1,6 @@
 # 快速开始
 
-版本: 1.0    更新时间: 2026-10-28
+版本: 1.1    更新时间: 2026-10-29
 
 10 分钟从零跑通「注册 + 发现」：一条命令起全功能单容器，SDK 注册一个实例、订阅发现并看到它。
 
@@ -36,13 +36,13 @@ docker run -d --name artemis \
 
 ## 3. SDK 接入（注册 + 发现）
 
-SDK 尚未发布 Maven Central（v1.0 phase-8 发布；见 [roadmap](artemis-next-roadmap.md)），先本地安装：
+SDK 发布 Maven Central 的配置与流程已就绪（v1.0 phase-8，见[发布流程](../dev/release-java.md)），实际发布由维护者执行；发布前以 `0.1.0-SNAPSHOT` 本地安装消费：
 
 ```bash
 mvn -f java/client/pom.xml install -DskipTests -DskipITs
 ```
 
-业务工程依赖（Spring Boot 用户直接用 starter：`spring-boot-starter-artemis-client`，自动装配见 [SDK 文档](../api/sdk-java.md)）：
+业务工程依赖（Spring Boot 用户直接用 starter：`artemis-client-spring-boot-starter`，自动装配见 [SDK 文档](../api/sdk-java.md)）：
 
 ```xml
 <dependency>
@@ -99,4 +99,5 @@ List<ServiceInstance> instances = sub.getInstances(service);   // 推送到达�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-29 | v1.0 phase-8：starter 更名 artemis-client-spring-boot-starter、发布状态措辞更新（配置就绪待发布） |
 | 1.0 | 2026-10-28 | 初版（v1.0 phase-7 文档站） |

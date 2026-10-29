@@ -10,11 +10,35 @@
   <version>0.1.0-SNAPSHOT</version>
   <packaging>pom</packaging>
 
+  <name>Artemis Client Parent</name>
+
   <description>Artemis SDK 线 parent：JDK 8 目标，依赖管理独立于服务端 parent（artemis）——SB BOM、guava jre/gson 统一等服务端干预不进 SDK 依赖树；聚合构建入口仍是 java/pom.xml（modules 聚合与 parent 继承解耦）。工具链插件版本（spotless/checkstyle 等）与服务端各持一份、允许独立节奏，漂移成本已在 tech-stack §2.3 权衡。</description>
+
+  <!-- Central 发布校验要求的元数据（v1.0 phase-8，子模块继承；发布流程见 docs/dev/release-java.md） -->
+  <url>https://github.com/mydotey-ai/artemis</url>
+  <licenses>
+    <license>
+      <name>Apache License, Version 2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+    </license>
+  </licenses>
+  <developers>
+    <developer>
+      <id>mydotey-ai</id>
+      <name>Qiang Zhao</name>
+      <organization>mydotey-ai</organization>
+      <organizationUrl>https://github.com/mydotey-ai</organizationUrl>
+    </developer>
+  </developers>
+  <scm>
+    <connection>scm:git:git@github.com:mydotey-ai/artemis.git</connection>
+    <developerConnection>scm:git:git@github.com:mydotey-ai/artemis.git</developerConnection>
+    <url>https://github.com/mydotey-ai/artemis</url>
+  </scm>
 
   <modules>
     <module>artemis-client</module>
-    <module>spring-boot-starter-artemis-client</module>
+    <module>artemis-client-spring-boot-starter</module>
     <module>artemis-bench</module>
   </modules>
 
@@ -295,4 +319,73 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <!-- SDK 发布（v1.0 phase-8）：-Prelease 显式激活，日常构建零开销；组件与流程见 tech-stack #37–#40 与 docs/dev/release-java.md -->
+    <profile>
+      <id>release</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-source-plugin</artifactId>
+            <version>3.3.1</version>
+            <executions>
+              <execution>
+                <id>attach-sources</id>
+                <goals>
+                  <goal>jar-no-fork</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-javadoc-plugin</artifactId>
+            <version>3.12.0</version>
+            <configuration>
+              <!-- proto 生成代码无 javadoc 注释，doclint 默认全开会失败；release 随 maven.compiler.release=8（JDK 25 工具进程产 Java 8 口径） -->
+              <doclint>none</doclint>
+            </configuration>
+            <executions>
+              <execution>
+                <id>attach-javadocs</id>
+                <goals>
+                  <goal>jar</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-gpg-plugin</artifactId>
+            <version>3.2.8</version>
+            <executions>
+              <execution>
+                <id>sign-artifacts</id>
+                <phase>verify</phase>
+                <goals>
+                  <goal>sign</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.sonatype.central</groupId>
+            <artifactId>central-publishing-maven-plugin</artifactId>
+            <version>0.11.0</version>
+            <!-- 注入 deploy 生命周期：deploy 即组装上传 Central Portal（无 distributionManagement） -->
+            <extensions>true</extensions>
+            <configuration>
+              <publishingServerId>central</publishingServerId>
+              <!-- 压测工具模块不发布（tech-stack #36/#40） -->
+              <excludeArtifacts>
+                <artifact>artemis-bench</artifact>
+              </excludeArtifacts>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>

@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 1.43    更新时间: 2026-10-29
+版本: 1.44    更新时间: 2026-10-29
 
 > 本文是 Artemis 的产品文档：产品定位、核心概念、开发者入口与当前交付状态。随版本递补——每个 phase 收尾时同步本版交付的对外可见能力。产品规划与版本路线见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -53,7 +53,7 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 | `artemis-discovery-core` / `-server` | 25 | discovery 投影内核 / Spring Boot 装配 |
 | `artemis-management-core` / `-server` | 25 | 治理面内核 / Spring Boot 装配 |
 | `artemis-client` | 8 | 注册 + 发现统一 SDK（零 Spring） |
-| `spring-boot-starter-artemis-client` | 8 | client 的 Spring Boot 集成（双侧自动装配、生命周期托管、MeterRegistry 注入） |
+| `artemis-client-spring-boot-starter` | 8 | client 的 Spring Boot 集成（双侧自动装配、生命周期托管、MeterRegistry 注入） |
 | `artemis-dist` | 25 | all-in-one 组合入口：同 JVM 起 registry + management + discovery 三上下文，产出单包可执行 jar |
 
 ## 4. 交付状态
@@ -113,7 +113,7 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 
 **phase-8（Spring Boot starter + CI + Dockerfile）已交付**：
 
-- **starter**：`spring-boot-starter-artemis-client`（Java 8 / Spring Boot 2.7+）自动装配——`spring.factories`（老 2.x）+ `AutoConfiguration.imports`（2.7+）双注册；配置经 Spring Environment 进 SCF（application.properties/YAML、命令行、系统属性/环境变量，键写法 camelCase/kebab/snake 均可）；`initMethod=start` / `destroyMethod=close` 托管生命周期；自动注入 Boot `MeterRegistry`（无 registry 或多个同型 bean 时回落 `Metrics.globalRegistry`）；`artemis.client.enabled=false` 可关闭，宿主自定义 `RegistryClient` 时让位。用法见 [sdk-java.md](../api/sdk-java.md#spring-boot-自动装配)。
+- **starter**：`artemis-client-spring-boot-starter`（Java 8 / Spring Boot 2.7+）自动装配——`spring.factories`（老 2.x）+ `AutoConfiguration.imports`（2.7+）双注册；配置经 Spring Environment 进 SCF（application.properties/YAML、命令行、系统属性/环境变量，键写法 camelCase/kebab/snake 均可）；`initMethod=start` / `destroyMethod=close` 托管生命周期；自动注入 Boot `MeterRegistry`（无 registry 或多个同型 bean 时回落 `Metrics.globalRegistry`）；`artemis.client.enabled=false` 可关闭，宿主自定义 `RegistryClient` 时让位。用法见 [sdk-java.md](../api/sdk-java.md#spring-boot-自动装配)。
 - **CI**：GitHub Actions 按路径触发（`java/**`、`proto/**`、Dockerfile/workflow 变更）；`java` job 以 JDK 25 构建、经 Maven toolchains fork JDK 8 跑 client/starter 测试，强制 spotless:check + enforcer + 单测/集成测试；`docker` job 构建镜像。
 - **镜像**：仓库根多阶段 Dockerfile（`maven:3.9-eclipse-temurin-25` → `eclipse-temurin:25-jre`），`docker build .` 一条命令产出 registry 单服务镜像；非 root 运行，快照目录 `/app/data` 可写；暴露外部 gRPC 9090 / HTTP 8080。
 
@@ -244,7 +244,7 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 
 **v0.3 phase-9（发现侧 starter + all-in-one 打包）已交付**：
 
-- **starter 双用途**（`spring-boot-starter-artemis-client` 不变）：注册/发现两侧按「对应 `addresses` 是否配置」独立装配、可共存——只做发现的消费方不必配 registry 地址；缺地址不再 fail-fast（v0.1 语义修订），已配置但非法仍构造期 fail-fast；两侧独立让位宿主自定义 `RegistryClient`/`DiscoveryClient` bean。SCF 配置桥 `artemisClientStringProperties` 同名 bean 让位（接管 source 链）、异名共存时 client `@Qualifier` 按名绑定不误注入；关停监听只关 starter 自建 bean、关闭失败不阻断另一侧。发现侧只建 client 不代建订阅。用法见 [sdk-java.md](../api/sdk-java.md) / [sdk-java-discovery.md](../api/sdk-java-discovery.md)。
+- **starter 双用途**（`artemis-client-spring-boot-starter` 不变）：注册/发现两侧按「对应 `addresses` 是否配置」独立装配、可共存——只做发现的消费方不必配 registry 地址；缺地址不再 fail-fast（v0.1 语义修订），已配置但非法仍构造期 fail-fast；两侧独立让位宿主自定义 `RegistryClient`/`DiscoveryClient` bean。SCF 配置桥 `artemisClientStringProperties` 同名 bean 让位（接管 source 链）、异名共存时 client `@Qualifier` 按名绑定不误注入；关停监听只关 starter 自建 bean、关闭失败不阻断另一侧。发现侧只建 client 不代建订阅。用法见 [sdk-java.md](../api/sdk-java.md) / [sdk-java-discovery.md](../api/sdk-java-discovery.md)。
 - **all-in-one 单进程**（新增 `artemis-dist` 模块）：`artemis-dist-<version>-exec.jar` 单包起 registry + discovery——同 JVM 两个独立 Spring 上下文、端口全独立（registry 9090/8080/9091/9093、discovery 9095/8090/9096）、彼此走标准网络协议不进程内直连（ADR-001）；上游固定同进程 registry、多集群聚合不在该形态提供；组合端口经 `artemis.dist.*`（SCF：系统属性 > 环境变量 > 工作目录 `artemis.properties`，非法 fail-fast）；启动失败回滚不留半启进程、SIGTERM 按 discovery → registry 优雅关停。单服务入口与打包不变。详见 [all-in-one.md](../api/all-in-one.md)。
 - **工程形态**：starter 17 单测（双侧条件/让位/接管/共存/关闭语义）；dist 3 服务级 IT（双端口起停、registry 注册 → discovery 网络可见、幂等关停）；单包冒烟（7 端口监听 + 双 actuator 200 + SIGTERM 11s 优雅退出）；全量 `dev-test.sh all` 绿。
 
@@ -397,10 +397,17 @@ docker build -t artemis-registry-server .  # registry-server 镜像（多阶段�
 - **文档守门**：`java/scripts/check-docs.sh`（markdown 相对链接存在性——含未跟踪文件；告警配置可加载性——promtool/amtool 真校验，缺失退化为行级形状断言）+ 独立 CI workflow [docs.yml](../../.github/workflows/docs.yml)（按路径触发不连带语言 job）。
 - **存量缺陷修复**：smoke docker env 覆盖用例变量名拼错（`ARTHEMIS_DIST_*`）+ TCP 探测空转（docker userland-proxy 对未监听端口也接受连接）→ 正确拼写 + HTTP 语义断言（匿名 `/cluster/nodes` 401）；4 处存量断链；code-review 15 findings 全处置。
 
+**v1.0 phase-8（SDK 发布 Maven Central）已交付**：
+
+- **发布配置**：client 线三组件（`artemis-client-parent` pom / `artemis-client` / `artemis-client-spring-boot-starter`，各带 sources + javadoc + GPG 签名）经 `release` profile（`-Prelease` 显式激活，日常构建零开销）发布 Maven Central（Central Portal，central-publishing 插件注入 deploy）；压测工具 artemis-bench 不发布（excludeArtifacts 排除 + 模块跳过发布件构建双保险）；服务端线不发 Central（镜像/Helm/dist jar 交付）。
+- **starter 更名**：`spring-boot-starter-artemis-client` → `artemis-client-spring-boot-starter`（第三方 starter 命名约定，`spring-boot-starter-*` 前缀为 Spring 官方保留；Central 坐标发布不可撤回，发布前为唯一低成本窗口）——纯 Maven 层更名（目录/artifactId/引用文档），Java 包名与自动装配注册不变。
+- **发布流程与 dry-run**：[release-java.md](../dev/release-java.md) 单一来源（前置条件/九步流程/故障表）；`java/scripts/release-dry-run.sh` 全链路本地演练（隔离测试密钥 + 临时版本号 + 不可达上传端点出 bundle，21 项断言：组件集合/签名可验证/版本自动恢复），独立入口不进 dev-test.sh。首次发布版本 **1.0.0**、tag 约定 `sdk-java-<version>`（与仓库版本 tag 语义分离）；实际发布由维护者凭 Portal 账号执行，发布后 SDK 可经 Central 坐标直接消费。
+
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.44 | 2026-10-29 | v1.0 phase-8 交付：SDK 发布 Maven Central 配置（release profile + Central Portal）、starter 更名 artemis-client-spring-boot-starter、发布流程与 dry-run 演练 |
 | 1.43 | 2026-10-29 | v1.0 phase-7 交付：文档站（快速开始/配置参考/运维手册/README 门户）+ 告警示例三件套 + check-docs.sh 与 docs CI；smoke env 假绿缺陷修复 |
 | 1.42 | 2026-10-28 | v1.0 phase-6：压测工具（artemis-bench + bench.sh）与容量基线交付（small 实测 + 外推口径 + 预判对照），表外新发现 2 条 |
 | 1.41 | 2026-10-28 | v1.0 phase-5 交付：滚动升级协议验证（proto 兼容契约门槛进 dev-test.sh all/CI + 前向兼容 IT + 3 节点滚动重启 IT）；构建注释同步 |

@@ -1,6 +1,6 @@
 # Artemis Java SDK（发现侧）
 
-版本: 1.2    更新时间: 2026-10-27
+版本: 1.3    更新时间: 2026-10-29
 
 > `artemis-client` 中的消费方发现 SDK（v0.3 phase-8）：订阅推送 + 本地视图 + 磁盘快照 + 兜底拉取 + discovery 专属地址容灾。协议契约见 [discovery-query-api.md](discovery-query-api.md) / [discovery-subscription-api.md](discovery-subscription-api.md) / [discovery-reconciliation-api.md](discovery-reconciliation-api.md)；节点目录端点见 [discovery-nodes-api.md](discovery-nodes-api.md)。注册侧 SDK 见 [sdk-java.md](sdk-java.md)。
 
@@ -163,7 +163,7 @@ HTTP 引导地址（discovery.addresses）
 
 ## 9. Spring Boot 自动装配（v0.3 phase-9）
 
-与注册侧共用同一 starter（`spring-boot-starter-artemis-client`），按配置条件独立装配：
+与注册侧共用同一 starter（`artemis-client-spring-boot-starter`），按配置条件独立装配：
 
 ```properties
 # application.properties（只做发现的消费方不必配 registry 地址）
@@ -182,6 +182,7 @@ Subscription subscription = client.subscribe(selector);   // 订阅时机归宿�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.3 | 2026-10-29 | v1.0 phase-8：starter 更名 artemis-client-spring-boot-starter |
 | 1.2 | 2026-10-27 | v1.0 phase-1：键表补共享 TLS 键组引用（语义见 sdk-java.md §3） |
 | 1.1 | 2026-10-24 | v0.3 phase-9：新增 §9 Spring Boot 自动装配（与注册侧共用 starter，按 discovery.addresses 条件装配、不代建订阅） |
 | 1.0 | 2026-10-24 | v0.3 phase-8 初版：发现侧 SDK 公开 API、配置、同步语义、磁盘快照、地址容灾与指标 |

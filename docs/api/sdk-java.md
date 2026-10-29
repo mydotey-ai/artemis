@@ -1,6 +1,6 @@
 # Artemis Java SDK（注册侧）
 
-版本: 1.6    更新时间: 2026-10-27
+版本: 1.7    更新时间: 2026-10-29
 
 > `artemis-client` 的注册侧 Java 8 SDK（v0.3 phase-8 起类型更名 `ArtemisClient` → `RegistryClient`）：本地实例集为唯一事实源，显式操作 + 心跳全量上报。协议契约（`registry.v1`）见[proto 契约规范](../dev/proto-contract.md)，内部只读查询契约见 [registry-query-api.md](registry-query-api.md)。**发现侧（消费方）SDK 见 [sdk-java-discovery.md](sdk-java-discovery.md)**——两者共用同一 artifact。
 
@@ -16,13 +16,14 @@
 
 - Java 8 运行时（`release=8`），零 Spring 依赖。
 - 运行时依赖封闭清单：grpc-netty-shaded / grpc-stub / grpc-protobuf / scf-simple / SLF4J API / micrometer-core。
+- Maven Central 发布配置已就绪（v1.0 phase-8，[发布流程](../dev/release-java.md)）：发布后以发布坐标（首次 `1.0.0`）消费，发布前如上 `0.1.0-SNAPSHOT` 本地安装；starter 同步更名自 `spring-boot-starter-artemis-client`（第三方 starter 命名约定）。
 
 Spring Boot 宿主使用 starter（Java 8 / Spring Boot 2.7+）：
 
 ```xml
 <dependency>
   <groupId>org.mydotey.ai.artemis</groupId>
-  <artifactId>spring-boot-starter-artemis-client</artifactId>
+  <artifactId>artemis-client-spring-boot-starter</artifactId>
   <version>0.1.0-SNAPSHOT</version>
 </dependency>
 ```
@@ -167,6 +168,7 @@ client.register(instance);
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.7 | 2026-10-29 | v1.0 phase-8：starter 更名 artemis-client-spring-boot-starter、Maven Central 发布说明 |
 | 1.6 | 2026-10-27 | v1.0 phase-1：配置键表补 `artemis.client.tls.*`（enabled + trustCaPath，gRPC 与 https 前置寻址同锚、支持多证书 bundle、创建即 fail-fast） |
 | 1.5 | 2026-10-24 | v0.3 phase-9：starter 双用途条件装配（缺地址不再 fail-fast，非法仍 fail-fast）、配置桥 `artemisClientStringProperties` 同名让位/异名共存按名绑定、关闭监听只关 starter 自建 bean |
 | 1.4 | 2026-10-24 | v0.3 phase-8：`ArtemisClient` → `RegistryClient`、`newClient` → `newRegistryClient`；新增 `artemis.client.clientId`；`InstanceStatus` 增 UNSPECIFIED/UNKNOWN；链接发现侧 SDK 文档；自动配置类名保持不变 |

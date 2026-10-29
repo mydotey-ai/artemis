@@ -11,6 +11,7 @@
   </parent>
 
   <artifactId>artemis-client</artifactId>
+  <name>Artemis Client</name>
   <description>注册 + 发现统一 SDK，Java 8 目标、零 Spring；自生成 common.v1/registry.v1/replication.v1/discovery.v1（protoc 3.25.x）</description>
 
   <dependencies>

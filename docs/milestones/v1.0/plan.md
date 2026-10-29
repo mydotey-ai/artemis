@@ -1,6 +1,6 @@
 # v1.0 版本规划
 
-版本: 1.0    更新时间: 2026-10-27
+版本: 1.1    更新时间: 2026-10-29
 
 ## 目标
 
@@ -23,7 +23,7 @@
 | phase-5-rolling-upgrade | 滚动升级协议验证：proto 前后兼容验证 + 3 节点集群滚动重启客户端容灾无感 | 2 | IT：混合版本节点互操作（复制/bootstrap）+ 滚动重启期间 SDK 注册心跳不断流不换数据 |
 | phase-6-capacity | 容量验证：压测工具与场景矩阵（注册/心跳/查询/订阅推送 × 10 万实例），发布容量基线文档（内存/带宽/QPS/推送延迟） | 3 | 压测报告（基线数据 + 瓶颈结论），文档入 docs/deploy/ |
 | phase-7-docs | 文档站：快速开始/配置参考/API 参考/运维手册 + 告警示例配置（Prometheus + Alertmanager）+ README 门户 | 2 | 文档四类覆盖齐 + 告警示例规则可加载 + 快速开始按文档操作可复现 |
-| phase-8-release | SDK 发布 Maven Central：client 线（SDK + starter）发布配置（源码/Javadoc/签名）、发布流程文档 | 2 | 发布配置就绪 + 本地 dry-run（install/sign 校验）通过；实际发布由用户执行（凭账号） |
+| phase-8-release | SDK 发布 Maven Central：client 线（SDK + starter）发布配置（源码/Javadoc/签名）、发布流程文档 | 2 | 发布配置就绪 + 本地 dry-run（bundle/sign 校验）通过；实际发布由用户执行（凭账号） |
 
 phase-1 说明：TLS 为「内外通道均可启、内网可配明文」（架构 §6），非强制默认——与默认认证（D9）哲学一致：显式配置启用，eval 场景保持零依赖。③ 定稿证书供给形态（PEM 路径配置等）与各通道开关矩阵。
 
@@ -55,4 +55,5 @@ phase-8 说明：client 线独立 parent/版本线（tech-java.md）本就为独
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-29 | phase-8 验收方式口径修正（bundle/sign） |
 | 1.0 | 2026-10-27 | 版本启动，初始 phase 拆分（8 phase，滚动细化） |

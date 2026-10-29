@@ -4,9 +4,9 @@
 
 ## 版本与构建
 
-- 服务端模块（artemis-common、各 core、各 server）编译目标 `release=25`；artemis-client 与 spring-boot-starter-artemis-client `release=8`，同一 Maven reactor 混合编译，构建入口 `mvn -f java/pom.xml`。
+- 服务端模块（artemis-common、各 core、各 server）编译目标 `release=25`；artemis-client 与 artemis-client-spring-boot-starter `release=8`，同一 Maven reactor 混合编译，构建入口 `mvn -f java/pom.xml`。
 - client 代码只用 Java 8 语法/API 子集；SDK 工具类自备，不引 Guava 等额外运行时依赖。
-- groupId 与包前缀统一 `org.mydotey.ai.artemis`；artifactId 前缀 `artemis-`（例外：三个 parent——`artemis-parent`（java/ 纯聚合器）/`artemis-server-parent`/`artemis-client-parent`，与 starter `spring-boot-starter-artemis-client`）。
+- groupId 与包前缀统一 `org.mydotey.ai.artemis`；artifactId 前缀 `artemis-`（例外仅三个 parent——`artemis-parent`（java/ 纯聚合器）/`artemis-server-parent`/`artemis-client-parent`；starter `artemis-client-spring-boot-starter` 合规，v1.0 phase-8 发布前自 `spring-boot-starter-artemis-client` 更名——第三方 starter 不占官方 `spring-boot-starter-*` 前缀）。
 - 服务端模块（parent、common、各 core、各 server）统一版本 `${revision}` + flatten-maven-plugin；artemis-client 与 starter 归 **artemis-client-parent**（SDK 独立继承树，聚合仍在 java/ reactor）：独立字面版本线 + 独立依赖管理（slf4j 自钉 2.0 线、不 import SB BOM、不受服务端 guava/gson 干预、零 Lombok），不用 parent 属性防版本耦合回归。
 
 ## 模块依赖纪律（enforcer 硬约束）

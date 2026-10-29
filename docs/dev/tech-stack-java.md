@@ -1,6 +1,6 @@
 # Java 技术选型
 
-版本: 1.30    更新时间: 2026-10-28
+版本: 1.31    更新时间: 2026-10-29
 
 > 本文是新一代 Artemis Java 实现的技术选型基线：语言与运行时、工程结构、全量技术组件清单与依赖冲突策略。设计依据为[架构设计](../arch/artemis-next-architecture.md)（§3 技术栈策略、§7 关键决策 D8），开发规范见[Java 开发规范](coding-guidelines-java.md)。Rust 实现（v1.x 混合集群）直接消费仓库顶层 `proto/` 契约目录（见[proto 契约规范](proto-contract.md)），不受本文 Java 组件约束。
 
@@ -9,7 +9,7 @@
 | 项 | 决策 | 说明 |
 |---|---|---|
 | 服务端 JDK | Java 25 LTS（`release=25`） | common、各 core、各 server；架构 D8 |
-| SDK 编译目标 | Java 8（`release=8`） | artemis-client、spring-boot-starter-artemis-client；同一 Maven reactor 混合编译 |
+| SDK 编译目标 | Java 8（`release=8`） | artemis-client、artemis-client-spring-boot-starter；同一 Maven reactor 混合编译 |
 | 线程模型 | gRPC handler 走虚拟线程 executor | IO 密集、海量长连接（心跳/订阅推送）；Java 25 已解决 synchronized pinning（JEP 491），无锁升级顾虑 |
 | 定时任务 | `ScheduledExecutorService` 平台线程池 | 租约过期清理、快照落盘等周期任务 |
 | GC | 默认 G1 | ZGC 作为大堆可选项，v1.0 容量压测后决定，不预绑定 |
@@ -29,7 +29,7 @@ artemis/
 └── rust/         Rust 实现（v1.x 才创建）：Cargo workspace，从 ../proto 生成
 ```
 
-Java reactor 居 `java/`（构建入口 `mvn -f java/pom.xml`；根目录不放聚合构建文件，各语言构建入口在各自目录）。groupId 统一 `org.mydotey.ai.artemis`，artifactId 前缀 `artemis-`（例外：三个 parent `artemis-parent`（java/ 纯聚合器）/`artemis-server-parent`/`artemis-client-parent`；starter 为 `spring-boot-starter-artemis-client`，遵循 Spring starter 命名惯例）：
+Java reactor 居 `java/`（构建入口 `mvn -f java/pom.xml`；根目录不放聚合构建文件，各语言构建入口在各自目录）。groupId 统一 `org.mydotey.ai.artemis`，artifactId 前缀 `artemis-`（例外：三个 parent `artemis-parent`（java/ 纯聚合器）/`artemis-server-parent`/`artemis-client-parent`；starter 为 `artemis-client-spring-boot-starter`，第三方 starter 命名约定 `<产品>-spring-boot-starter`——`spring-boot-starter-*` 前缀为 Spring 官方保留；原名 spring-boot-starter-artemis-client（v0.1–v0.5），v1.0 phase-8 Central 发布定名前更名（坐标发布不可撤回，发布前为唯一低成本窗口））：
 
 ```text
 java/                            单 reactor 单构建入口（mvn -f java/pom.xml）
@@ -47,7 +47,7 @@ java/                            单 reactor 单构建入口（mvn -f java/pom.x
 └── client/                      SDK 线（parent = artemis-client-parent：独立版本线 + 独立依赖管理，见 §2.3）
     ├── pom.xml
     ├── artemis-client               注册 + 发现统一 SDK，零 Spring (Java 8)
-    └── spring-boot-starter-artemis-client   Spring 集成 (Java 8)
+    └── artemis-client-spring-boot-starter   Spring 集成 (Java 8)
 ```
 
 ### 2.2 proto 契约模型
@@ -121,8 +121,12 @@ Java 各消费模块从仓库顶层 `proto/`（组织与治理见[proto 契约�
 | 28 | CI/CD | 发布渠道 | Maven Central（Central Portal）+ 容器镜像仓库 | SDK/starter（v1.0）、镜像 | 镜像仓库 GHCR vs Docker Hub 待 v1.0 定 |
 | 29 | SDK 分发 | starter 自动装配 | `AutoConfiguration.imports` + `spring.factories` 双注册 | starter | 覆盖 SB 2.7+ 与老 SB 2.x；编译目标 Java 8 |
 | 30 | SDK 分发 | client 依赖纪律 | grpc-netty-shaded + grpc-stub + grpc-protobuf（传递 protobuf-java 3.25.x）+ SCF（scf-simple，传递 scf-core/lang-extension）+ SLF4J API + micrometer-core（#34） | artemis-client | grpc-netty-shaded **不传递** stub/protobuf 集成类，生成代码必需 grpc-stub/grpc-protobuf；冲突策略见 §5 |
-| 35 | 框架 | Spring Boot 2.x（starter 基线） | Spring Boot **2.7.18**（2.x 末版，Java 8 兼容；`spring-boot-autoconfigure` compile、`spring-boot-test` test，client 线自钉、不 import SB BOM） | spring-boot-starter-artemis-client（v0.1 phase-8 起） | starter 自动装配基线：配置经 SCF（不引 `@ConfigurationProperties`）、`initMethod=start`/`destroyMethod=close` 管生命周期、Boot `MeterRegistry` 注入回落 global；兼容 SB 2.7+（AutoConfiguration.imports）与老 2.x（spring.factories），自动配置类只用 2.x 全系 API（不用 `@AutoConfiguration`）；与 #7 服务端 SB 4.1 线互不传导 |
+| 35 | 框架 | Spring Boot 2.x（starter 基线） | Spring Boot **2.7.18**（2.x 末版，Java 8 兼容；`spring-boot-autoconfigure` compile、`spring-boot-test` test，client 线自钉、不 import SB BOM） | artemis-client-spring-boot-starter（v0.1 phase-8 起，原名 spring-boot-starter-artemis-client，v1.0 phase-8 发布前更名——第三方 starter 不占官方 `spring-boot-starter-*` 前缀） | starter 自动装配基线：配置经 SCF（不引 `@ConfigurationProperties`）、`initMethod=start`/`destroyMethod=close` 管生命周期、Boot `MeterRegistry` 注入回落 global；兼容 SB 2.7+（AutoConfiguration.imports）与老 2.x（spring.factories），自动配置类只用 2.x 全系 API（不用 `@AutoConfiguration`）；与 #7 服务端 SB 4.1 线互不传导 |
 | 36 | 构建 | 压测 fat jar 打包 | maven-shade-plugin **3.6.0** | artemis-bench（v1.0 phase-6 起，工具模块不发布） | driver 可执行 jar（bench.sh 经 `java -jar` 起分片）；**必须**配 `ServicesResourceTransformer`（grpc/netty SPI 经 META-INF/services 注册，shade 不合并则 NameResolverProvider 丢失 → 地址解析失败）；服务端线可执行 jar 一律 spring-boot repackage（#7/#33），shade 仅此一处 |
+| 37 | 构建 | 源码 jar | maven-source-plugin **3.3.1** | client 线 `release` profile（v1.0 phase-8 起） | 发布件 `-sources.jar`（`jar-no-fork`）；Central 发布要求，日常构建不激活 |
+| 38 | 构建 | Javadoc jar | maven-javadoc-plugin **3.12.0** | client 线 `release` profile | 发布件 `-javadoc.jar`；release 随 `maven.compiler.release=8` 属性（JDK 25 工具进程产 Java 8 口径 javadoc）；`doclint=none`——proto 生成代码无注释，doclint 默认全开会失败 |
+| 39 | 构建 | 制品签名 | maven-gpg-plugin **3.2.8** | client 线 `release` profile | 全发布件 `.asc` 签名；passphrase 经 `gpg.passphrase` 属性 / gpg-agent，不落盘；dry-run 用临时隔离密钥（`release-dry-run.sh`），真实发布用用户密钥 |
+| 40 | CI/CD | Central 发布上传 | central-publishing-maven-plugin（org.sonatype.central）**0.11.0** | client 线（#28 渠道的执行组件，v1.0 phase-8 起） | `extensions=true` 注入 deploy 生命周期（无 distributionManagement）；`excludeArtifacts` 排 artemis-bench（工具模块）；SNAPSHOT 版本走 Snapshot Publishing 路径不组 bundle（发布须 bump 到 release 版本）；0.11.0 的 `skipPublishing` 为整体跳过（含 bundle 组装），dry-run 经不可达 `centralBaseUrl` 出 bundle（`release-dry-run.sh`）；发布流程单一来源见 [release-java.md](release-java.md) |
 
 生效期暗含在类别中：#13–16 期 3（v0.4）引入；v0.1 实际依赖面为语言、构建、SB、gRPC、Lombok、SCF、可观测、测试与质量工具。
 
@@ -190,6 +194,7 @@ shaded 版将 netty 重打包进 `io.grpc.netty.shaded.*` 命名空间，与宿�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.31 | 2026-10-29 | v1.0 phase-8：组件总表 +37–#40（client 线发布组件群：source/javadoc/gpg/central-publishing，`release` profile） |
 | 1.30 | 2026-10-28 | v1.0 phase-6：组件总表 +36 maven-shade-plugin（artemis-bench 压测 fat jar；ServicesResourceTransformer 为 grpc SPI 必配） |
 | 1.29 | 2026-10-27 | v1.0 phase-1：#8 用途补 artemis-common 直接依赖 grpc-netty（common.tls TLS 装配） |
 | 1.27 | 2026-10-25 | v0.4 phase-2 设计定案：#13 ORM 决断落定（MyBatis-Plus 3.5.17 boot4-starter，实测验证 + JdbcTemplate 回退预案），§6 待定项移除 |

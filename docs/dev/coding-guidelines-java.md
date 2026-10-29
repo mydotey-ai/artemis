@@ -1,6 +1,6 @@
 # Java 开发规范
 
-版本: 1.26    更新时间: 2026-10-24
+版本: 1.27    更新时间: 2026-10-29
 
 > 本文是新一代 Artemis Java 实现的开发规范：包结构、代码风格、并发与线程、错误处理、日志、测试、proto 兼容、SDK 特殊约束与配置管理。技术选型（组件与版本）见[Java 技术选型](tech-stack-java.md)；Git 分支与 commit 规范见 `.claude/rules/git.md`，不在此重复。
 
@@ -144,13 +144,14 @@ proto 的 wire 兼容规则与变更流程是**跨语言不变量**，单一来�
 ## 11. 版本规范
 
 - 全 reactor 统一版本（`${revision}`），版本号语义化：v0.x 期间 minor 递增，v1.0 起 `MAJOR.MINOR.PATCH`。
-- SDK 独立发布节奏（与服务端解耦发版）v1.0 有真实需求时再拆，届时单独决策。
+- SDK 独立版本线与发布（v1.0 phase-8 决策落地）：client 线独立字面版本（`artemis-client-parent`，不随服务端 `${revision}`），发布节奏自主；首次发布版本 1.0.0，tag 约定 `sdk-java-<version>`（与仓库版本 tag 语义分离）；发布组件、profile 与流程见[技术选型](tech-stack-java.md) #37–#40 与 [release-java.md](release-java.md)。
 - 依赖升级：安全修复随时进；次要版本升级集中批量，不在功能分支夹带。
 
 ## 更新历史
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.27 | 2026-10-29 | v1.0 phase-8：§11 SDK 独立发布决策落地（首次发布 1.0.0、tag `sdk-java-<version>`，指向 release-java.md 单一来源） |
 | 1.26 | 2026-10-24 | v0.3 phase-9：§9 修正 starter 装配措辞——`StringProperties` 配置桥同名 bean 让位 + client `@Qualifier` 按名绑定、覆盖出口改 `RegistryClient`/`DiscoveryClient`（对应侧独立让位） |
 | 1.25 | 2026-10-20 | v0.2 phase-1：§1 补多监听端口装配纪律（官方 factory/lifecycle + 主 server 排除内部服务） |
 | 1.24 | 2026-10-19 | §9 补 starter 编译基线（SB 2.7.18、双注册、`@Configuration` 而非 `@AutoConfiguration`、配置走 SCF 不用 `@ConfigurationProperties`） |

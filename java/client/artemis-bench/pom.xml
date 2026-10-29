@@ -13,6 +13,13 @@
   <artifactId>artemis-bench</artifactId>
   <description>容量压测 driver（v1.0 phase-6）：SDK 驱动的负载生成与采样。依赖封闭同 SDK 线（artemis-client + slf4j + micrometer），不依赖服务端模块；编排与预检在 java/scripts/bench.sh（服务端用各 *-server exec jar 拉起）。</description>
 
+  <properties>
+    <!-- 工具模块不发布（#36/#40）：跳过 release profile 的 sources/javadoc/gpg（bundle 侧另有 excludeArtifacts 双保险） -->
+    <maven.source.skip>true</maven.source.skip>
+    <maven.javadoc.skip>true</maven.javadoc.skip>
+    <gpg.skip>true</gpg.skip>
+  </properties>
+
   <dependencies>
     <dependency>
       <groupId>org.mydotey.ai.artemis</groupId>
