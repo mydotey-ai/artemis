@@ -1,6 +1,6 @@
 # Docker 单机容器部署
 
-版本: 1.0    更新时间: 2026-10-28
+版本: 1.1    更新时间: 2026-10-30
 
 all-in-one 单容器形态：registry + management + discovery 三服务一容器起全功能，eval 最短路径（架构 §2.3 形态 I-a）。服务端形态语义（端口矩阵、治理链默认闭合、DB 双轨）见 [all-in-one 文档](../api/all-in-one.md)——容器只是交付载体，不改变配置出口。
 
@@ -10,7 +10,7 @@ all-in-one 单容器形态：registry + management + discovery 三服务一容�
 docker build -f Dockerfile.all-in-one -t artemis-all-in-one:local .
 ```
 
-多阶段自包含：构建阶段在容器内跑 Maven（registry 单服务镜像用根 `Dockerfile`，与本镜像并列）。
+多阶段自包含：构建阶段在容器内跑 Maven（宿主只需 Docker）。另有两个镜像入口：根 `Dockerfile`（registry 单服务镜像）、`Dockerfile.service`（三单服务参数化镜像，K8s 形态载体，见 [k8s.md](k8s.md)）。
 
 ## 一条命令起全功能
 
@@ -65,4 +65,5 @@ java/scripts/smoke-deploy.sh docker   # 构建镜像 + 起容器 + 端口就绪 
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-30 | review 修订：构建节补齐三个 Dockerfile 入口全景（all-in-one / registry 单服务 / 参数化三服务） |
 | 1.0 | 2026-10-28 | v1.0 phase-3 首版 |

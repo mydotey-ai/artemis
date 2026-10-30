@@ -27,7 +27,8 @@ groups:
           summary: "Artemis 节点与全部 peer 断联：{{ $labels.instance }}"
           description: "cluster.peers.up 连续 2 分钟为 0——复制/成员探测全断，检查 peer 端口 9093 连通性与内部认证配置。"
 
-      # 保护态触发（节点级）：15 秒内心跳续约数低于 15s 前峰值的 factor（默认 0.85）且实例数 ≥ minCount
+      # 保护态触发（节点级）：统计窗口（默认 10s，artemis.registry.selfProtection.windowSeconds）内
+      # 心跳续约数低于窗口前峰值的 factor（默认 0.85）且实例数 ≥ minCount
       - alert: ArtemisNodeSelfProtection
         expr: artemis_registry_self_protection > 0
         for: 5m

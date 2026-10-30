@@ -1,6 +1,6 @@
 # 配置参考
 
-版本: 1.0    更新时间: 2026-10-28
+版本: 1.1    更新时间: 2026-10-30
 
 服务端全部配置键（registry / discovery / management 三服务 + all-in-one 组合），键与默认值以代码为准穷举。SDK 配置键（`artemis.client.*`）见 [sdk-java.md](../api/sdk-java.md) 与 [sdk-java-discovery.md](../api/sdk-java-discovery.md)，此处不复制；K8s values 口径见 [k8s.md](k8s.md)。
 
@@ -41,7 +41,7 @@ Spring 框架键（`server.port`、`spring.datasource.*` 等）遵循 Spring Boo
 | 键 | 默认值 | 说明 |
 |---|---|---|
 | `artemis.registry.cluster.members` | （无） | 静态成员表，逗号分隔 `nodeId@peerHost:peerPort@externalHost:externalPort`；all-in-one 未配置时自报单成员 |
-| `artemis.registry.cluster.self` | （自动） | 本节点 nodeId，空 = 从成员表地址自动匹配 |
+| `artemis.registry.cluster.self` | （条件必填） | 本节点 nodeId；`members` 非空时必填且取值须为成员表中的 nodeId（缺失/不在表内启动 fail-fast），空成员表时不得配置 |
 | `artemis.registry.cluster.probeIntervalMs` | 5000 | 成员后台探测周期 |
 | `artemis.registry.cluster.probeTimeoutMs` | 1000 | 探测超时 |
 
@@ -49,11 +49,11 @@ Spring 框架键（`server.port`、`spring.datasource.*` 等）遵循 Spring Boo
 
 | 键 | 默认值 | 说明 |
 |---|---|---|
-| `artemis.registry.lease.ttlMs` | 30000 | 租约 TTL（允许 1000–600000 |
-| `artemis.registry.lease.evictionIntervalMs` | 1000 | 过期摘除扫描周期（100–60000 |
+| `artemis.registry.lease.ttlMs` | 30000 | 租约 TTL（允许 1000–600000） |
+| `artemis.registry.lease.evictionIntervalMs` | 1000 | 过期摘除扫描周期（100–60000） |
 | `artemis.registry.selfProtection.windowSeconds` | 10 | 续约统计窗口 |
 | `artemis.registry.selfProtection.minCount` | 50 | 触发保护的最小实例基数 |
-| `artemis.registry.selfProtection.factor` | 0.85 | 续约占比阈值（0.1–1.0 |
+| `artemis.registry.selfProtection.factor` | 0.85 | 续约占比阈值（0.1–1.0） |
 | `artemis.registry.selfProtection.maxCountResetMs` | 600000 | 峰值回落重置窗口 |
 
 ### 快照与停机
@@ -71,11 +71,11 @@ Spring 框架键（`server.port`、`spring.datasource.*` 等）遵循 Spring Boo
 | 键 | 默认值 | 说明 |
 |---|---|---|
 | `artemis.registry.replication.queueCapacity` | 16384 | 复制扇出总队列 |
-| `artemis.registry.replication.peerQueueCapacity` | 4096 | 每 peer 队列（满即丢，bootstrap 兜底 |
+| `artemis.registry.replication.peerQueueCapacity` | 4096 | 每 peer 队列（满即丢，bootstrap 兜底） |
 | `artemis.registry.replication.maxBatchChanges` | 1024 | 单批最大变更数 |
 | `artemis.registry.replication.retryInitialMs` | 1000 | 失败重试退避初值 |
 | `artemis.registry.replication.retryMaxMs` | 60000 | 重试退避上限 |
-| `artemis.registry.replication.sendTimeoutMs` | 5000 | 单批发送超时（100–600000 |
+| `artemis.registry.replication.sendTimeoutMs` | 5000 | 单批发送超时（100–600000） |
 | `artemis.registry.bootstrap.timeoutMs` | 60000 | peer 全量 bootstrap 超时（1000–600000） |
 | `artemis.registry.bootstrap.retryInitialMs` | 1000 | bootstrap 重试退避初值（100–600000） |
 | `artemis.registry.bootstrap.retryMaxMs` | 10000 | bootstrap 重试退避上限（100–600000） |
@@ -83,7 +83,7 @@ Spring 框架键（`server.port`、`spring.datasource.*` 等）遵循 Spring Boo
 | `artemis.registry.bootstrap.shardBytes` | 1048576 | bootstrap 快照分片大小（字节） |
 | `artemis.registry.bootstrap.maxInboundMessageBytes` | 16777216 | peer 侧收包上限 |
 | `artemis.registry.projection.queueCapacity` | 8192 | 投影分发队列 |
-| `artemis.registry.projection.subscriberQueueCapacity` | 2048 | 每订阅者队列（满即断流重连 |
+| `artemis.registry.projection.subscriberQueueCapacity` | 2048 | 每订阅者队列（满即断流重连） |
 | `artemis.registry.projection.maxBatchChanges` | 1024 | 单批最大变更数 |
 
 ### 内部 peer 端口与认证
@@ -236,4 +236,5 @@ Spring 框架键（`server.port`、`spring.datasource.*` 等）遵循 Spring Boo
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-30 | review 修订：`cluster.self` 语义纠正（members 非空时必填，无「自动匹配」回退）；修复 6 处表格括号残缺 |
 | 1.0 | 2026-10-28 | 初版（v1.0 phase-7：服务端全量键穷举自代码） |

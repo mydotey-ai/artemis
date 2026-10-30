@@ -1,13 +1,13 @@
 # 快速开始
 
-版本: 1.1    更新时间: 2026-10-29
+版本: 1.2    更新时间: 2026-10-30
 
 10 分钟从零跑通「注册 + 发现」：一条命令起全功能单容器，SDK 注册一个实例、订阅发现并看到它。
 
 ## 1. 前置条件
 
-- **起服务**：Docker（最短路径）；或 JDK 25 + Maven 3.9（构建镜像用，容器内自含构建）
-- **接 SDK**：JDK 8+ 与 Maven（SDK 为 Java 8 兼容；构建期 JDK 25 + toolchains 配置见 [构建与测试](artemis.md)）
+- **起服务**：Docker（最短路径——构建在容器内自包含完成，宿主只需 Docker）；或 JDK 25 + Maven 3.9 从源码构建运行
+- **接 SDK**：JDK 8+ 与 Maven（SDK 为 Java 8 兼容）；本地安装 SDK（下节）需构建仓库，工具链要求（JDK 25 + JDK 8 toolchains）见仓库根 [CLAUDE.md](../../CLAUDE.md)「构建与测试」
 
 ## 2. 起服务（all-in-one 单容器）
 
@@ -36,7 +36,7 @@ docker run -d --name artemis \
 
 ## 3. SDK 接入（注册 + 发现）
 
-SDK 发布 Maven Central 的配置与流程已就绪（v1.0 phase-8，见[发布流程](../dev/release-java.md)），实际发布由维护者执行；发布前以 `0.1.0-SNAPSHOT` 本地安装消费：
+SDK 发布 Maven Central 的配置与流程已就绪（见[发布流程](../dev/release-java.md)），实际发布由维护者执行；发布前以 `0.1.0-SNAPSHOT` 本地安装消费：
 
 ```bash
 mvn -f java/client/pom.xml install -DskipTests -DskipITs
@@ -99,5 +99,6 @@ List<ServiceInstance> instances = sub.getInstances(service);   // 推送到达�
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.2 | 2026-10-30 | review 修订：前置条件表述理顺（Docker 构建自包含 vs 源码构建）、修正指向 artemis.md 已退役「构建与测试」章节的失效引用 |
 | 1.1 | 2026-10-29 | v1.0 phase-8：starter 更名 artemis-client-spring-boot-starter、发布状态措辞更新（配置就绪待发布） |
 | 1.0 | 2026-10-28 | 初版（v1.0 phase-7 文档站） |

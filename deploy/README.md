@@ -6,3 +6,4 @@
 |---|---|---|
 | `vm/` | VM 标准安装包模板（bin/app.sh + systemd unit + 配置模板），`java/scripts/build-dist.sh` 组装出 tar.gz | [docs/deploy/vm.md](../docs/deploy/vm.md) |
 | `helm/` | K8s Helm chart（三服务独立编排） | [docs/deploy/k8s.md](../docs/deploy/k8s.md) |
+| `alerts/` | 监控告警示例三件套（Prometheus scrape + 告警规则 + Alertmanager 路由桩） | [docs/deploy/operations.md](../docs/deploy/operations.md) |

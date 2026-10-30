@@ -1,6 +1,6 @@
 # Artemis 产品文档
 
-版本: 2.0    更新时间: 2026-10-29
+版本: 2.1    更新时间: 2026-10-30
 
 > 本文是 Artemis 的产品总览：产品定位、架构、核心概念与功能地图，并导航到快速开始、部署与 API 文档。上手从[快速开始](quick-start.md)进入；产品规划见[路线图](artemis-next-roadmap.md)，架构与设计决策见[架构设计](../arch/artemis-next-architecture.md)。
 
@@ -91,13 +91,13 @@ Artemis 是开源服务注册中心，对标 Nacos：具备原产品（在携程
 
 ### 4.7 SDK
 
-Java 8 SDK（零 Spring 依赖），注册与发现统一，坐标（版本线独立于服务端，首版 1.0.0）：
+Java 8 SDK（零 Spring 依赖），注册与发现统一，坐标（版本线独立于服务端）。Maven Central 发布流程已就绪、实际发布由维护者执行；发布前以 `0.1.0-SNAPSHOT` 本地安装消费（见[快速开始](quick-start.md)），Central 首版将以发布时坐标为准：
 
 ```xml
 <dependency>
     <groupId>org.mydotey.ai.artemis</groupId>
     <artifactId>artemis-client</artifactId>
-    <version>1.0.0</version>
+    <version>0.1.0-SNAPSHOT</version>
 </dependency>
 ```
 
@@ -148,4 +148,5 @@ small 档实测（3 节点 registry + 1 万实例，[容量基线](../deploy/cap
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 2.1 | 2026-10-30 | review 修订：§4.7 SDK 版本口径纠正——尚未发布至 Maven Central，坐标由 1.0.0 改为当前可用的 0.1.0-SNAPSHOT（与快速开始一致） |
 | 2.0 | 2026-10-29 | 重写为产品总览文档：按能力维度组织（架构总览 / 功能地图 / 部署形态 / 性能容量）；「交付状态」phase 日志节退役——进度唯一源为 `docs/milestones/dev-state.md`，phase 明细在 `docs/milestones/`；开发者入口压缩为「参与开发」一节。1.x 版本为 phase 交付日志形态，历史可溯 git |

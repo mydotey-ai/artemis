@@ -1,6 +1,6 @@
 # VM 标准安装包部署
 
-版本: 1.0    更新时间: 2026-10-28
+版本: 1.1    更新时间: 2026-10-30
 
 tar.gz 标准安装包 + systemd 维护的虚拟机部署形态（架构 §2.3 形态 I-b）。包内服务端为 all-in-one fat jar，形态语义（端口矩阵、治理链默认闭合、DB 双轨）见 [all-in-one 文档](../api/all-in-one.md)——安装包只是交付载体，不改变配置出口。
 
@@ -53,7 +53,7 @@ sudo systemctl start artemis
 
 ## 升级
 
-tar.gz 无版本目录嵌套，覆盖解包升级需先 `systemctl stop artemis`；`artemis.properties`、`data/` 为用户数据，升级前备份。滚动升级协议验证见路线图 v1.0 phase-5。
+tar.gz 无版本目录嵌套，覆盖解包升级需先 `systemctl stop artemis`；`artemis.properties`、`data/` 为用户数据，升级前备份。多节点滚动升级口径见[运维手册 §1](operations.md#1-启停与升级)。
 
 ## 冒烟
 
@@ -67,4 +67,5 @@ systemd install/uninstall 流程需 root/systemd 环境，人工执行（用例 
 
 | 版本 | 日期 | 变更说明 |
 | ------ | ------ | ------ |
+| 1.1 | 2026-10-30 | review 修订：滚动升级引用改指运维手册（原文误指「路线图 v1.0 phase-5」工程文档） |
 | 1.0 | 2026-10-28 | v1.0 phase-3 首版 |
